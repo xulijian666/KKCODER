@@ -1,0 +1,531 @@
+import React, { useState, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
+
+interface SettingsModalProps {
+  show: boolean;
+  onClose: () => void;
+}
+
+export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose }) => {
+  const [activeMenu, setActiveMenu] = useState<"general" | "about">("general");
+
+  // 播放提示音效预览（不显示通知气泡）
+  const triggerPreview = (tone: string, volume: number) => {
+    invoke("play_notification_sound", {
+      tone,
+      volume,
+      title: null,
+      message: null,
+    }).catch((err) => console.error("播放音效预览失败:", err));
+  };
+
+  // --- 1. 读取并配置各项通用设置 (持久化存储) ---
+  const [theme, setTheme] = useState<string>(() => {
+    return localStorage.getItem("kkcoder_setting_theme") || "light-premium";
+  });
+  // Language state removed to satisfy TS6133 strict check
+  const [closeBehavior, setCloseBehavior] = useState<string>(() => {
+    return localStorage.getItem("kkcoder_setting_close_behavior") || "exit";
+  });
+  const [notifyOnComplete, setNotifyOnComplete] = useState<boolean>(() => {
+    const val = localStorage.getItem("kkcoder_setting_notify_on_complete");
+    return val === null ? true : val === "true";
+  });
+  const [notifyThreshold, setNotifyThreshold] = useState<number>(() => {
+    const val = localStorage.getItem("kkcoder_setting_notify_threshold");
+    return val === null ? 2.0 : parseFloat(val);
+  });
+  const [playSound, setPlaySound] = useState<boolean>(() => {
+    const val = localStorage.getItem("kkcoder_setting_play_sound");
+    return val === null ? true : val === "true";
+  });
+  const [soundTone, setSoundTone] = useState<string>(() => {
+    return localStorage.getItem("kkcoder_setting_sound_tone") || "dingdong";
+  });
+  const [soundVolume, setSoundVolume] = useState<number>(() => {
+    const val = localStorage.getItem("kkcoder_setting_sound_volume");
+    return val === null ? 80 : parseInt(val, 10);
+  });
+  const [fontFamily, setFontFamily] = useState<string>(() => {
+    return localStorage.getItem("kkcoder_setting_font_family") || "Cascadia Mono";
+  });
+  const [fontSize, setFontSize] = useState<number>(() => {
+    const val = localStorage.getItem("kkcoder_setting_font_size");
+    return val === null ? 13.5 : parseFloat(val);
+  });
+
+  // --- 2. 写入各项设置至 localStorage ---
+  useEffect(() => {
+    localStorage.setItem("kkcoder_setting_theme", theme);
+    applyTheme(theme);
+    window.dispatchEvent(new CustomEvent("kkcoder-theme-change", { detail: theme }));
+  }, [theme]);
+
+  useEffect(() => {
+    localStorage.setItem("kkcoder_setting_close_behavior", closeBehavior);
+  }, [closeBehavior]);
+
+  useEffect(() => {
+    localStorage.setItem("kkcoder_setting_notify_on_complete", String(notifyOnComplete));
+  }, [notifyOnComplete]);
+
+  useEffect(() => {
+    localStorage.setItem("kkcoder_setting_notify_threshold", String(notifyThreshold));
+  }, [notifyThreshold]);
+
+  useEffect(() => {
+    localStorage.setItem("kkcoder_setting_play_sound", String(playSound));
+  }, [playSound]);
+
+  useEffect(() => {
+    localStorage.setItem("kkcoder_setting_sound_tone", soundTone);
+  }, [soundTone]);
+
+  useEffect(() => {
+    localStorage.setItem("kkcoder_setting_sound_volume", String(soundVolume));
+  }, [soundVolume]);
+
+  useEffect(() => {
+    localStorage.setItem("kkcoder_setting_font_family", fontFamily);
+    window.dispatchEvent(new CustomEvent("kkcoder-font-change", { detail: fontFamily }));
+  }, [fontFamily]);
+
+  useEffect(() => {
+    localStorage.setItem("kkcoder_setting_font_size", String(fontSize));
+    window.dispatchEvent(new CustomEvent("kkcoder-font-size-change", { detail: fontSize }));
+  }, [fontSize]);
+
+  // 监听键盘 ESC 键关闭设置弹窗
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        onClose();
+      }
+    };
+    if (show) {
+      window.addEventListener("keydown", handleKeyDown);
+    }
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [show, onClose]);
+
+  // --- 3. 动态应用主题色彩系统 ---
+  const applyTheme = (themeName: string) => {
+    const root = document.documentElement;
+    if (themeName === "dark-blue") {
+      // 1. 深蓝主题 (对标 Screenshot 1)
+      root.style.setProperty("--bg-main", "#090d16");
+      root.style.setProperty("--bg-sidebar", "#121620");
+      root.style.setProperty("--bg-terminal", "#000000");
+      root.style.setProperty("--border-color", "#1e293b");
+      root.style.setProperty("--text-primary", "#f8fafc");
+      root.style.setProperty("--text-secondary", "#94a3b8");
+      root.style.setProperty("--color-primary", "#3b82f6");
+      root.style.setProperty("--color-primary-hover", "#2563eb");
+      root.style.setProperty("--bg-active-item", "#1e293b");
+      root.style.setProperty("--text-active-item", "#ffffff");
+      root.style.setProperty("--bg-hover-item", "rgba(59, 130, 246, 0.15)");
+      root.style.setProperty("--bg-agent-selector", "rgba(0, 0, 0, 0.25)");
+      root.style.setProperty("--bg-agent-slider", "#1e293b");
+      root.style.setProperty("--shadow-agent-slider", "0 2px 5px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.08)");
+    } else if (themeName === "dark-purple") {
+      // 2. 暗紫主题 (对标 Screenshot 2)
+      root.style.setProperty("--bg-main", "#0c0a12");
+      root.style.setProperty("--bg-sidebar", "#171424");
+      root.style.setProperty("--bg-terminal", "#000000");
+      root.style.setProperty("--border-color", "#2e2540");
+      root.style.setProperty("--text-primary", "#f5f3ff");
+      root.style.setProperty("--text-secondary", "#b7a8d6");
+      root.style.setProperty("--color-primary", "#8b5cf6");
+      root.style.setProperty("--color-primary-hover", "#7c3aed");
+      root.style.setProperty("--bg-active-item", "#2f2647");
+      root.style.setProperty("--text-active-item", "#ffffff");
+      root.style.setProperty("--bg-hover-item", "rgba(139, 92, 246, 0.15)");
+      root.style.setProperty("--bg-agent-selector", "rgba(0, 0, 0, 0.25)");
+      root.style.setProperty("--bg-agent-slider", "#2f2647");
+      root.style.setProperty("--shadow-agent-slider", "0 2px 5px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.08)");
+    } else if (themeName === "dark-zinc") {
+      // 3. 碳黑主题 (对标 Screenshot 3)
+      root.style.setProperty("--bg-main", "#0c0b0a");
+      root.style.setProperty("--bg-sidebar", "#1d1b18");
+      root.style.setProperty("--bg-terminal", "#000000");
+      root.style.setProperty("--border-color", "#332f29");
+      root.style.setProperty("--text-primary", "#fafaf9");
+      root.style.setProperty("--text-secondary", "#cbd5e1");
+      root.style.setProperty("--color-primary", "#d97706");
+      root.style.setProperty("--color-primary-hover", "#b55c04");
+      root.style.setProperty("--bg-active-item", "#383227");
+      root.style.setProperty("--text-active-item", "#ffffff");
+      root.style.setProperty("--bg-hover-item", "rgba(245, 158, 11, 0.15)");
+      root.style.setProperty("--bg-agent-selector", "rgba(0, 0, 0, 0.25)");
+      root.style.setProperty("--bg-agent-slider", "#383227");
+      root.style.setProperty("--shadow-agent-slider", "0 2px 5px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.08)");
+    } else if (themeName === "light-blue") {
+      // 4. 冰蓝主题 (对标 Screenshot 4)
+      root.style.setProperty("--bg-main", "#ffffff");
+      root.style.setProperty("--bg-sidebar", "#f0f7ff");
+      root.style.setProperty("--bg-terminal", "#f8fafc");
+      root.style.setProperty("--border-color", "#bae6fd");
+      root.style.setProperty("--text-primary", "#0369a1");
+      root.style.setProperty("--text-secondary", "#0284c7");
+      root.style.setProperty("--color-primary", "#0284c7");
+      root.style.setProperty("--color-primary-hover", "#0369a1");
+      root.style.setProperty("--bg-active-item", "#e0f2fe");
+      root.style.setProperty("--text-active-item", "#0369a1");
+      root.style.setProperty("--bg-hover-item", "rgba(2, 132, 199, 0.08)");
+      root.style.setProperty("--bg-agent-selector", "rgba(2, 132, 199, 0.06)");
+      root.style.setProperty("--bg-agent-slider", "#ffffff");
+      root.style.setProperty("--shadow-agent-slider", "0 2px 4px rgba(2, 132, 199, 0.1), 0 1px 2px rgba(2, 132, 199, 0.05)");
+    } else if (themeName === "light-orange") {
+      // 5. 蜜橘主题 (对标 Screenshot 5)
+      root.style.setProperty("--bg-main", "#ffffff");
+      root.style.setProperty("--bg-sidebar", "#fffcf5");
+      root.style.setProperty("--bg-terminal", "#fffdfa");
+      root.style.setProperty("--border-color", "#fed7aa");
+      root.style.setProperty("--text-primary", "#7c2d12");
+      root.style.setProperty("--text-secondary", "#ea580c");
+      root.style.setProperty("--color-primary", "#c2410c");
+      root.style.setProperty("--color-primary-hover", "#9a3412");
+      root.style.setProperty("--bg-active-item", "#ffedd5");
+      root.style.setProperty("--text-active-item", "#7c2d12");
+      root.style.setProperty("--bg-hover-item", "rgba(234, 88, 12, 0.08)");
+      root.style.setProperty("--bg-agent-selector", "rgba(234, 88, 12, 0.05)");
+      root.style.setProperty("--bg-agent-slider", "#ffffff");
+      root.style.setProperty("--shadow-agent-slider", "0 2px 4px rgba(234, 88, 12, 0.08), 0 1px 2px rgba(234, 88, 12, 0.04)");
+    } else {
+      // 6. 经典高雅 (默认)
+      root.style.setProperty("--bg-main", "#ffffff");
+      root.style.setProperty("--bg-sidebar", "#f8fafc");
+      root.style.setProperty("--bg-terminal", "#f8fafc");
+      root.style.setProperty("--border-color", "#e2e8f0");
+      root.style.setProperty("--text-primary", "#1e293b");
+      root.style.setProperty("--text-secondary", "#64748b");
+      root.style.setProperty("--color-primary", "#2563eb");
+      root.style.setProperty("--color-primary-hover", "#1d4ed8");
+      root.style.setProperty("--bg-active-item", "#dbeafe");
+      root.style.setProperty("--text-active-item", "#1e40af");
+      root.style.setProperty("--bg-hover-item", "rgba(59, 130, 246, 0.08)");
+      root.style.setProperty("--bg-agent-selector", "rgba(15, 23, 42, 0.05)");
+      root.style.setProperty("--bg-agent-slider", "#ffffff");
+      root.style.setProperty("--shadow-agent-slider", "0 2px 4px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04)");
+    }
+  };
+
+  if (!show) return null;
+
+  return (
+    <div className="modal-overlay show" onClick={onClose}>
+      <div className="settings-card" onClick={(e) => e.stopPropagation()}>
+        {/* 左侧菜单栏 */}
+        <div className="settings-sidebar">
+          <div className="settings-sidebar-header">设置</div>
+          <button
+            className={`settings-menu-item ${activeMenu === "general" ? "active" : ""}`}
+            onClick={() => setActiveMenu("general")}
+          >
+            通用
+          </button>
+          <button
+            className={`settings-menu-item ${activeMenu === "about" ? "active" : ""}`}
+            onClick={() => setActiveMenu("about")}
+          >
+            关于
+          </button>
+        </div>
+
+        {/* 右侧主设置面板 */}
+        <div className="settings-main">
+          {/* 头部标题与关闭按钮 */}
+          <div className="settings-header">
+            <span className="settings-title">
+              {activeMenu === "general" ? "通用" : "关于"}
+            </span>
+            <button className="settings-close" onClick={onClose}>
+              ×
+            </button>
+          </div>
+
+          <div className="settings-body">
+            {activeMenu === "general" ? (
+              <div className="settings-content">
+                {/* 1. 主题风格 */}
+                <div className="settings-group">
+                  <div className="settings-group-label">主题风格</div>
+                  <div className="theme-grid">
+                    {/* Row 1: 深色主题 */}
+                    <div
+                      className={`theme-box dark-blue-box ${theme === "dark-blue" ? "checked" : ""}`}
+                      onClick={() => setTheme("dark-blue")}
+                      title="深蓝主题"
+                    >
+                      <div className="theme-dot" style={{ backgroundColor: "#3b82f6" }}></div>
+                    </div>
+                    <div
+                      className={`theme-box dark-purple-box ${theme === "dark-purple" ? "checked" : ""}`}
+                      onClick={() => setTheme("dark-purple")}
+                      title="暗紫主题"
+                    >
+                      <div className="theme-dot" style={{ backgroundColor: "#8b5cf6" }}></div>
+                    </div>
+                    <div
+                      className={`theme-box dark-zinc-box ${theme === "dark-zinc" ? "checked" : ""}`}
+                      onClick={() => setTheme("dark-zinc")}
+                      title="碳黑主题"
+                    >
+                      <div className="theme-dot" style={{ backgroundColor: "#f59e0b" }}></div>
+                    </div>
+
+                    {/* Row 2: 浅色主题 */}
+                    <div
+                      className={`theme-box light-blue-box ${theme === "light-blue" ? "checked" : ""}`}
+                      onClick={() => setTheme("light-blue")}
+                      title="冰蓝主题 (浅色)"
+                    >
+                      <div className="theme-dot" style={{ backgroundColor: "#3b82f6" }}></div>
+                    </div>
+                    <div
+                      className={`theme-box light-orange-box ${theme === "light-orange" ? "checked" : ""}`}
+                      onClick={() => setTheme("light-orange")}
+                      title="蜜橘主题 (浅色)"
+                    >
+                      <div className="theme-dot" style={{ backgroundColor: "#ea580c" }}></div>
+                    </div>
+                    <div
+                      className={`theme-box light-premium-box ${theme === "light-premium" ? "checked" : ""}`}
+                      onClick={() => setTheme("light-premium")}
+                      title="经典高雅 (默认)"
+                    >
+                      <div className="theme-dot" style={{ backgroundColor: "#2563eb" }}></div>
+                      {theme === "light-premium" && <span className="theme-checkmark">✓</span>}
+                    </div>
+
+                    {/* Auto 随系统 */}
+                    <div
+                      className={`theme-box auto-box ${theme === "auto" ? "checked" : ""}`}
+                      onClick={() => setTheme("auto")}
+                      title="跟随系统"
+                    >
+                      <span className="auto-text">Auto</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2. 语言 */}
+                <div className="settings-group">
+                  <div className="settings-group-label">语言</div>
+                  <div className="settings-btn-group">
+                    <button
+                      className="settings-toggle-btn active"
+                    >
+                      简体中文
+                    </button>
+                    <button
+                      className="settings-toggle-btn disabled"
+                      title="English 暂不可选"
+                      disabled
+                    >
+                      English
+                    </button>
+                  </div>
+                </div>
+
+                {/* 2b. 终端字体 */}
+                <div className="settings-group">
+                  <div className="settings-group-label">终端字体</div>
+                  <div className="settings-btn-group">
+                    <button
+                      className={`settings-toggle-btn ${fontFamily === "Cascadia Mono" ? "active" : ""}`}
+                      onClick={() => setFontFamily("Cascadia Mono")}
+                    >
+                      Cascadia Mono
+                    </button>
+                    <button
+                      className={`settings-toggle-btn ${fontFamily === "Fira Code" ? "active" : ""}`}
+                      onClick={() => setFontFamily("Fira Code")}
+                    >
+                      Fira Code
+                    </button>
+                    <button
+                      className={`settings-toggle-btn ${fontFamily === "Consolas" ? "active" : ""}`}
+                      onClick={() => setFontFamily("Consolas")}
+                    >
+                      Consolas
+                    </button>
+                    <button
+                      className={`settings-toggle-btn ${fontFamily === "monospace" ? "active" : ""}`}
+                      onClick={() => setFontFamily("monospace")}
+                    >
+                      System Monospace
+                    </button>
+                  </div>
+                </div>
+
+                {/* 2c. 终端字号 */}
+                <div className="settings-group">
+                  <div className="settings-group-label">终端字号</div>
+                  <div className="slider-row">
+                    <input
+                      type="range"
+                      min="11.0"
+                      max="22.0"
+                      step="0.5"
+                      className="settings-slider"
+                      value={fontSize}
+                      onChange={(e) => setFontSize(parseFloat(e.target.value))}
+                    />
+                    <span className="slider-value">{fontSize.toFixed(1)}px</span>
+                  </div>
+                </div>
+
+                {/* 3. 关闭窗口时 */}
+                <div className="settings-group">
+                  <div className="settings-group-label">关闭窗口时</div>
+                  <div className="settings-btn-group">
+                    <button
+                      className={`settings-toggle-btn ${closeBehavior === "ask" ? "active" : ""}`}
+                      onClick={() => setCloseBehavior("ask")}
+                    >
+                      每次询问
+                    </button>
+                    <button
+                      className={`settings-toggle-btn ${closeBehavior === "minimize" ? "active" : ""}`}
+                      onClick={() => setCloseBehavior("minimize")}
+                    >
+                      最小化到系统托盘
+                    </button>
+                    <button
+                      className={`settings-toggle-btn ${closeBehavior === "exit" ? "active" : ""}`}
+                      onClick={() => setCloseBehavior("exit")}
+                    >
+                      直接退出应用
+                    </button>
+                  </div>
+                </div>
+
+                {/* 4. 通知 */}
+                <div className="settings-group">
+                  <div className="settings-group-label">通知</div>
+                  <div className="settings-switch-row">
+                    <label className="switch-container">
+                      <input
+                        type="checkbox"
+                        checked={notifyOnComplete}
+                        onChange={(e) => setNotifyOnComplete(e.target.checked)}
+                      />
+                      <span className="switch-slider"></span>
+                    </label>
+                    <span className="switch-label">CLI 工具回答完毕时发送系统通知</span>
+                  </div>
+                </div>
+
+                {/* 5. 通知阈值 */}
+                <div className="settings-group">
+                  <div className="settings-group-label">
+                    通知阈值 (回答持续时间超过此值才通知)
+                  </div>
+                  <div className="slider-row">
+                    <input
+                      type="range"
+                      min="0.5"
+                      max="10.0"
+                      step="0.5"
+                      className="settings-slider"
+                      value={notifyThreshold}
+                      onChange={(e) => setNotifyThreshold(parseFloat(e.target.value))}
+                    />
+                    <span className="slider-value">{notifyThreshold.toFixed(1)}s</span>
+                  </div>
+                </div>
+
+                {/* 6. 完成提示音 */}
+                <div className="settings-group">
+                  <div className="settings-group-label">完成提示音</div>
+                  <div className="settings-switch-row">
+                    <label className="switch-container">
+                      <input
+                        type="checkbox"
+                        checked={playSound}
+                        onChange={(e) => setPlaySound(e.target.checked)}
+                      />
+                      <span className="switch-slider"></span>
+                    </label>
+                    <span className="switch-label">
+                      回答完毕时播放本地提示音（需先启用通知）
+                    </span>
+                  </div>
+                </div>
+
+                {/* 7. 提示音音色 */}
+                <div className="settings-group">
+                  <div className="settings-group-label">提示音音色</div>
+                  <div className="settings-btn-group wrap-group">
+                    {["叮咚", "钟声", "成功音", "闹铃", "气泡", "水晶", "梦幻", "水滴"].map(
+                      (tone) => {
+                        const toneKey = {
+                          叮咚: "dingdong",
+                          钟声: "bell",
+                          成功音: "success",
+                          闹铃: "alarm",
+                          气泡: "bubble",
+                          水晶: "crystal",
+                          梦幻: "dream",
+                          水滴: "water",
+                        }[tone];
+                        const isActive = soundTone === toneKey;
+                        return (
+                          <button
+                            key={tone}
+                            className={`settings-toggle-btn ${isActive ? "active" : ""}`}
+                            onClick={() => {
+                              const finalTone = toneKey || "dingdong";
+                              setSoundTone(finalTone);
+                              triggerPreview(finalTone, soundVolume);
+                            }}
+                          >
+                            {tone}
+                          </button>
+                        );
+                      }
+                    )}
+                  </div>
+                </div>
+
+                {/* 8. 音量 */}
+                <div className="settings-group">
+                  <div className="settings-group-label">音量</div>
+                  <div className="slider-row">
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      className="settings-slider"
+                      value={soundVolume}
+                      onChange={(e) => setSoundVolume(parseInt(e.target.value, 10))}
+                      onMouseUp={() => triggerPreview(soundTone, soundVolume)}
+                    />
+                    <span className="slider-value">{soundVolume}%</span>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="settings-content about-page">
+                <div className="about-logo">KK</div>
+                <div className="about-title">KKCoder AI 终端管理器</div>
+                <div className="about-version">版本: v1.2.0</div>
+                <div className="about-desc">
+                  极简、现代、克制的 AI 终端托管管理器。基于 Tauri 框架与 React 深度构建，为您提供丝滑的原生开发虚拟终端心流体验。
+                </div>
+                <div className="about-divider"></div>
+                <div className="about-meta">
+                  <p>© 2026 KKCoder Studio. All rights reserved.</p>
+                  <p>由 Google DeepMind AAC 团队荣誉驱动</p>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
