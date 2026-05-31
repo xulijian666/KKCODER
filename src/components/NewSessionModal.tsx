@@ -6,6 +6,7 @@ interface NewSessionModalProps {
   onClose: () => void;
   selectedAgent: "claude" | "pi";
   onCreate: (sessionName: string, projectPath: string, projectName: string) => void;
+  initialProjectPath?: string;
 }
 
 export const NewSessionModal: React.FC<NewSessionModalProps> = ({
@@ -13,6 +14,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
   onClose,
   selectedAgent,
   onCreate,
+  initialProjectPath,
 }) => {
   const [sessionTitle, setSessionTitle] = useState("");
   const [projectPath, setProjectPath] = useState("D:\\CODE");
@@ -29,21 +31,33 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
     if (show) {
       setSessionTitle("");
       setConfirmDirState(null);
-      invoke<Array<{ name: string; path: string }>>("get_recent_projects")
-        .then((data) => {
-          setRecentProjects(data || []);
-          if (data && data.length > 0) {
-            setProjectPath(data[0].path);
-          } else {
+      if (initialProjectPath) {
+        setProjectPath(initialProjectPath);
+        // 也获取一下最近项目列表，以保持下拉菜单可用
+        invoke<Array<{ name: string; path: string }>>("get_recent_projects")
+          .then((data) => {
+            setRecentProjects(data || []);
+          })
+          .catch((err) => {
+            console.error("获取本地最近项目失败", err);
+          });
+      } else {
+        invoke<Array<{ name: string; path: string }>>("get_recent_projects")
+          .then((data) => {
+            setRecentProjects(data || []);
+            if (data && data.length > 0) {
+              setProjectPath(data[0].path);
+            } else {
+              setProjectPath("D:\\CODE");
+            }
+          })
+          .catch((err) => {
+            console.error("获取本地最近项目失败", err);
             setProjectPath("D:\\CODE");
-          }
-        })
-        .catch((err) => {
-          console.error("获取本地最近项目失败", err);
-          setProjectPath("D:\\CODE");
-        });
+          });
+      }
     }
-  }, [show]);
+  }, [show, initialProjectPath]);
 
   // 监听 ESC 键关闭新建会话弹窗与物理目录确认弹窗
   useEffect(() => {

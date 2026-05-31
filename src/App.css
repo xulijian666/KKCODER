@@ -1621,6 +1621,11 @@ input:checked + .switch-slider:before {
   color: transparent !important;
 }
 
+/* 针对 Pi 终端进行优化隔离：强制锁定隐藏输入框的水平位置在左边缘，彻底防范输入法候选框因 TUI 隐藏硬件光标至右下角而漂移至最右侧甚至超出窗口 */
+.agent-type-pi .xterm-helper-textarea {
+  left: 20px !important;
+}
+
 
 
 /* 隐藏标签栏横向滚动条，保持现代扁平纯净质感 */

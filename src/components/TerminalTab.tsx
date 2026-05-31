@@ -15,6 +15,7 @@ interface TerminalTabProps {
   onCaptureSessionId?: (sessionId: string, agentSessionId: string) => void;
   onStateChange?: (busy: boolean) => void;
   busy?: boolean;
+  isActive?: boolean;
 }
 
 const getTerminalThemeColors = (themeName: string) => {
@@ -64,6 +65,7 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
   onCaptureSessionId,
   onStateChange,
   busy,
+  isActive,
 }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<Terminal | null>(null);
@@ -144,19 +146,74 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
 
       if (arg.ctrlKey && arg.code === "KeyV") {
         if (arg.type === "keydown" && !arg.repeat) {
-          log("Ctrl+V keydown event captured in terminal. Reading clipboard...");
-          navigator.clipboard.readText().then((text) => {
-            if (text) {
-              log(`Pasting clipboard content synchronously in user gesture loop (len=${text.length}).`);
-              if (agentType === "pi") {
-                const processedText = text.replace(/\r?\n/g, " ");
-                term.paste(processedText);
-              } else {
-                term.paste(text);
+          log("Ctrl+V keydown event captured in terminal. Reading clipboard items...");
+          navigator.clipboard.read().then(async (clipboardItems) => {
+            let hasImage = false;
+            for (const clipboardItem of clipboardItems) {
+              for (const type of clipboardItem.types) {
+                if (type.startsWith("image/")) {
+                  hasImage = true;
+                  log(`Detected image paste of type: ${type}`);
+                  try {
+                    const blob = await clipboardItem.getType(type);
+                    const filename = `clipboard_img_${Date.now()}_${Math.random().toString(36).substring(2, 9)}.png`;
+                    
+                    const reader = new FileReader();
+                    reader.onload = async () => {
+                      try {
+                        const arrayBuffer = reader.result as ArrayBuffer;
+                        const bytes = new Uint8Array(arrayBuffer);
+                        const filePath = await invoke<string>("save_clipboard_image", {
+                          bytes: Array.from(bytes),
+                          filename
+                        });
+                        log(`Successfully saved clipboard image to: ${filePath}`);
+                        term.paste(filePath);
+                      } catch (e) {
+                        log(`Failed to save clipboard image via Tauri: ${e}`);
+                      }
+                    };
+                    reader.readAsArrayBuffer(blob);
+                  } catch (e) {
+                    log(`Failed to read clipboard image blob: ${e}`);
+                  }
+                  break;
+                }
               }
+              if (hasImage) break;
+            }
+            
+            if (!hasImage) {
+              // Fallback to text reading
+              navigator.clipboard.readText().then((text) => {
+                if (text) {
+                  log(`Pasting clipboard text (len=${text.length}).`);
+                  if (agentType === "pi") {
+                    const processedText = text.replace(/\r?\n/g, " ");
+                    term.paste(processedText);
+                  } else {
+                    term.paste(text);
+                  }
+                }
+              }).catch((err) => {
+                log(`Failed to read text fallback: ${err}`);
+              });
             }
           }).catch((err) => {
-            log(`Failed to read clipboard for Ctrl+V paste: ${err}`);
+            log(`Failed to read clipboard items, falling back to text: ${err}`);
+            // Fallback immediately to readText if read() is not supported or failed
+            navigator.clipboard.readText().then((text) => {
+              if (text) {
+                if (agentType === "pi") {
+                  const processedText = text.replace(/\r?\n/g, " ");
+                  term.paste(processedText);
+                } else {
+                  term.paste(text);
+                }
+              }
+            }).catch((e) => {
+              log(`Failed text fallback: ${e}`);
+            });
           });
         }
         return false; // 返回 false 拦截浏览器默认及 keyup/keydown 重复事件，规避双重粘贴
@@ -379,9 +436,24 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
       e.preventDefault();
       e.stopPropagation();
     };
+    const handleScrollCapture = (e: Event) => {
+      const target = e.target as HTMLElement;
+      if (target && target.scrollLeft !== 0) {
+        target.scrollLeft = 0;
+      }
+    };
+
     const terminalElement = terminalRef.current;
+    const parentElement = terminalElement?.parentElement;
+
     if (terminalElement) {
       terminalElement.addEventListener("paste", handlePaste, true);
+      if (agentType === "pi") {
+        terminalElement.addEventListener("scroll", handleScrollCapture, true);
+        if (parentElement) {
+          parentElement.addEventListener("scroll", handleScrollCapture, true);
+        }
+      }
     }
 
     window.addEventListener("resize", handleWindowResize);
@@ -438,6 +510,12 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
       document.removeEventListener("contextmenu", handleRawContextMenu, true);
       if (terminalElement) {
         terminalElement.removeEventListener("paste", handlePaste, true);
+        if (agentType === "pi") {
+          terminalElement.removeEventListener("scroll", handleScrollCapture, true);
+        }
+      }
+      if (parentElement && agentType === "pi") {
+        parentElement.removeEventListener("scroll", handleScrollCapture, true);
       }
       window.removeEventListener("resize", handleWindowResize);
       window.removeEventListener("kkcoder-theme-change", handleThemeChange);
@@ -454,8 +532,24 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, directory, agentType]);
 
+  // 当标签页激活时，自动将物理焦点 focus 绑定给当前终端，实现“一开即写、一切即敲”的高端心流
+  useEffect(() => {
+    if (isActive && xtermRef.current) {
+      log(`Auto-focusing terminal instance for active session: ${sessionId}`);
+      // 延迟 80ms 等 DOM 完全刷新 (display: flex 生效) 后平滑捕获系统焦点
+      const timer = setTimeout(() => {
+        try {
+          xtermRef.current?.focus();
+        } catch (e) {
+          console.error("Failed to focus terminal", e);
+        }
+      }, 80);
+      return () => clearTimeout(timer);
+    }
+  }, [isActive, sessionId]);
+
   return (
-    <div className="terminal-container">
+    <div className={`terminal-container agent-type-${agentType}`}>
       <div className="terminal-ref" ref={terminalRef} />
     </div>
   );

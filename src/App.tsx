@@ -65,6 +65,7 @@ function App() {
   const [openTabIds, setOpenTabIds] = useState<string[]>([]);
   const [selectedAgent, setSelectedAgent] = useState<"claude" | "pi">("claude");
   const [showModal, setShowModal] = useState<boolean>(false);
+  const [prefilledProjectPath, setPrefilledProjectPath] = useState<string | undefined>(undefined);
   const [showSettings, setShowSettings] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>("");
   // 记录新创建的会话ID，全新拉起时不键入 /resume；其他历史会话在重连时自动键入 /resume 还原上下文
@@ -625,7 +626,10 @@ function App() {
         <Sidebar
           selectedAgent={selectedAgent}
           onSelectAgent={setSelectedAgent}
-          onOpenNewSession={() => setShowModal(true)}
+          onOpenNewSession={(path) => {
+            setPrefilledProjectPath(path);
+            setShowModal(true);
+          }}
           sessions={sessions}
           activeSessionId={activeSessionId}
           onSelectSession={handleSelectSession}
@@ -749,6 +753,7 @@ function App() {
                       onStateChange={(busy) => {
                         setSessionBusy(prev => ({ ...prev, [s.id]: busy }));
                       }}
+                      isActive={isActive}
                     />
                   </div>
                 );
@@ -891,6 +896,7 @@ function App() {
         onClose={() => setShowModal(false)}
         selectedAgent={selectedAgent}
         onCreate={handleCreateSession}
+        initialProjectPath={prefilledProjectPath}
       />
 
       {/* 设置中心弹窗组件 */}
@@ -979,7 +985,6 @@ function App() {
               setTabContextMenu(null);
             }}
           >
-            <span className="context-menu-icon">❌</span>
             关闭标签页
           </button>
           <button
@@ -990,7 +995,6 @@ function App() {
               setTabContextMenu(null);
             }}
           >
-            <span className="context-menu-icon">🚫</span>
             关闭其他标签
           </button>
           <button
@@ -1002,7 +1006,6 @@ function App() {
               setTabContextMenu(null);
             }}
           >
-            <span className="context-menu-icon">✏️</span>
             重命名会话
           </button>
           <button
@@ -1012,7 +1015,6 @@ function App() {
               setTabContextMenu(null);
             }}
           >
-            <span className="context-menu-icon">🎯</span>
             在侧边栏中定位
           </button>
         </div>

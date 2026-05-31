@@ -309,7 +309,11 @@ fn spawn_terminal(
     log_to_file("PTY opened successfully.");
 
     #[cfg(target_os = "windows")]
-    let mut cmd = CommandBuilder::new("powershell.exe");
+    let mut cmd = {
+        let mut c = CommandBuilder::new("powershell.exe");
+        c.arg("-NoLogo");
+        c
+    };
     #[cfg(not(target_os = "windows"))]
     let mut cmd = CommandBuilder::new("bash");
 
@@ -659,6 +663,22 @@ fn play_notification_sound(
     Ok(())
 }
 
+#[tauri::command]
+fn save_clipboard_image(bytes: Vec<u8>, filename: String) -> Result<String, String> {
+    use std::fs::File;
+    use std::io::Write;
+    
+    let temp_dir = std::env::temp_dir();
+    let file_path = temp_dir.join(&filename);
+    
+    let mut file = File::create(&file_path)
+        .map_err(|e| format!("Failed to create file: {}", e))?;
+    file.write_all(&bytes)
+        .map_err(|e| format!("Failed to write bytes: {}", e))?;
+        
+    Ok(file_path.to_string_lossy().to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 启动时初始化数据库表
@@ -735,7 +755,8 @@ pub fn run() {
             toggle_favorite,
             check_directory,
             create_directory,
-            play_notification_sound
+            play_notification_sound,
+            save_clipboard_image
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

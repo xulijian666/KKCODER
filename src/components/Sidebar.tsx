@@ -33,7 +33,7 @@ export interface Session {
 interface SidebarProps {
   selectedAgent: "claude" | "pi";
   onSelectAgent: (agent: "claude" | "pi") => void;
-  onOpenNewSession: () => void;
+  onOpenNewSession: (prefilledPath?: string) => void;
   sessions: Session[];
   activeSessionId: string;
   onSelectSession: (id: string) => void;
@@ -398,7 +398,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* 新建 AI 终端按钮 */}
         <button
           className="new-session-btn"
-          onClick={onOpenNewSession}
+          onClick={() => onOpenNewSession()}
         >
           +新建终端
         </button>
@@ -571,6 +571,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
           }}
           onClick={(e) => e.stopPropagation()}
         >
+          <button 
+            className="context-menu-item"
+            onClick={() => {
+              onOpenNewSession(projectContextMenu.projectPath);
+              setProjectContextMenu(null);
+            }}
+          >
+            <span className="context-menu-icon" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            </span>
+            新建会话
+          </button>
+          <div style={{ borderBottom: "1px dashed var(--border-color)", margin: "4px 6px" }} />
           <button 
             className="context-menu-item"
             onClick={(e) => {
