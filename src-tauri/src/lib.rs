@@ -199,12 +199,12 @@ fn delete_session(id: String) -> Result<(), String> {
     Ok(())
 }
 
-// 4. 读取最近点选的项目路径 (前 20 个)
+// 4. 读取最近点选的项目路径 (前 20 个，过滤掉左侧栏已不存在的无会话项目)
 #[tauri::command]
 fn get_recent_projects() -> Result<Vec<RecentProject>, String> {
     let db_path = get_db_path();
     let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
-    let mut stmt = conn.prepare("SELECT name, path FROM recent_projects ORDER BY last_used_at DESC LIMIT 20")
+    let mut stmt = conn.prepare("SELECT name, path FROM recent_projects WHERE path IN (SELECT DISTINCT path FROM sessions) ORDER BY last_used_at DESC LIMIT 20")
         .map_err(|e| e.to_string())?;
     
     let rows = stmt.query_map([], |row| {

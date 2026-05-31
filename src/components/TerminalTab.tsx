@@ -13,9 +13,11 @@ interface TerminalTabProps {
   isReopen: boolean;
   onSpawned?: () => void;
   onCaptureSessionId?: (sessionId: string, agentSessionId: string) => void;
+  onStateChange?: (busy: boolean) => void;
+  busy?: boolean;
 }
 
-const getTerminalThemeColors = (themeName: string, agentType: "claude" | "pi") => {
+const getTerminalThemeColors = (themeName: string) => {
   let isDark = false;
   if (themeName === "dark-blue" || themeName === "dark-purple" || themeName === "dark-zinc") {
     isDark = true;
@@ -28,7 +30,7 @@ const getTerminalThemeColors = (themeName: string, agentType: "claude" | "pi") =
   return {
     background: isDark ? "#000000" : "#ffffff",
     foreground: isDark ? "#f8fafc" : "#334155",
-    cursor: agentType === "claude" ? "#f97316" : "#10b981", // 橙色/绿色光标
+    cursor: isDark ? "#f8fafc" : "#334155", // 使用原生前景色，消除多余亮色闪烁光标
     selectionBackground: isDark ? "rgba(255, 255, 255, 0.2)" : "rgba(59, 130, 246, 0.3)",
     black: isDark ? "#000000" : "#0f172a",
     red: "#ef4444",
@@ -60,6 +62,8 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
   isReopen,
   onSpawned,
   onCaptureSessionId,
+  onStateChange,
+  busy,
 }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<Terminal | null>(null);
@@ -71,22 +75,31 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
   const lastOutputTimeRef = useRef<number>(0);
   const debounceTimeoutRef = useRef<any>(null);
 
+  const log = (msg: string) => {
+    const time = new Date().toISOString();
+    const fullMsg = `[JS][TerminalTab][${sessionId}][${time}] ${msg}`;
+    console.log(fullMsg);
+    try {
+      const existingLogs = JSON.parse(localStorage.getItem("kkcoder_logs") || "[]");
+      existingLogs.push(fullMsg);
+      if (existingLogs.length > 200) {
+        existingLogs.shift();
+      }
+      localStorage.setItem("kkcoder_logs", JSON.stringify(existingLogs));
+    } catch (e) {}
+  };
 
+  // 监听来自父组件的 busy 繁忙状态信号，自动同步 isAnsweringRef 并开始 PTY 静默监测
+  useEffect(() => {
+    if (busy) {
+      log("TerminalTab busy prop changed to true. Activating isAnsweringRef for PTY tracking...");
+      isAnsweringRef.current = true;
+      commandStartTimeRef.current = Date.now();
+      lastOutputTimeRef.current = Date.now();
+    }
+  }, [busy, sessionId]);
 
   useEffect(() => {
-    const log = (msg: string) => {
-      const time = new Date().toISOString();
-      const fullMsg = `[JS][TerminalTab][${sessionId}][${time}] ${msg}`;
-      console.log(fullMsg);
-      try {
-        const existingLogs = JSON.parse(localStorage.getItem("kkcoder_logs") || "[]");
-        existingLogs.push(fullMsg);
-        if (existingLogs.length > 200) {
-          existingLogs.shift();
-        }
-        localStorage.setItem("kkcoder_logs", JSON.stringify(existingLogs));
-      } catch (e) {}
-    };
 
     log(`useEffect triggered: directory=${directory}, agentType=${agentType}, isReopen=${isReopen}`);
     if (!terminalRef.current) {
@@ -100,7 +113,7 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
     const savedFont = localStorage.getItem("kkcoder_setting_font_family") || "Cascadia Mono";
     const savedSizeStr = localStorage.getItem("kkcoder_setting_font_size");
     const savedSize = savedSizeStr ? parseFloat(savedSizeStr) : 13.5;
-    const initialColors = getTerminalThemeColors(savedTheme, agentType);
+    const initialColors = getTerminalThemeColors(savedTheme);
 
     const term = new Terminal({
       cursorBlink: true,
@@ -167,6 +180,7 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
       try {
         log("Executing fitAddon.fit()");
         fitAddon.fit();
+        term.scrollToBottom(); // 确保初次加载和挂载时视口强制滚动到最下方
         log("fitAddon.fit() completed.");
       } catch (e) {
         log(`Error running fitAddon.fit(): ${e}`);
@@ -225,6 +239,9 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
 
                   isAnsweringRef.current = false;
                   debounceTimeoutRef.current = null;
+                  if (onStateChange) {
+                    onStateChange(false);
+                  }
                 }, 600);
               }
 
@@ -271,6 +288,9 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
         isAnsweringRef.current = true;
         commandStartTimeRef.current = Date.now();
         lastOutputTimeRef.current = Date.now();
+        if (onStateChange) {
+          onStateChange(true);
+        }
       }
       invoke("write_to_terminal", { sessionId, data }).catch((err) => {
         log(`write_to_terminal error: ${err}`);
@@ -320,6 +340,7 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
     const handleWindowResize = () => {
       try {
         fitAddon.fit();
+        term.scrollToBottom(); // 确保容器尺寸改变时，视口强制滚动到最下方，绝不遮挡输入框
         const dims = fitAddon.proposeDimensions();
         if (dims) {
           invoke("resize_terminal", {
@@ -370,7 +391,7 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
       const customEvent = e as CustomEvent<string>;
       const newTheme = customEvent.detail;
       log(`Received theme change event: theme=${newTheme}`);
-      const newColors = getTerminalThemeColors(newTheme, agentType);
+      const newColors = getTerminalThemeColors(newTheme);
       term.options.theme = newColors;
     };
     window.addEventListener("kkcoder-theme-change", handleThemeChange);
@@ -395,6 +416,7 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
       setTimeout(() => {
         try {
           fitAddon.fit();
+          term.scrollToBottom(); // 确保字号发生热切时，视口也强制滚动到最下方
           const dims = fitAddon.proposeDimensions();
           if (dims) {
             invoke("resize_terminal", {

@@ -5,7 +5,7 @@
   "identifier": "com.kkcoder.app",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "devUrl": "http://localhost:1435",
+    "devUrl": "http://localhost:16888",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },

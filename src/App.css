@@ -210,13 +210,13 @@ body {
 
 .new-session-btn {
   width: 100%;
-  padding: 5px 10px;
+  padding: 4px 8px;
   background-color: var(--color-primary, #2563eb);
   color: white;
   border: none;
-  border-radius: 6px;
+  border-radius: 4px;
   font-weight: 600;
-  font-size: 12.5px;
+  font-size: 12px;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -706,48 +706,44 @@ body {
 
 /* 底部状态/控制面板 */
 .bottom-panel {
-  height: 48px;
+  height: 34px; /* 极致精简、扁平紧凑的状态栏 */
   background-color: var(--bg-sidebar);
   border-top: 1px solid var(--border-color);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 20px;
-  font-size: 13px;
+  padding: 0 16px;
+  font-size: 12px;
   flex-shrink: 0;
   color: var(--text-secondary);
+  position: relative;
 }
 
 /* 📂 文件夹按钮 - 极致克制扁平化状态栏设计 */
 .folder-button {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   background-color: transparent !important;
   border: none !important;
   color: var(--text-secondary) !important;
-  padding: 4px 8px;
+  padding: 3px 8px;
   border-radius: 4px;
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
-  transition: var(--transition-smooth);
+  transition: all 0.2s ease;
   box-shadow: none !important;
 }
 
 .folder-button:hover {
-  background-color: rgba(249, 115, 22, 0.08) !important;
-  color: var(--color-orange) !important;
+  background-color: var(--bg-hover-item) !important;
+  color: var(--text-primary) !important;
 }
 
 .folder-button.pi-hover:hover {
-  background-color: rgba(16, 185, 129, 0.08) !important;
-  color: var(--color-green) !important;
-}
-
-.folder-icon {
-  font-size: 13px;
-  opacity: 0.85;
+  background-color: var(--bg-hover-item) !important;
+  color: var(--text-primary) !important;
 }
 
 .system-meta {
@@ -992,9 +988,9 @@ body {
 }
 
 .modal-btn {
-  padding: 10px 20px;
-  border-radius: 6px;
-  font-size: 13px;
+  padding: 5px 12px;
+  border-radius: 4px;
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
   transition: var(--transition-smooth);
@@ -1284,11 +1280,11 @@ body {
 }
 
 .settings-toggle-btn {
-  padding: 6px 14px;
-  border-radius: 6px;
+  padding: 3px 10px;
+  border-radius: 4px;
   border: 1px solid var(--border-color);
   background-color: var(--bg-sidebar);
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--text-primary);
   font-weight: 500;
   cursor: pointer;
@@ -1615,13 +1611,14 @@ input:checked + .switch-slider:before {
 
 /* 覆盖 xterm.js 默认隐藏输入框样式，赋予其真实的尺寸以让操作系统输入法锚定在光标位置，且不设 !important left/top 以保留 xterm.js 动态光标定位 */
 .xterm .xterm-helper-textarea {
-  position: absolute !important;
   opacity: 0 !important;
-  width: 10px !important;
-  height: 20px !important;
-  z-index: 1000 !important;
-  /* 允许 inline style 覆盖 left, 但防止默认的 -9999em 导致首次定位失败 */
-  left: 0;
+  z-index: -10 !important; /* 置于 Canvas 底层以完美遮蔽系统输入框焦点框、背景块与光标渲染 */
+  background: transparent !important;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  resize: none !important;
+  color: transparent !important;
 }
 
 
@@ -1633,4 +1630,194 @@ input:checked + .switch-slider:before {
 .tab-list {
   scrollbar-width: none !important; /* Firefox */
   -ms-overflow-style: none !important; /* IE 10+ */
+}
+
+/* ==================== 📋 任务队列 UI 全场景主题变量集成样式 ==================== */
+
+/* 队列状态按钮 */
+.queue-status-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background-color: transparent !important;
+  border: none !important;
+  padding: 3px 8px;
+  border-radius: 4px;
+  color: var(--text-secondary) !important;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+  box-shadow: none !important;
+}
+
+.queue-status-btn:hover {
+  background-color: var(--bg-hover-item) !important;
+  color: var(--text-primary) !important;
+}
+
+/* 快捷短语状态按钮 */
+.shortcut-status-btn {
+  display: inline-flex;
+  align-items: center;
+  background-color: transparent !important;
+  border: none !important;
+  padding: 3px 8px;
+  border-radius: 4px;
+  color: var(--text-secondary) !important;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: none !important;
+}
+
+.shortcut-status-btn:hover {
+  background-color: var(--bg-hover-item) !important;
+  color: var(--text-primary) !important;
+}
+
+.queue-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #ef4444;
+  color: #ffffff;
+  font-size: 9px;
+  font-weight: 700;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  position: absolute;
+  top: -2px;
+  right: -4px;
+  border: 1.5px solid var(--bg-sidebar); /* 极简的物理挖空镂空边框，完美贴合任何黑夜白天背景 */
+}
+
+/* 队列任务面板 */
+.queue-list-panel {
+  background-color: var(--bg-sidebar);
+  border-top: 1px solid var(--border-color);
+  padding: 10px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  animation: queueSlideUp 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.queue-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px dashed var(--border-color);
+  padding-bottom: 6px;
+}
+
+.queue-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.queue-clear-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  transition: all 0.2s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.queue-clear-btn:hover {
+  background-color: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+}
+
+.queue-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.queue-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background-color: var(--bg-main);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 6px 12px;
+  animation: queueSlideIn 0.2s ease-out;
+}
+
+.queue-item-index {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-weight: 700;
+  background-color: var(--bg-sidebar);
+  width: 18px;
+  height: 18px;
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.queue-item-text {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+}
+
+.queue-item-delete {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+  transition: all 0.2s;
+}
+
+.queue-item-delete:hover {
+  color: #ef4444;
+  background-color: rgba(239, 68, 68, 0.1);
+}
+
+@keyframes queueSlideUp {
+  from {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes queueSlideIn {
+  from {
+    transform: translateX(-15px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
 }

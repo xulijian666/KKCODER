@@ -54,6 +54,34 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose }) =
     return val === null ? 13.5 : parseFloat(val);
   });
 
+  const [shortcutsEnabled, setShortcutsEnabled] = useState<boolean>(() => {
+    const val = localStorage.getItem("kkcoder_shortcuts_enabled");
+    return val === null ? false : val === "true";
+  });
+
+  const [shortcutsList, setShortcutsList] = useState<{ title: string; content: string }[]>(() => {
+    const val = localStorage.getItem("kkcoder_shortcuts_list");
+    if (val) {
+      try {
+        const parsed = JSON.parse(val);
+        if (Array.isArray(parsed)) {
+          // 确保长度为 3，若不足补齐，若超出截断
+          const list = [...parsed];
+          while (list.length < 3) list.push({ title: "", content: "" });
+          return list.slice(0, 3);
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+    return [
+      { title: "继续", content: "继续完成" },
+      { title: "", content: "" },
+      { title: "", content: "" },
+    ];
+  });
+
+
   // --- 2. 写入各项设置至 localStorage ---
   useEffect(() => {
     localStorage.setItem("kkcoder_setting_theme", theme);
@@ -94,6 +122,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose }) =
     localStorage.setItem("kkcoder_setting_font_size", String(fontSize));
     window.dispatchEvent(new CustomEvent("kkcoder-font-size-change", { detail: fontSize }));
   }, [fontSize]);
+
+  useEffect(() => {
+    localStorage.setItem("kkcoder_shortcuts_enabled", String(shortcutsEnabled));
+    window.dispatchEvent(new Event("kkcoder-shortcuts-change"));
+  }, [shortcutsEnabled]);
+
+  useEffect(() => {
+    localStorage.setItem("kkcoder_shortcuts_list", JSON.stringify(shortcutsList));
+    window.dispatchEvent(new Event("kkcoder-shortcuts-change"));
+  }, [shortcutsList]);
+
 
   // 监听键盘 ESC 键关闭设置弹窗
   useEffect(() => {
@@ -507,7 +546,75 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose }) =
                     <span className="slider-value">{soundVolume}%</span>
                   </div>
                 </div>
+
+                {/* 9. 快捷短语 */}
+                <div className="settings-group">
+                  <div className="settings-group-label">快捷短语</div>
+                  <div className="settings-switch-row">
+                    <label className="switch-container">
+                      <input
+                        type="checkbox"
+                        checked={shortcutsEnabled}
+                        onChange={(e) => setShortcutsEnabled(e.target.checked)}
+                      />
+                      <span className="switch-slider"></span>
+                    </label>
+                    <span className="switch-label">启用快捷短语功能（于最下方状态栏显示）</span>
+                  </div>
+                  {shortcutsEnabled && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "4px" }}>
+                      {shortcutsList.map((item, idx) => (
+                        <div key={idx} style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                          <span style={{ fontSize: "12px", width: "40px", color: "var(--text-secondary)" }}>
+                            按钮 {idx + 1}
+                          </span>
+                          <input
+                            type="text"
+                            placeholder="显示名称 (如: 继续)"
+                            value={item.title}
+                            onChange={(e) => {
+                              const newList = [...shortcutsList];
+                              newList[idx] = { ...newList[idx], title: e.target.value };
+                              setShortcutsList(newList);
+                            }}
+                            style={{
+                              flex: "1",
+                              padding: "4px 8px",
+                              borderRadius: "4px",
+                              border: "1px solid var(--border-color)",
+                              backgroundColor: "var(--bg-terminal)",
+                              color: "var(--text-primary)",
+                              fontSize: "12px",
+                              outline: "none"
+                            }}
+                          />
+                          <input
+                            type="text"
+                            placeholder="发送内容 (如: 继续完成)"
+                            value={item.content}
+                            onChange={(e) => {
+                              const newList = [...shortcutsList];
+                              newList[idx] = { ...newList[idx], content: e.target.value };
+                              setShortcutsList(newList);
+                            }}
+                            style={{
+                              flex: "2",
+                              padding: "4px 8px",
+                              borderRadius: "4px",
+                              border: "1px solid var(--border-color)",
+                              backgroundColor: "var(--bg-terminal)",
+                              color: "var(--text-primary)",
+                              fontSize: "12px",
+                              outline: "none"
+                            }}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
+
             ) : (
               <div className="settings-content about-page">
                 <div className="about-logo">KK</div>
