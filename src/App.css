@@ -746,6 +746,33 @@ body {
   color: var(--text-primary) !important;
 }
 
+/* 📝 Markdown 编辑按钮 */
+.md-button {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background-color: transparent !important;
+  border: none !important;
+  color: var(--text-secondary) !important;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: none !important;
+}
+
+.md-button:hover {
+  background-color: var(--bg-hover-item) !important;
+  color: var(--text-primary) !important;
+}
+
+.md-button.pi-hover:hover {
+  background-color: var(--bg-hover-item) !important;
+  color: var(--text-primary) !important;
+}
+
 .system-meta {
   display: flex;
   align-items: center;

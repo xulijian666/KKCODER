@@ -679,6 +679,25 @@ fn save_clipboard_image(bytes: Vec<u8>, filename: String) -> Result<String, Stri
     Ok(file_path.to_string_lossy().to_string())
 }
 
+#[tauri::command]
+fn read_markdown_file(path: String, filename: String) -> Result<String, String> {
+    use std::fs;
+    let file_path = std::path::Path::new(&path).join(&filename);
+    if !file_path.exists() {
+        return Ok("".to_string());
+    }
+    fs::read_to_string(&file_path)
+        .map_err(|e| format!("Failed to read file: {}", e))
+}
+
+#[tauri::command]
+fn write_markdown_file(path: String, filename: String, content: String) -> Result<(), String> {
+    use std::fs;
+    let file_path = std::path::Path::new(&path).join(&filename);
+    fs::write(&file_path, content)
+        .map_err(|e| format!("Failed to write file: {}", e))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 启动时初始化数据库表
@@ -756,7 +775,9 @@ pub fn run() {
             check_directory,
             create_directory,
             play_notification_sound,
-            save_clipboard_image
+            save_clipboard_image,
+            read_markdown_file,
+            write_markdown_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

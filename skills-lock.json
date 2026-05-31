@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "guizang-social-card-skill": {
+      "source": "op7418/guizang-social-card-skill",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "cefc2db26e8f82733dd65a4694de2b1b1d9dbcf64d54a91041b5ec662e1d4da5"
+    }
+  }
+}
