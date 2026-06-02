@@ -89,6 +89,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose }) =
     window.dispatchEvent(new CustomEvent("kkcoder-theme-change", { detail: theme }));
   }, [theme]);
 
+  // 监听外部（如调色盘）的主题变动事件以同步本地 theme 状态
+  useEffect(() => {
+    const handleExternalThemeChange = (e: Event) => {
+      const customEvent = e as CustomEvent<string>;
+      const newTheme = customEvent.detail;
+      if (newTheme !== theme) {
+        setTheme(newTheme);
+      }
+    };
+    window.addEventListener("kkcoder-theme-change", handleExternalThemeChange);
+    return () => window.removeEventListener("kkcoder-theme-change", handleExternalThemeChange);
+  }, [theme]);
+
   useEffect(() => {
     localStorage.setItem("kkcoder_setting_close_behavior", closeBehavior);
   }, [closeBehavior]);

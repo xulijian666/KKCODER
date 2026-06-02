@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { Sidebar, Session, ClaudeIcon, PiIcon } from "./components/Sidebar";
@@ -63,6 +63,10 @@ function App() {
 
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string>("");
+  const activeSessionIdRef = useRef<string>("");
+  useEffect(() => {
+    activeSessionIdRef.current = activeSessionId;
+  }, [activeSessionId]);
   const [openTabIds, setOpenTabIds] = useState<string[]>([]);
   const [selectedAgent, setSelectedAgent] = useState<"claude" | "pi">("claude");
   const [showModal, setShowModal] = useState<boolean>(false);
@@ -70,8 +74,33 @@ function App() {
   const [showSettings, setShowSettings] = useState<boolean>(false);
   const [showMdEditor, setShowMdEditor] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>("");
-  // 记录新创建的会话ID，全新拉起时不键入 /resume；其他历史会话在重连时自动键入 /resume 还原上下文
   const [newSessionIds, setNewSessionIds] = useState<string[]>([]);
+
+  // AI回答完成的闪烁状态
+  const [glowingSessionIds, setGlowingSessionIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (activeSessionId) {
+      setGlowingSessionIds((prev) => {
+        if (prev.includes(activeSessionId)) {
+          return prev.filter((id) => id !== activeSessionId);
+        }
+        return prev;
+      });
+    }
+  }, [activeSessionId]);
+  // 恢复会话相关状态
+  const [pendingRestoreIds, setPendingRestoreIds] = useState<string[]>([]);
+  const [pendingActiveId, setPendingActiveId] = useState<string>("");
+  const [showRestoreToast, setShowRestoreToast] = useState<boolean>(false);
+  const [showRestoreModal, setShowRestoreModal] = useState<boolean>(false);
+
+  // 颜色调色盘主题切换相关状态
+  const [showThemeDropdown, setShowThemeDropdown] = useState<boolean>(false);
+  const [currentTheme, setCurrentTheme] = useState<string>(() => {
+    return localStorage.getItem("kkcoder_setting_theme") || "light-premium";
+  });
+  const [isInitLoaded, setIsInitLoaded] = useState<boolean>(false);
 
   // 快捷短语状态
   const [shortcutsEnabled, setShortcutsEnabled] = useState<boolean>(() => {
@@ -215,15 +244,16 @@ function App() {
 
   // 记住最后的会话和打开的 Tab 标签页
   useEffect(() => {
-    if (activeSessionId) {
+    if (isInitLoaded) {
       localStorage.setItem("kkcoder_last_active_session_id", activeSessionId);
     }
-  }, [activeSessionId]);
+  }, [activeSessionId, isInitLoaded]);
 
   useEffect(() => {
-    localStorage.setItem("kkcoder_last_open_tab_ids", JSON.stringify(openTabIds));
-  }, [openTabIds]);
-
+    if (isInitLoaded) {
+      localStorage.setItem("kkcoder_last_open_tab_ids", JSON.stringify(openTabIds));
+    }
+  }, [openTabIds, isInitLoaded]);
   // 💾 自动载入与保存持久化窗口窗体大小 (防抖 300ms 性能极致优化)
   useEffect(() => {
     const savedWidth = localStorage.getItem("kkcoder_window_width");
@@ -341,28 +371,21 @@ function App() {
           const validActiveId = data.some((s) => s.id === lastActiveId) ? lastActiveId : data[0].id;
           const validOpenTabs = lastOpenTabs.filter((tid) => data.some((s) => s.id === tid));
 
-          if (validActiveId) {
-            if (!validOpenTabs.includes(validActiveId)) {
-              validOpenTabs.push(validActiveId);
+          if (validOpenTabs.length > 0) {
+            log(`Found ${validOpenTabs.length} sessions from last time. Setting restore states...`);
+            setPendingRestoreIds(validOpenTabs);
+            if (validActiveId) {
+              setPendingActiveId(validActiveId);
             }
-            setActiveSessionId(validActiveId);
-            setOpenTabIds(validOpenTabs);
-
-            // 自动同步 Agent 选卡到活跃会话的品牌
-            const activeSess = data.find((s) => s.id === validActiveId);
-            if (activeSess) {
-              setSelectedAgent(activeSess.type);
-            }
-          } else {
-            setActiveSessionId(data[0].id);
-            setOpenTabIds([data[0].id]);
-            setSelectedAgent(data[0].type);
+            setShowRestoreToast(true);
           }
         }
+        setIsInitLoaded(true);
       })
       .catch((err) => {
         log(`Failed to fetch sessions from SQLite: ${err}`);
         console.error("加载 SQLite 本地会话数据失败", err);
+        setIsInitLoaded(true);
       });
   }, []);
 
@@ -427,12 +450,235 @@ function App() {
       });
   };
 
+  // 新建无痕临时终端
+  const handleCreateTempSession = () => {
+    const tempNumbers = sessions
+      .filter((s) => s.isTemp)
+      .map((s) => {
+        const match = s.name.match(/临时终端(\d+)/);
+        return match ? parseInt(match[1], 10) : 0;
+      });
+    const nextNumber = tempNumbers.length > 0 ? Math.max(...tempNumbers) + 1 : 1;
+    const sessionName = `临时终端${nextNumber}`;
+
+    const newId = `temp-session-${Date.now().toString()}`;
+    const agentSessionId = generateUUID();
+    
+    const newSession: Session = {
+      id: newId,
+      name: sessionName,
+      project: "无痕临时项目",
+      path: "D:\\CODE",
+      type: selectedAgent,
+      agentSessionId,
+      favorite: 0,
+      isTemp: true,
+    };
+
+    log(`Creating incognito temporary terminal: id=${newId}, name=${sessionName}`);
+    
+    // 直接更新内存中的状态，不用保存到 SQLite 中
+    setSessions((prev) => [...prev, newSession]);
+    setNewSessionIds((prev) => [...prev, newId]);
+    setOpenTabIds((prev) => [...prev, newId]);
+    setActiveSessionId(newId);
+  };
+
   // 选择会话切换 (侧边栏点击逻辑)
   const handleSelectSession = (id: string) => {
     if (!openTabIds.includes(id)) {
       setOpenTabIds((prev) => [...prev, id]);
     }
     setActiveSessionId(id);
+  };
+
+  // 恢复会话相关处理逻辑
+  const handleRestoreSingle = (sid: string) => {
+    setOpenTabIds((prev) => {
+      if (prev.includes(sid)) return prev;
+      return [...prev, sid];
+    });
+    setActiveSessionId(sid);
+
+    const s = sessions.find((sess) => sess.id === sid);
+    if (s) {
+      setSelectedAgent(s.type);
+    }
+
+    const remaining = pendingRestoreIds.filter((id) => id !== sid);
+    setPendingRestoreIds(remaining);
+
+    if (remaining.length === 0) {
+      setShowRestoreModal(false);
+      setShowRestoreToast(false);
+    }
+  };
+
+  const handleRestoreAll = () => {
+    setOpenTabIds((prev) => {
+      const combined = [...prev];
+      pendingRestoreIds.forEach((id) => {
+        if (!combined.includes(id)) {
+          combined.push(id);
+        }
+      });
+      return combined;
+    });
+
+    if (pendingRestoreIds.length > 0) {
+      const nextActiveId = pendingRestoreIds.includes(pendingActiveId)
+        ? pendingActiveId
+        : pendingRestoreIds[pendingRestoreIds.length - 1];
+      setActiveSessionId(nextActiveId);
+
+      const s = sessions.find((sess) => sess.id === nextActiveId);
+      if (s) {
+        setSelectedAgent(s.type);
+      }
+    }
+
+    setPendingRestoreIds([]);
+    setShowRestoreModal(false);
+    setShowRestoreToast(false);
+  };
+
+  const handleRestoreIgnore = () => {
+    setPendingRestoreIds([]);
+    setShowRestoreModal(false);
+    setShowRestoreToast(false);
+  };
+
+  const handleCommandComplete = (sid: string) => {
+    if (sid !== activeSessionIdRef.current) {
+      setGlowingSessionIds((prev) => {
+        if (prev.includes(sid)) return prev;
+        return [...prev, sid];
+      });
+    }
+  };
+
+  // 点击页面任意位置关闭调色盘菜单
+  useEffect(() => {
+    const closeThemeMenu = () => setShowThemeDropdown(false);
+    window.addEventListener("click", closeThemeMenu);
+    return () => window.removeEventListener("click", closeThemeMenu);
+  }, []);
+
+  // 监听主题发生变动的全局广播事件
+  useEffect(() => {
+    const handleThemeEvent = (e: Event) => {
+      const customEvent = e as CustomEvent<string>;
+      setCurrentTheme(customEvent.detail);
+    };
+    window.addEventListener("kkcoder-theme-change", handleThemeEvent);
+    return () => window.removeEventListener("kkcoder-theme-change", handleThemeEvent);
+  }, []);
+
+  const applyTheme = (themeName: string) => {
+    const root = document.documentElement;
+    let target = themeName;
+    if (themeName === "auto") {
+      target = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark-zinc" : "light-premium";
+    }
+
+    if (target === "dark-blue") {
+      root.style.setProperty("--bg-main", "#090d16");
+      root.style.setProperty("--bg-sidebar", "#121620");
+      root.style.setProperty("--bg-terminal", "#000000");
+      root.style.setProperty("--border-color", "#1e293b");
+      root.style.setProperty("--text-primary", "#f8fafc");
+      root.style.setProperty("--text-secondary", "#94a3b8");
+      root.style.setProperty("--color-primary", "#3b82f6");
+      root.style.setProperty("--color-primary-hover", "#2563eb");
+      root.style.setProperty("--bg-active-item", "#1e293b");
+      root.style.setProperty("--text-active-item", "#ffffff");
+      root.style.setProperty("--bg-hover-item", "rgba(59, 130, 246, 0.15)");
+      root.style.setProperty("--bg-agent-selector", "rgba(0, 0, 0, 0.25)");
+      root.style.setProperty("--bg-agent-slider", "#1e293b");
+      root.style.setProperty("--shadow-agent-slider", "0 2px 5px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.08)");
+    } else if (target === "dark-purple") {
+      root.style.setProperty("--bg-main", "#0c0a12");
+      root.style.setProperty("--bg-sidebar", "#171424");
+      root.style.setProperty("--bg-terminal", "#000000");
+      root.style.setProperty("--border-color", "#2e2540");
+      root.style.setProperty("--text-primary", "#f5f3ff");
+      root.style.setProperty("--text-secondary", "#b7a8d6");
+      root.style.setProperty("--color-primary", "#8b5cf6");
+      root.style.setProperty("--color-primary-hover", "#7c3aed");
+      root.style.setProperty("--bg-active-item", "#2f2647");
+      root.style.setProperty("--text-active-item", "#ffffff");
+      root.style.setProperty("--bg-hover-item", "rgba(139, 92, 246, 0.15)");
+      root.style.setProperty("--bg-agent-selector", "rgba(0, 0, 0, 0.25)");
+      root.style.setProperty("--bg-agent-slider", "#2f2647");
+      root.style.setProperty("--shadow-agent-slider", "0 2px 5px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.08)");
+    } else if (target === "dark-zinc") {
+      root.style.setProperty("--bg-main", "#0c0b0a");
+      root.style.setProperty("--bg-sidebar", "#1d1b18");
+      root.style.setProperty("--bg-terminal", "#000000");
+      root.style.setProperty("--border-color", "#332f29");
+      root.style.setProperty("--text-primary", "#fafaf9");
+      root.style.setProperty("--text-secondary", "#cbd5e1");
+      root.style.setProperty("--color-primary", "#d97706");
+      root.style.setProperty("--color-primary-hover", "#b55c04");
+      root.style.setProperty("--bg-active-item", "#383227");
+      root.style.setProperty("--text-active-item", "#ffffff");
+      root.style.setProperty("--bg-hover-item", "rgba(245, 158, 11, 0.15)");
+      root.style.setProperty("--bg-agent-selector", "rgba(0, 0, 0, 0.25)");
+      root.style.setProperty("--bg-agent-slider", "#383227");
+      root.style.setProperty("--shadow-agent-slider", "0 2px 5px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.08)");
+    } else if (target === "light-blue") {
+      root.style.setProperty("--bg-main", "#ffffff");
+      root.style.setProperty("--bg-sidebar", "#f0f7ff");
+      root.style.setProperty("--bg-terminal", "#f8fafc");
+      root.style.setProperty("--border-color", "#bae6fd");
+      root.style.setProperty("--text-primary", "#0369a1");
+      root.style.setProperty("--text-secondary", "#0284c7");
+      root.style.setProperty("--color-primary", "#0284c7");
+      root.style.setProperty("--color-primary-hover", "#0369a1");
+      root.style.setProperty("--bg-active-item", "#e0f2fe");
+      root.style.setProperty("--text-active-item", "#0369a1");
+      root.style.setProperty("--bg-hover-item", "rgba(2, 132, 199, 0.08)");
+      root.style.setProperty("--bg-agent-selector", "rgba(2, 132, 199, 0.06)");
+      root.style.setProperty("--bg-agent-slider", "#ffffff");
+      root.style.setProperty("--shadow-agent-slider", "0 2px 4px rgba(2, 132, 199, 0.1), 0 1px 2px rgba(2, 132, 199, 0.05)");
+    } else if (target === "light-orange") {
+      root.style.setProperty("--bg-main", "#ffffff");
+      root.style.setProperty("--bg-sidebar", "#fffcf5");
+      root.style.setProperty("--bg-terminal", "#fffdfa");
+      root.style.setProperty("--border-color", "#fed7aa");
+      root.style.setProperty("--text-primary", "#7c2d12");
+      root.style.setProperty("--text-secondary", "#ea580c");
+      root.style.setProperty("--color-primary", "#c2410c");
+      root.style.setProperty("--color-primary-hover", "#9a3412");
+      root.style.setProperty("--bg-active-item", "#ffedd5");
+      root.style.setProperty("--text-active-item", "#7c2d12");
+      root.style.setProperty("--bg-hover-item", "rgba(234, 88, 12, 0.08)");
+      root.style.setProperty("--bg-agent-selector", "rgba(234, 88, 12, 0.05)");
+      root.style.setProperty("--bg-agent-slider", "#ffffff");
+      root.style.setProperty("--shadow-agent-slider", "0 2px 4px rgba(234, 88, 12, 0.08), 0 1px 2px rgba(234, 88, 12, 0.04)");
+    } else {
+      root.style.setProperty("--bg-main", "#ffffff");
+      root.style.setProperty("--bg-sidebar", "#f8fafc");
+      root.style.setProperty("--bg-terminal", "#f8fafc");
+      root.style.setProperty("--border-color", "#e2e8f0");
+      root.style.setProperty("--text-primary", "#1e293b");
+      root.style.setProperty("--text-secondary", "#64748b");
+      root.style.setProperty("--color-primary", "#2563eb");
+      root.style.setProperty("--color-primary-hover", "#1d4ed8");
+      root.style.setProperty("--bg-active-item", "#dbeafe");
+      root.style.setProperty("--text-active-item", "#1e40af");
+      root.style.setProperty("--bg-hover-item", "rgba(59, 130, 246, 0.08)");
+      root.style.setProperty("--bg-agent-selector", "rgba(15, 23, 42, 0.05)");
+      root.style.setProperty("--bg-agent-slider", "#ffffff");
+      root.style.setProperty("--shadow-agent-slider", "0 2px 4px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04)");
+    }
+  };
+
+  const handleSelectTheme = (newTheme: string) => {
+    setCurrentTheme(newTheme);
+    localStorage.setItem("kkcoder_setting_theme", newTheme);
+    applyTheme(newTheme);
+    window.dispatchEvent(new CustomEvent("kkcoder-theme-change", { detail: newTheme }));
   };
 
   // 💾 保存标签页的行内重命名并同步数据库
@@ -463,6 +709,11 @@ function App() {
       log(`Failed to close terminal PTY process for ${id}: ${err}`);
     });
 
+    const closedSession = sessions.find((s) => s.id === id);
+    if (closedSession?.isTemp) {
+      setSessions((prev) => prev.filter((s) => s.id !== id));
+    }
+
     const updatedTabs = openTabIds.filter((tid) => tid !== id);
     setOpenTabIds(updatedTabs);
 
@@ -478,15 +729,14 @@ function App() {
     }
   };
 
-  // 🗑️ 从本地 SQLite 数据库中完全物理删除该会话记录
-  const handleDeleteSession = async (e: React.MouseEvent, id: string) => {
-    e.stopPropagation();
-    if (!confirm("确定要永久删除该会话及其所有本地终端数据吗？(此操作不可逆)")) return;
+  // 🗑️ 从本地 SQLite 数据库中软删除该会话记录，移入回收站
+  const handleDeleteSession = async (e: React.MouseEvent | null, id: string) => {
+    if (e) e.stopPropagation();
     try {
       // 销毁后端 PTY 进程
       invoke("close_terminal", { sessionId: id }).catch(() => {});
       await invoke("delete_session", { id });
-      setSessions((prev) => prev.filter((s) => s.id !== id));
+      setSessions((prev) => prev.map((s) => s.id === id ? { ...s, deleted: 1, deletedAt: new Date().toISOString() } : s));
       setOpenTabIds((prev) => prev.filter((tid) => tid !== id));
       if (activeSessionId === id) {
         const remaining = openTabIds.filter((tid) => tid !== id);
@@ -498,6 +748,36 @@ function App() {
       }
     } catch (err) {
       alert(`删除会话失败: ${err}`);
+    }
+  };
+
+  // ⟲ 从回收站中恢复该会话记录
+  const handleRestoreSession = async (id: string) => {
+    try {
+      await invoke("restore_session", { id });
+      setSessions((prev) => prev.map((s) => s.id === id ? { ...s, deleted: 0, deletedAt: undefined } : s));
+    } catch (err) {
+      alert(`恢复会话失败: ${err}`);
+    }
+  };
+
+  // 🗑️ 物理彻底删除该会话
+  const handlePermanentlyDeleteSession = async (id: string) => {
+    try {
+      await invoke("delete_session_permanently", { id });
+      setSessions((prev) => prev.filter((s) => s.id !== id));
+    } catch (err) {
+      alert(`彻底删除会话失败: ${err}`);
+    }
+  };
+
+  // 🗑️ 清空回收站
+  const handleEmptyTrash = async () => {
+    try {
+      await invoke("empty_trash");
+      setSessions((prev) => prev.filter((s) => s.deleted !== 1));
+    } catch (err) {
+      alert(`清空垃圾桶失败: ${err}`);
     }
   };
 
@@ -590,34 +870,148 @@ function App() {
           </div>
           <span className="logo-title-text" data-tauri-drag-region>KKCoder 极简 AI 终端管理器</span>
         </div>
+
         <div className="titlebar-actions">
+          <div className="theme-selector-wrapper">
+            <button
+              className={`titlebar-btn theme-palette-btn ${showThemeDropdown ? "active" : ""}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowThemeDropdown(!showThemeDropdown);
+              }}
+              title="选择颜色主题"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 22C17.52 22 22 17.52 22 12S17.52 2 12 2 2 6.48 2 12c0 2.2 1.8 4 4 4h1a2 2 0 0 1 2 2v2c0 1.1.9 2 2 2z"></path>
+                <circle cx="7.5" cy="10.5" r="1.5" fill="currentColor"></circle>
+                <circle cx="11.5" cy="7.5" r="1.5" fill="currentColor"></circle>
+                <circle cx="16.5" cy="9.5" r="1.5" fill="currentColor"></circle>
+                <circle cx="15.5" cy="14.5" r="1.5" fill="currentColor"></circle>
+              </svg>
+            </button>
+            {showThemeDropdown && (
+              <div className="theme-dropdown" onClick={(e) => e.stopPropagation()}>
+                <div className="theme-dropdown-section">
+                  <div className="theme-dropdown-section-title">深色</div>
+                  <div
+                    className={`theme-dropdown-item ${currentTheme === "dark-blue" ? "active" : ""}`}
+                    onClick={() => handleSelectTheme("dark-blue")}
+                  >
+                    <span className="theme-preview-dots">
+                      <span className="theme-dot" style={{ backgroundColor: "#121620" }}></span>
+                      <span className="theme-dot" style={{ backgroundColor: "#3b82f6" }}></span>
+                    </span>
+                    <span className="theme-name">深空墨</span>
+                  </div>
+                  <div
+                    className={`theme-dropdown-item ${currentTheme === "dark-purple" ? "active" : ""}`}
+                    onClick={() => handleSelectTheme("dark-purple")}
+                  >
+                    <span className="theme-preview-dots">
+                      <span className="theme-dot" style={{ backgroundColor: "#171424" }}></span>
+                      <span className="theme-dot" style={{ backgroundColor: "#8b5cf6" }}></span>
+                    </span>
+                    <span className="theme-name">赛博紫</span>
+                  </div>
+                  <div
+                    className={`theme-dropdown-item ${currentTheme === "dark-zinc" ? "active" : ""}`}
+                    onClick={() => handleSelectTheme("dark-zinc")}
+                  >
+                    <span className="theme-preview-dots">
+                      <span className="theme-dot" style={{ backgroundColor: "#1d1b18" }}></span>
+                      <span className="theme-dot" style={{ backgroundColor: "#d97706" }}></span>
+                    </span>
+                    <span className="theme-name">琥珀金</span>
+                  </div>
+                </div>
+
+                <div className="theme-dropdown-section">
+                  <div className="theme-dropdown-section-title">浅色</div>
+                  <div
+                    className={`theme-dropdown-item ${currentTheme === "light-premium" ? "active" : ""}`}
+                    onClick={() => handleSelectTheme("light-premium")}
+                  >
+                    <span className="theme-preview-dots">
+                      <span className="theme-dot" style={{ backgroundColor: "#ffffff", border: "1px solid #e2e8f0" }}></span>
+                      <span className="theme-dot" style={{ backgroundColor: "#2563eb" }}></span>
+                    </span>
+                    <span className="theme-name">经典白</span>
+                  </div>
+                  <div
+                    className={`theme-dropdown-item ${currentTheme === "light-orange" ? "active" : ""}`}
+                    onClick={() => handleSelectTheme("light-orange")}
+                  >
+                    <span className="theme-preview-dots">
+                      <span className="theme-dot" style={{ backgroundColor: "#ffffff", border: "1px solid #fed7aa" }}></span>
+                      <span className="theme-dot" style={{ backgroundColor: "#ea580c" }}></span>
+                    </span>
+                    <span className="theme-name">暖沙</span>
+                  </div>
+                  <div
+                    className={`theme-dropdown-item ${currentTheme === "light-blue" ? "active" : ""}`}
+                    onClick={() => handleSelectTheme("light-blue")}
+                  >
+                    <span className="theme-preview-dots">
+                      <span className="theme-dot" style={{ backgroundColor: "#ffffff", border: "1px solid #bae6fd" }}></span>
+                      <span className="theme-dot" style={{ backgroundColor: "#0284c7" }}></span>
+                    </span>
+                    <span className="theme-name">天空蓝</span>
+                  </div>
+                </div>
+
+                <div className="theme-dropdown-divider"></div>
+
+                <div
+                  className={`theme-dropdown-item ${currentTheme === "auto" ? "active" : ""}`}
+                  onClick={() => handleSelectTheme("auto")}
+                >
+                  <span className="theme-preview-dots">
+                    <span className="theme-dot theme-dot-split"></span>
+                  </span>
+                  <span className="theme-name">跟随系统</span>
+                </div>
+              </div>
+            )}
+          </div>
+
           <button
             className="titlebar-btn settings-gear-btn"
             onClick={() => setShowSettings(true)}
             title="打开设置"
           >
-            ⚙️
+
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+            </svg>
           </button>
           <button
             className="titlebar-btn minimize-btn"
             onClick={handleMinimize}
             title="最小化"
           >
-            －
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
           </button>
           <button
             className="titlebar-btn maximize-btn"
             onClick={handleMaximize}
             title="最大化"
           >
-            🗖
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+            </svg>
           </button>
           <button
             className="titlebar-btn close-btn"
             onClick={handleClose}
             title="关闭"
           >
-            ✕
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
           </button>
         </div>
       </div>
@@ -632,6 +1026,7 @@ function App() {
             setPrefilledProjectPath(path);
             setShowModal(true);
           }}
+          onOpenTempSession={handleCreateTempSession}
           sessions={sessions}
           activeSessionId={activeSessionId}
           onSelectSession={handleSelectSession}
@@ -644,6 +1039,10 @@ function App() {
           highlightSessionId={highlightSessionId}
           onHighlightEnd={() => setHighlightSessionId(null)}
           onDeleteSessionsBatch={handleDeleteSessionsBatch}
+          glowingSessionIds={glowingSessionIds}
+          onRestoreSession={handleRestoreSession}
+          onPermanentlyDeleteSession={handlePermanentlyDeleteSession}
+          onEmptyTrash={handleEmptyTrash}
         />
 
         {/* 右侧主工作区 */}
@@ -656,13 +1055,17 @@ function App() {
                 if (!s) return null;
                 const isActive = activeSessionId === tid;
                 const isRenaming = renamingTabId === s.id;
+                const isGlowing = glowingSessionIds.includes(s.id);
                 return (
                   <div
                     key={s.id}
                     className={`tab ${isActive ? "active" : ""} ${
                       isActive && s.type === "pi" ? "pi-tab" : ""
-                    }`}
-                    onClick={() => setActiveSessionId(s.id)}
+                    } ${isGlowing ? (s.type === "pi" ? "glowing-pi" : "glowing-claude") : ""}`}
+                    onClick={() => {
+                      setActiveSessionId(s.id);
+                      setGlowingSessionIds((prev) => prev.filter((id) => id !== s.id));
+                    }}
                     onMouseDown={(e) => {
                       if (e.button === 1) {
                         e.preventDefault();
@@ -698,7 +1101,7 @@ function App() {
                     ) : (
                       <span style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
                         {s.type === "claude" ? <ClaudeIcon size={14} color="#D97757" /> : <PiIcon size={14} color="var(--color-green)" />}
-                        <span>{s.name} ({s.project})</span>
+                        <span className="tab-title-text">{s.isTemp ? s.name : `${s.name} (${s.project})`}</span>
                       </span>
                     )}
                     <span
@@ -756,6 +1159,7 @@ function App() {
                         setSessionBusy(prev => ({ ...prev, [s.id]: busy }));
                       }}
                       isActive={isActive}
+                      onCommandComplete={() => handleCommandComplete(s.id)}
                     />
                   </div>
                 );
@@ -1020,26 +1424,30 @@ function App() {
           >
             关闭其他标签
           </button>
-          <button
-            className="context-menu-item"
-            onClick={() => {
-              setRenamingTabId(tabContextMenu.sessionId);
-              const s = sessions.find((sess) => sess.id === tabContextMenu.sessionId);
-              setRenamingTabText(s ? s.name : "");
-              setTabContextMenu(null);
-            }}
-          >
-            重命名会话
-          </button>
-          <button
-            className="context-menu-item"
-            onClick={() => {
-              handleLocateSession(tabContextMenu.sessionId);
-              setTabContextMenu(null);
-            }}
-          >
-            在侧边栏中定位
-          </button>
+          {!sessions.find((sess) => sess.id === tabContextMenu.sessionId)?.isTemp && (
+            <>
+              <button
+                className="context-menu-item"
+                onClick={() => {
+                  setRenamingTabId(tabContextMenu.sessionId);
+                  const s = sessions.find((sess) => sess.id === tabContextMenu.sessionId);
+                  setRenamingTabText(s ? s.name : "");
+                  setTabContextMenu(null);
+                }}
+              >
+                重命名会话
+              </button>
+              <button
+                className="context-menu-item"
+                onClick={() => {
+                  handleLocateSession(tabContextMenu.sessionId);
+                  setTabContextMenu(null);
+                }}
+              >
+                在侧边栏中定位
+              </button>
+            </>
+          )}
         </div>
       )}
 
@@ -1099,6 +1507,85 @@ function App() {
                 }}
               >
                 直接退出
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 恢复上次会话 右上角气泡通知 (Figure 1) */}
+      {showRestoreToast && pendingRestoreIds.length > 0 && (
+        <div className="restore-toast">
+          <div className="restore-toast-header">
+            <span className="restore-toast-title">恢复上次会话</span>
+            <button className="restore-toast-close" onClick={handleRestoreIgnore}>✕</button>
+          </div>
+          <div className="restore-toast-body">
+            上次关闭时有 {pendingRestoreIds.length} 个会话未恢复，可点此逐个恢复
+          </div>
+          <div className="restore-toast-footer">
+            <button 
+              className="restore-toast-btn" 
+              onClick={() => {
+                setShowRestoreToast(false);
+                setShowRestoreModal(true);
+              }}
+            >
+              查看并恢复
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 恢复上次会话 中央选择弹窗 (Figure 2) */}
+      {showRestoreModal && pendingRestoreIds.length > 0 && (
+        <div className="modal-overlay show" style={{ zIndex: 1200 }}>
+          <div className="modal-card restore-session-modal" style={{ width: "520px" }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <span className="modal-title" style={{ fontSize: "15px", fontWeight: 700 }}>恢复上次会话</span>
+              <button className="modal-close" onClick={() => setShowRestoreModal(false)}>✕</button>
+            </div>
+            <div className="modal-body" style={{ display: "flex", flexDirection: "column", gap: "14px", padding: "10px 0" }}>
+              <p style={{ fontSize: "13px", color: "var(--text-secondary)", margin: "0 0 4px 0" }}>
+                选择要恢复的会话，将续上上次的对话上下文。
+              </p>
+              <div className="restore-session-list">
+                {pendingRestoreIds.map((tid) => {
+                  const s = sessions.find((sess) => sess.id === tid);
+                  if (!s) return null;
+                  return (
+                    <div key={s.id} className="restore-session-item">
+                      <div className="restore-item-info">
+                        <div className="restore-item-name">{s.name}</div>
+                        <div className="restore-item-path" title={s.path}>
+                          {s.type === "claude" ? "claude-code" : "pi"} · {s.path}
+                        </div>
+                      </div>
+                      <button
+                        className="restore-item-btn"
+                        onClick={() => handleRestoreSingle(s.id)}
+                      >
+                        恢复
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="modal-footer" style={{ marginTop: "15px", display: "flex", gap: "12px" }}>
+              <button
+                className="modal-btn btn-all-restore"
+                onClick={handleRestoreAll}
+                style={{ flex: 1 }}
+              >
+                全部恢复
+              </button>
+              <button
+                className="modal-btn modal-btn-cancel"
+                onClick={handleRestoreIgnore}
+                style={{ flex: 1 }}
+              >
+                忽略
               </button>
             </div>
           </div>

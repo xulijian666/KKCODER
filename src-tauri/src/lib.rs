@@ -46,6 +46,10 @@ struct Session {
     created_at: Option<String>,
     #[serde(default)]
     favorite: i32, // 0 for normal, 1 for favorite
+    #[serde(default)]
+    deleted: i32, // 0 for active, 1 for in trash
+    #[serde(rename = "deletedAt", skip_serializing_if = "Option::is_none")]
+    deleted_at: Option<String>,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -86,8 +90,16 @@ fn initialize_database() -> Result<(), rusqlite::Error> {
         [],
     )?;
 
-    // 动态平滑迁移：尝试添加 favorite 字段（若表已存在且字段未添加）。忽略错误（若字段已存在）
+    // 动态平滑迁移：尝试添加 favorite, deleted, deleted_at 字段。忽略错误（若字段已存在）
     let _ = conn.execute("ALTER TABLE sessions ADD COLUMN favorite INTEGER DEFAULT 0", []);
+    let _ = conn.execute("ALTER TABLE sessions ADD COLUMN deleted INTEGER DEFAULT 0", []);
+    let _ = conn.execute("ALTER TABLE sessions ADD COLUMN deleted_at DATETIME", []);
+
+    // 物理清理超过 7 天的已删除会话 (基于本地时间计算或直接按 UTC)
+    let _ = conn.execute(
+        "DELETE FROM sessions WHERE deleted = 1 AND datetime(deleted_at) < datetime('now', '-7 days')",
+        [],
+    );
 
     conn.execute(
         "CREATE TABLE IF NOT EXISTS recent_projects (
@@ -112,7 +124,7 @@ fn get_sessions() -> Result<Vec<Session>, String> {
         log_to_file(&format!("get_sessions DB open error: {}", e));
         e.to_string()
     })?;
-    let mut stmt = conn.prepare("SELECT id, name, project, path, type, agent_session_id, created_at, favorite FROM sessions ORDER BY created_at ASC")
+    let mut stmt = conn.prepare("SELECT id, name, project, path, type, agent_session_id, created_at, favorite, deleted, deleted_at FROM sessions ORDER BY created_at ASC")
         .map_err(|e| {
             log_to_file(&format!("get_sessions prepare stmt error: {}", e));
             e.to_string()
@@ -128,6 +140,8 @@ fn get_sessions() -> Result<Vec<Session>, String> {
             agent_session_id: row.get(5)?,
             created_at: Some(row.get(6)?),
             favorite: row.get(7)?,
+            deleted: row.get(8)?,
+            deleted_at: row.get(9)?,
         })
     }).map_err(|e| {
         log_to_file(&format!("get_sessions query map error: {}", e));
@@ -157,15 +171,17 @@ fn add_session(session: Session) -> Result<(), String> {
     
     log_to_file("add_session execute INSERT OR REPLACE into sessions...");
     conn.execute(
-        "INSERT OR REPLACE INTO sessions (id, name, project, path, type, agent_session_id, favorite) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        [
+        "INSERT OR REPLACE INTO sessions (id, name, project, path, type, agent_session_id, favorite, deleted, deleted_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        rusqlite::params![
             &session.id,
             &session.name,
             &session.project,
             &session.path,
             &session.session_type,
             &session.agent_session_id,
-            &session.favorite.to_string(),
+            session.favorite,
+            session.deleted,
+            session.deleted_at,
         ],
     ).map_err(|e| {
         log_to_file(&format!("add_session execute sessions row error: {}", e));
@@ -188,13 +204,46 @@ fn add_session(session: Session) -> Result<(), String> {
     Ok(())
 }
 
-// 3. 删除本地持久化的会话
+// 3. 删除本地持久化的会话 (软删除，移入回收站)
 #[tauri::command]
 fn delete_session(id: String) -> Result<(), String> {
-    log_to_file(&format!("delete_session command called: id={}", id));
+    log_to_file(&format!("delete_session (soft delete) command called: id={}", id));
+    let db_path = get_db_path();
+    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    conn.execute("UPDATE sessions SET deleted = 1, deleted_at = datetime('now', 'localtime') WHERE id = ?1", [&id])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// 3a. 彻底删除本地持久化的会话 (物理删除)
+#[tauri::command]
+fn delete_session_permanently(id: String) -> Result<(), String> {
+    log_to_file(&format!("delete_session_permanently command called: id={}", id));
     let db_path = get_db_path();
     let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM sessions WHERE id = ?1", [&id])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// 3b. 恢复从回收站中的会话
+#[tauri::command]
+fn restore_session(id: String) -> Result<(), String> {
+    log_to_file(&format!("restore_session command called: id={}", id));
+    let db_path = get_db_path();
+    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    conn.execute("UPDATE sessions SET deleted = 0, deleted_at = NULL WHERE id = ?1", [&id])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// 3c. 清空回收站
+#[tauri::command]
+fn empty_trash() -> Result<(), String> {
+    log_to_file("empty_trash command called.");
+    let db_path = get_db_path();
+    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM sessions WHERE deleted = 1", [])
         .map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -312,6 +361,9 @@ fn spawn_terminal(
     let mut cmd = {
         let mut c = CommandBuilder::new("powershell.exe");
         c.arg("-NoLogo");
+        c.arg("-NoProfile");
+        c.arg("-ExecutionPolicy");
+        c.arg("Bypass");
         c
     };
     #[cfg(not(target_os = "windows"))]
@@ -763,6 +815,9 @@ pub fn run() {
             get_sessions,
             add_session,
             delete_session,
+            delete_session_permanently,
+            restore_session,
+            empty_trash,
             get_recent_projects,
             select_directory,
             open_project_folder,

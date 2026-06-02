@@ -16,6 +16,7 @@ interface TerminalTabProps {
   onStateChange?: (busy: boolean) => void;
   busy?: boolean;
   isActive?: boolean;
+  onCommandComplete?: () => void;
 }
 
 const getTerminalThemeColors = (themeName: string) => {
@@ -66,11 +67,17 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
   onStateChange,
   busy,
   isActive,
+  onCommandComplete,
 }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const capturedRef = useRef<boolean>(false);
+
+  const onCommandCompleteRef = useRef(onCommandComplete);
+  useEffect(() => {
+    onCommandCompleteRef.current = onCommandComplete;
+  }, [onCommandComplete]);
 
   const isAnsweringRef = useRef<boolean>(false);
   const commandStartTimeRef = useRef<number>(0);
@@ -299,6 +306,9 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
                   if (onStateChange) {
                     onStateChange(false);
                   }
+                  if (onCommandCompleteRef.current) {
+                    onCommandCompleteRef.current();
+                  }
                 }, 600);
               }
 
@@ -393,9 +403,13 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
         );
       });
 
-    // 6. 监听窗口 resize 事件自动重绘
-    const handleWindowResize = () => {
+    // 6. 使用 ResizeObserver 监听容器尺寸的物理变化，比 window.resize 更加灵敏和靠谱
+    const handleResize = () => {
       try {
+        if (!isActive) {
+          // 如果该 Tab 当前处于非激活状态 (display: none)，则直接跳过 fit，防范缩成 0 行的 bug
+          return;
+        }
         fitAddon.fit();
         term.scrollToBottom(); // 确保容器尺寸改变时，视口强制滚动到最下方，绝不遮挡输入框
         const dims = fitAddon.proposeDimensions();
@@ -404,13 +418,26 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
             sessionId,
             cols: dims.cols,
             rows: dims.rows,
-          }).catch((err) => log(`Window resize sync error: ${err}`));
+          }).catch((err) => log(`Terminal resize sync error: ${err}`));
         }
       } catch (e) {
         // 捕获未挂载时测量的尺寸异常
       }
     };
-    // 监听全局 contextmenu 并使用捕获阶段，确保能先于 xterm.js 拦截并调用 preventDefault()，实现右键静默复制
+
+    const resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        if (width > 0 && height > 0) {
+          // 只有当尺寸确实大于 0 且处于 active 状态时才执行 fit
+          handleResize();
+        }
+      }
+    });
+
+    if (terminalRef.current) {
+      resizeObserver.observe(terminalRef.current);
+    }
     const handleRawContextMenu = (e: MouseEvent) => {
       if (terminalRef.current && terminalRef.current.contains(e.target as Node)) {
         e.preventDefault();
@@ -456,8 +483,6 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
       }
     }
 
-    window.addEventListener("resize", handleWindowResize);
-
     // 7. 监听主题切换的全局自定义事件，实现 PTY 终端画布底色实时刷新 (黑底 `#000000` / 白底 `#ffffff`)
     const handleThemeChange = (e: Event) => {
       const customEvent = e as CustomEvent<string>;
@@ -484,6 +509,11 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
       log(`Received font size change event: size=${newSize}`);
       term.options.fontSize = newSize;
       
+      if (!isActive) {
+        // 非激活状态的标签页不进行 fit 计算以防缩至 0 行，激活时自然会重新 fit 覆盖
+        return;
+      }
+
       // 精准防抖动触发 fit，等 Canvas 重绘完成
       setTimeout(() => {
         try {
@@ -517,7 +547,7 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
       if (parentElement && agentType === "pi") {
         parentElement.removeEventListener("scroll", handleScrollCapture, true);
       }
-      window.removeEventListener("resize", handleWindowResize);
+      resizeObserver.disconnect();
       window.removeEventListener("kkcoder-theme-change", handleThemeChange);
       window.removeEventListener("kkcoder-font-change", handleFontChange);
       window.removeEventListener("kkcoder-font-size-change", handleFontSizeChange);
@@ -533,15 +563,29 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
   }, [sessionId, directory, agentType]);
 
   // 当标签页激活时，自动将物理焦点 focus 绑定给当前终端，实现“一开即写、一切即敲”的高端心流
+  // 同时，触发 fitAddon.fit() 重新计算终端画布大小，并同步给 PTY 进程，彻底解决 display: none 到 flex 转换导致的界面缩水/缩成一行的问题
   useEffect(() => {
     if (isActive && xtermRef.current) {
-      log(`Auto-focusing terminal instance for active session: ${sessionId}`);
-      // 延迟 80ms 等 DOM 完全刷新 (display: flex 生效) 后平滑捕获系统焦点
+      log(`Auto-focusing and fitting terminal instance for active session: ${sessionId}`);
+      // 延迟 80ms 等 DOM 完全刷新 (display: flex 生效) 后平滑捕获系统焦点并重新测绘画布
       const timer = setTimeout(() => {
         try {
+          if (fitAddonRef.current && xtermRef.current) {
+            fitAddonRef.current.fit();
+            xtermRef.current.scrollToBottom();
+            const dims = fitAddonRef.current.proposeDimensions();
+            if (dims) {
+              log(`Active tab fit dimensions: cols=${dims.cols}, rows=${dims.rows}`);
+              invoke("resize_terminal", {
+                sessionId,
+                cols: dims.cols,
+                rows: dims.rows,
+              }).catch((err) => log(`Active tab resize sync error: ${err}`));
+            }
+          }
           xtermRef.current?.focus();
         } catch (e) {
-          console.error("Failed to focus terminal", e);
+          console.error("Failed to focus or fit terminal", e);
         }
       }, 80);
       return () => clearTimeout(timer);

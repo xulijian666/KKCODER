@@ -28,30 +28,39 @@ export interface Session {
   agentSessionId: string;
   createdAt?: string; // 保存数据库创建时间戳
   favorite: number;   // 0 代表普通，1 代表已收藏
+  deleted?: number;   // 0 代表活动，1 代表回收站
+  deletedAt?: string; // 保存软删除时间戳
+  isTemp?: boolean;
 }
 
 interface SidebarProps {
   selectedAgent: "claude" | "pi";
   onSelectAgent: (agent: "claude" | "pi") => void;
   onOpenNewSession: (prefilledPath?: string) => void;
+  onOpenTempSession: () => void;
   sessions: Session[];
   activeSessionId: string;
   onSelectSession: (id: string) => void;
   searchQuery: string;
   onSearchQueryChange: (query: string) => void;
-  onDeleteSession: (e: React.MouseEvent, id: string) => void;
-  openTabIds: string[]; // 用于判断该终端是否“加载到了右侧”并点亮绿灯
+  onDeleteSession: (e: React.MouseEvent | null, id: string) => void;
+  openTabIds: string[]; // 用于判断该终端是否“加载到了右边”并点亮绿灯
   onRenameSession?: (id: string, newName: string) => void;
   onToggleFavorite?: (id: string, isFavorite: boolean) => void;
   highlightSessionId?: string | null;
   onHighlightEnd?: () => void;
   onDeleteSessionsBatch: (ids: string[]) => void; // 批量删除会话 callback
+  glowingSessionIds?: string[];
+  onRestoreSession: (id: string) => void;
+  onPermanentlyDeleteSession: (id: string) => void;
+  onEmptyTrash: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
   selectedAgent,
   onSelectAgent,
   onOpenNewSession,
+  onOpenTempSession,
   sessions,
   activeSessionId,
   onSelectSession,
@@ -64,9 +73,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
   highlightSessionId,
   onHighlightEnd,
   onDeleteSessionsBatch,
+  glowingSessionIds = [],
+  onRestoreSession,
+  onPermanentlyDeleteSession,
+  onEmptyTrash,
 }) => {
   // 1. 折叠项目列表的状态
   const [collapsedProjects, setCollapsedProjects] = useState<string[]>([]);
+  // 回收站与确认删除 Modal 状态
+  const [showTrashModal, setShowTrashModal] = useState<boolean>(false);
+  const [sessionToDelete, setSessionToDelete] = useState<Session | null>(null);
   // 收藏夹折叠状态
   const [favoritesCollapsed, setFavoritesCollapsed] = useState<boolean>(false);
 
@@ -208,7 +224,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   // 4. 根据项目名称动态归类会话列表
   const projectsMap: { [key: string]: { path: string; sessions: Session[] } } = {};
   
-  const filteredSessions = sessions.filter((s) => s.type === selectedAgent);
+  const filteredSessions = sessions.filter((s) => s.type === selectedAgent && s.deleted !== 1 && !s.isTemp);
 
   filteredSessions.forEach((s) => {
     const matchesSearch =
@@ -301,6 +317,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     const isLoaded = openTabIds.includes(session.id); // 是否加载到了右边
     const isEditing = editingSessionId === session.id;
     const isHighlighted = highlightSessionId === session.id;
+    const isGlowing = glowingSessionIds.includes(session.id);
 
     return (
       <li
@@ -316,10 +333,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
         }}
       >
         <div className="session-content">
-          {/* 绿灯指示器：加载到右侧点亮(亮绿)，否则熄灭(淡灰绿) */}
+          {/* 状态指示器：回答完成且非活动时展示黄色点提醒，否则：加载到右侧点亮(亮绿)，休眠状态(淡灰绿) */}
           <span 
-            className={`status-indicator-dot ${isLoaded ? "lit" : "faded"}`} 
-            title={isLoaded ? "会话处于活动状态" : "会话处于休眠状态"}
+            className={`status-indicator-dot ${isGlowing ? "glowing-yellow" : (isLoaded ? "lit" : "faded")}`} 
+            title={isGlowing ? "回答完毕" : (isLoaded ? "会话处于活动状态" : "会话处于休眠状态")}
           />
           
           {/* 橙色收藏小星星 (如果是收藏会话) */}
@@ -340,7 +357,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             />
           ) : (
             <span 
-              className="session-name-text"
+              className={`session-name-text ${isGlowing ? "glowing-text" : ""}`}
               style={{ 
                 textOverflow: "ellipsis", 
                 overflow: "hidden", 
@@ -395,13 +412,69 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </button>
         </div>
         
-        {/* 新建 AI 终端按钮 */}
-        <button
-          className="new-session-btn"
-          onClick={() => onOpenNewSession()}
-        >
-          +新建终端
-        </button>
+        {/* 新建会话按钮、机器人按钮与回收站按钮 */}
+        <div className="new-session-row" style={{ display: "flex", gap: "6px", width: "100%", marginBottom: "12px" }}>
+          <button
+            className="new-session-btn"
+            style={{ flex: 1, margin: 0 }}
+            onClick={() => onOpenNewSession()}
+          >
+            + 新建会话
+          </button>
+          <button
+            className="sidebar-action-btn bot-btn"
+            onClick={onOpenTempSession}
+            title="新建无痕临时终端"
+            style={{
+              width: "28px",
+              height: "28px",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              backgroundColor: "var(--bg-active-item)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "4px",
+              color: "var(--text-secondary)",
+              cursor: "pointer",
+              transition: "var(--transition-smooth)",
+              padding: 0,
+              boxShadow: "0 1px 3px rgba(0,0,0,0.05)"
+            }}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="11" width="18" height="10" rx="2"></rect>
+              <circle cx="12" cy="5" r="2"></circle>
+              <path d="M12 7v4M8 15h.01M16 15h.01"></path>
+            </svg>
+          </button>
+          <button
+            className="sidebar-action-btn trash-btn"
+            onClick={() => setShowTrashModal(true)}
+            title="回收站"
+            style={{
+              width: "28px",
+              height: "28px",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              backgroundColor: "var(--bg-active-item)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "4px",
+              color: "var(--text-secondary)",
+              cursor: "pointer",
+              transition: "var(--transition-smooth)",
+              padding: 0,
+              boxShadow: "0 1px 3px rgba(0,0,0,0.05)"
+            }}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="3 6 5 6 21 6"></polyline>
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+              <line x1="10" y1="11" x2="10" y2="17"></line>
+              <line x1="14" y1="11" x2="14" y2="17"></line>
+            </svg>
+          </button>
+        </div>
 
         {/* 快速搜索框 */}
         <div className="search-container">
@@ -535,18 +608,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <button 
             className="context-menu-item"
             onClick={() => {
-              startEditing(contextMenu.session);
-              setContextMenu(null);
-            }}
-          >
-            <span className="context-menu-icon" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
-              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
-            </span>
-            重命名会话
-          </button>
-          <button 
-            className="context-menu-item"
-            onClick={() => {
               if (onToggleFavorite) {
                 onToggleFavorite(contextMenu.session.id, contextMenu.session.favorite !== 1);
               }
@@ -554,9 +615,43 @@ export const Sidebar: React.FC<SidebarProps> = ({
             }}
           >
             <span className="context-menu-icon" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
-              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
             </span>
-            {contextMenu.session.favorite === 1 ? "取消收藏" : "收藏会话"}
+            {contextMenu.session.favorite === 1 ? "取消收藏" : "收藏"}
+          </button>
+          
+          <div className="context-menu-divider" style={{ height: "1px", backgroundColor: "var(--border-color)", margin: "4px 0" }}></div>
+
+          <button 
+            className="context-menu-item"
+            onClick={() => {
+              startEditing(contextMenu.session);
+              setContextMenu(null);
+            }}
+          >
+            <span className="context-menu-icon" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
+            </span>
+            重命名
+          </button>
+
+          <button 
+            className="context-menu-item"
+            style={{ color: "#ef4444" }}
+            onClick={() => {
+              setSessionToDelete(contextMenu.session);
+              setContextMenu(null);
+            }}
+          >
+            <span className="context-menu-icon" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", color: "#ef4444" }}>
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="3 6 5 6 21 6"></polyline>
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                <line x1="10" y1="11" x2="10" y2="17"></line>
+                <line x1="14" y1="11" x2="14" y2="17"></line>
+              </svg>
+            </span>
+            删除
           </button>
         </div>
       )}
@@ -592,7 +687,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             }}
           >
             <span className="context-menu-icon" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
-              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
             </span>
             {projectContextMenu.isFavorited ? "取消收藏项目" : "收藏项目"}
           </button>
@@ -604,7 +699,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             }}
           >
             <span className="context-menu-icon" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
-              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
             </span>
             在文件管理器中打开
           </button>
@@ -665,6 +760,159 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         </div>
       )}
+
+      {/* 确认删除会话弹窗 */}
+      {sessionToDelete && (
+        <div className="modal-overlay show" style={{ zIndex: 1100 }} onClick={() => setSessionToDelete(null)}>
+          <div className="modal-card" style={{ maxWidth: "380px", padding: "20px" }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: "flex", gap: "12px", alignItems: "flex-start" }}>
+              <span style={{ 
+                display: "inline-flex", 
+                alignItems: "center", 
+                justifyContent: "center", 
+                width: "24px", 
+                height: "24px", 
+                borderRadius: "50%", 
+                backgroundColor: "#fef3c7", 
+                color: "#d97706",
+                fontSize: "14px",
+                fontWeight: "bold",
+                flexShrink: 0
+              }}>
+                !
+              </span>
+              <div style={{ flex: 1 }}>
+                <h3 style={{ margin: "0 0 8px 0", fontSize: "14.5px", fontWeight: 700, color: "var(--text-primary)" }}>确认删除</h3>
+                <p style={{ margin: 0, fontSize: "12.5px", color: "var(--text-secondary)", lineHeight: "1.5" }}>
+                  确定要删除该会话吗？删除后将移入回收站。
+                </p>
+              </div>
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px", marginTop: "20px" }}>
+              <button 
+                className="modal-btn modal-btn-cancel" 
+                onClick={() => setSessionToDelete(null)}
+              >
+                取 消
+              </button>
+              <button 
+                className="modal-btn modal-btn-create" 
+                style={{ backgroundColor: "#ef4444", color: "#fff", boxShadow: "0 2px 4px rgba(239, 68, 68, 0.2)" }}
+                onClick={() => {
+                  onDeleteSession(null, sessionToDelete.id);
+                  setSessionToDelete(null);
+                }}
+              >
+                删 除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 🗑️ 回收站垃圾桶弹窗 */}
+      {showTrashModal && (() => {
+        const deletedSessions = sessions.filter((s) => s.deleted === 1 && s.type === selectedAgent);
+        return (
+          <div className="modal-overlay show" style={{ zIndex: 1100 }} onClick={() => setShowTrashModal(false)}>
+            <div className="modal-card trash-modal-card" style={{ maxWidth: "480px", width: "100%" }} onClick={(e) => e.stopPropagation()}>
+              <div className="modal-header">
+                <span className="modal-title" style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="3 6 5 6 21 6"></polyline>
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                    <line x1="10" y1="11" x2="10" y2="17"></line>
+                    <line x1="14" y1="11" x2="14" y2="17"></line>
+                  </svg>
+                  垃圾桶
+                  <span className="trash-count-badge">
+                    {deletedSessions.length} 项
+                  </span>
+                </span>
+                <button className="modal-close" onClick={() => setShowTrashModal(false)}>×</button>
+              </div>
+
+              <div className="trash-session-list">
+                {deletedSessions.length === 0 ? (
+                  <div className="trash-empty-placeholder">
+                    垃圾桶空空如也
+                  </div>
+                ) : (
+                  deletedSessions.map((s) => (
+                    <div key={s.id} className="trash-session-item">
+                      <div className="trash-item-info">
+                        <div className="trash-item-name" title={s.name}>
+                          {s.name}
+                        </div>
+                        <div className="trash-item-meta">
+                          <span className="trash-item-project">
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                            </svg>
+                            {s.project}
+                          </span>
+                          <span className="trash-item-expiry">
+                            7天后删除
+                          </span>
+                        </div>
+                      </div>
+                      <div className="trash-item-actions">
+                        <button
+                          title="恢复会话"
+                          onClick={() => onRestoreSession(s.id)}
+                          className="trash-action-btn recover"
+                        >
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path>
+                          </svg>
+                        </button>
+                        <button
+                          title="彻底删除"
+                          onClick={() => {
+                            if (confirm("确定要永久删除该会话吗？此操作不可逆。")) {
+                              onPermanentlyDeleteSession(s.id);
+                            }
+                          }}
+                          className="trash-action-btn hard-delete"
+                        >
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="3 6 5 6 21 6"></polyline>
+                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                            <line x1="10" y1="11" x2="10" y2="17"></line>
+                            <line x1="14" y1="11" x2="14" y2="17"></line>
+                          </svg>
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <div className="modal-footer trash-modal-footer">
+                <span className="trash-expiry-tip">
+                  超过 7 天自动永久删除
+                </span>
+                {deletedSessions.length > 0 && (
+                  <button 
+                    className="trash-empty-btn"
+                    onClick={() => {
+                      if (confirm("确定要清空垃圾桶中的所有已删除会话吗？此操作不可逆。")) {
+                        onEmptyTrash();
+                      }
+                    }}
+                  >
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="3 6 5 6 21 6"></polyline>
+                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                    </svg>
+                    清空垃圾桶
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </aside>
   );
 };
