@@ -367,7 +367,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 textOverflow: "ellipsis", 
                 overflow: "hidden", 
                 whiteSpace: "nowrap",
-                fontSize: "12.5px"
+                fontSize: "12.5px",
+                flex: 1,
+                minWidth: 0
               }}
             >
               {session.name}

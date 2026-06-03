@@ -2483,7 +2483,7 @@ input:checked + .switch-slider:before {
 }
 .sidebar-resizer:hover::after,
 .sidebar-resizer.dragging::after {
-  background-color: var(--color-orange);
+  background-color: var(--color-primary);
   width: 2px;
   left: 1px;
 }
@@ -2583,6 +2583,4 @@ input:checked + .switch-slider:before {
     box-shadow: 0 0 0 6px rgba(249, 115, 22, 0);
   }
 }
-
-
 

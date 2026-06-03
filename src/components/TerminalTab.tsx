@@ -17,6 +17,7 @@ interface TerminalTabProps {
   busy?: boolean;
   isActive?: boolean;
   onCommandComplete?: () => void;
+  onRenameSession?: (sessionId: string, newName: string) => void;
 }
 
 const getTerminalThemeColors = (themeName: string) => {
@@ -68,6 +69,7 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
   busy,
   isActive,
   onCommandComplete,
+  onRenameSession,
 }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<Terminal | null>(null);
@@ -83,6 +85,7 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
   const commandStartTimeRef = useRef<number>(0);
   const lastOutputTimeRef = useRef<number>(0);
   const debounceTimeoutRef = useRef<any>(null);
+
 
   // 1. 用于还原粘贴内容的缓存 Ref
   const pastedTextsRef = useRef<Record<number, string>>({});
@@ -166,6 +169,7 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
   }, [busy, sessionId]);
 
   useEffect(() => {
+    let resizeTimeout: any = null;
 
     log(`useEffect triggered: directory=${directory}, agentType=${agentType}, isReopen=${isReopen}`);
     if (!terminalRef.current) {
@@ -193,9 +197,9 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(terminalRef.current);
-
     // 绑定自定义键盘按键处理器：支持 Ctrl+C 进行快捷复制且禁用退出命令，支持 Ctrl+V 完美粘贴且阻断重复
     term.attachCustomKeyEventHandler((arg) => {
+
       if (arg.ctrlKey && arg.code === "KeyC") {
         if (arg.type === "keydown") {
           if (term.hasSelection()) {
@@ -421,6 +425,50 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
         if (!localStorage.getItem(`kkcoder_session_has_dialogue_${sessionId}`)) {
           localStorage.setItem(`kkcoder_session_has_dialogue_${sessionId}`, "true");
           log(`Session ${sessionId} has dialogue now due to user Enter key.`);
+
+          // 提取第一句提问作为会话的新名称
+          try {
+            const buffer = term.buffer.active;
+            let rawText = "";
+
+            // 1. 尝试读当前光标所在行
+            const currentLine = buffer.getLine(buffer.baseY + buffer.cursorY);
+            if (currentLine) {
+              rawText = currentLine.translateToString(true);
+            }
+
+            // 2. 防御判定：如果当前行太短或只包含提示符，可能是光标已先行移动，我们回退读取上一行
+            const trimmedRaw = rawText.trim();
+            const isJustPrompt = trimmedRaw === ">" || trimmedRaw === "$" || trimmedRaw === "#" || trimmedRaw === "⇠" || !trimmedRaw;
+            if (isJustPrompt && buffer.cursorY > 0) {
+              const prevLine = buffer.getLine(buffer.baseY + buffer.cursorY - 1);
+              if (prevLine) {
+                rawText = prevLine.translateToString(true);
+              }
+            }
+
+            log(`User input first raw line before processing: "${rawText}"`);
+
+            // 3. 过滤掉提示符（比如 "> ", "$ ", "# ", "AI_CODE> "）
+            let cleanName = rawText;
+            const lastPromptIdx = Math.max(
+              rawText.lastIndexOf(">"),
+              rawText.lastIndexOf("$"),
+              rawText.lastIndexOf("#"),
+              rawText.lastIndexOf("⇠")
+            );
+            if (lastPromptIdx !== -1) {
+              cleanName = rawText.substring(lastPromptIdx + 1);
+            }
+
+            const finalName = cleanName.trim();
+            if (finalName && onRenameSession) {
+              log(`Auto-renaming session ${sessionId} to: "${finalName}"`);
+              onRenameSession(sessionId, finalName);
+            }
+          } catch (e) {
+            log(`Failed to auto-rename first session phrase: ${e}`);
+          }
         }
 
         isAnsweringRef.current = true;
@@ -477,24 +525,34 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
 
     // 6. 使用 ResizeObserver 监听容器尺寸的物理变化，比 window.resize 更加灵敏和靠谱
     const handleResize = () => {
-      try {
-        if (!isActive) {
-          // 如果该 Tab 当前处于非激活状态 (display: none)，则直接跳过 fit，防范缩成 0 行的 bug
-          return;
-        }
-        fitAddon.fit();
-        term.scrollToBottom(); // 确保容器尺寸改变时，视口强制滚动到最下方，绝不遮挡输入框
-        const dims = fitAddon.proposeDimensions();
-        if (dims) {
-          invoke("resize_terminal", {
-            sessionId,
-            cols: dims.cols,
-            rows: dims.rows,
-          }).catch((err) => log(`Terminal resize sync error: ${err}`));
-        }
-      } catch (e) {
-        // 捕获未挂载时测量的尺寸异常
+      if (resizeTimeout) {
+        clearTimeout(resizeTimeout);
       }
+      resizeTimeout = setTimeout(() => {
+        try {
+          if (!isActive) {
+            // 如果该 Tab 当前处于非激活状态 (display: none)，则直接跳过 fit，防范缩成 0 行的 bug
+            return;
+          }
+          fitAddon.fit();
+          term.scrollToBottom(); // 确保容器尺寸改变时，视口强制滚动到最下方，绝不遮挡输入框
+          const dims = fitAddon.proposeDimensions();
+          if (dims) {
+            // 防御：cols 和 rows 必须大于合理值，防范容器大小过渡期瞬时极小而导致的 PTY 强制折行与严重乱码错位
+            if (dims.cols < 20 || dims.rows < 5) {
+              log(`Ignore micro resize dims: cols=${dims.cols}, rows=${dims.rows}`);
+              return;
+            }
+            invoke("resize_terminal", {
+              sessionId,
+              cols: dims.cols,
+              rows: dims.rows,
+            }).catch((err) => log(`Terminal resize sync error: ${err}`));
+          }
+        } catch (e) {
+          // 捕获未挂载时测量的尺寸异常
+        }
+      }, 120); // 120ms 防抖，过滤高频 resize 触发，让侧边栏拖拽顺畅无比且终端完全不闪烁
     };
 
     const resizeObserver = new ResizeObserver((entries) => {
@@ -605,6 +663,9 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
 
     return () => {
       log("TerminalTab unmounting. Cleaning up...");
+      if (resizeTimeout) {
+        clearTimeout(resizeTimeout);
+      }
       if (debounceTimeoutRef.current) {
         clearTimeout(debounceTimeoutRef.current);
       }

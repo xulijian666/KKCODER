@@ -750,6 +750,43 @@ fn write_markdown_file(path: String, filename: String, content: String) -> Resul
         .map_err(|e| format!("Failed to write file: {}", e))
 }
 
+#[tauri::command]
+fn get_claude_version() -> Result<String, String> {
+    use std::process::Command;
+    
+    let run_cmd = || -> Result<String, std::io::Error> {
+        #[cfg(target_os = "windows")]
+        let output = Command::new("cmd").args(&["/C", "claude --version"]).output()?;
+        #[cfg(not(target_os = "windows"))]
+        let output = Command::new("sh").args(&["-c", "claude --version"]).output()?;
+        
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            Ok(stdout)
+        } else {
+            Err(std::io::Error::new(std::io::ErrorKind::Other, "Command status non-zero"))
+        }
+    };
+
+    match run_cmd() {
+        Ok(stdout) => {
+            if let Some(pos) = stdout.find(' ') {
+                let version_num = &stdout[..pos];
+                if stdout.contains("Claude Code") {
+                    return Ok(format!("Claude Code {}", version_num));
+                }
+            }
+            if !stdout.is_empty() {
+                return Ok(format!("Claude Code {}", stdout));
+            }
+            Ok("Claude Code".to_string())
+        }
+        Err(_) => {
+            Ok("Claude Code".to_string())
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 启动时初始化数据库表
@@ -832,7 +869,8 @@ pub fn run() {
             play_notification_sound,
             save_clipboard_image,
             read_markdown_file,
-            write_markdown_file
+            write_markdown_file,
+            get_claude_version
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

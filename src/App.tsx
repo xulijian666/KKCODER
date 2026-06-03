@@ -101,6 +101,7 @@ function App() {
     return localStorage.getItem("kkcoder_setting_theme") || "light-premium";
   });
   const [isInitLoaded, setIsInitLoaded] = useState<boolean>(false);
+  const [claudeVersion, setClaudeVersion] = useState<string>("Claude Code");
 
   // 侧边栏拖拽调宽状态与拖拽处理
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
@@ -400,7 +401,16 @@ function App() {
       }
     } catch (e) {}
 
-    log("App mounted. Fetching sessions from SQLite database...");
+    log("App mounted. Fetching sessions from SQLite database and Claude version...");
+    invoke<string>("get_claude_version")
+      .then((ver) => {
+        log(`Fetched Claude version: ${ver}`);
+        setClaudeVersion(ver);
+      })
+      .catch((err) => {
+        log(`Failed to fetch Claude version: ${err}`);
+      });
+
     invoke<Session[]>("get_sessions")
       .then((data) => {
         log(`Successfully fetched ${data ? data.length : 0} sessions from database.`);
@@ -608,6 +618,7 @@ function App() {
     window.addEventListener("click", closeThemeMenu);
     return () => window.removeEventListener("click", closeThemeMenu);
   }, []);
+
 
   // 监听主题发生变动的全局广播事件
   useEffect(() => {
@@ -1220,6 +1231,7 @@ function App() {
                       }}
                       isActive={isActive}
                       onCommandComplete={() => handleCommandComplete(s.id)}
+                      onRenameSession={handleRenameSession}
                     />
                     {sessionBusy[s.id] && (
                       <div className="terminal-thinking-badge">
@@ -1363,10 +1375,10 @@ function App() {
                     color: activeSession.type === "claude" ? "var(--color-orange)" : "var(--color-green)",
                   }}
                 >
-                  KKCoder
+                  {activeSession.type === "claude" ? claudeVersion : "Pi 终端"}
                 </span>
               ) : (
-                <span>KKCoder 客户端就绪</span>
+                <span>{claudeVersion} 准备就绪</span>
               )}
             </div>
           </div>

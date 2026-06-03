@@ -111,7 +111,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
     // 从项目路径中自动截取项目名称
     const parts = projectPath.split(/[\\/]/);
     const projectName = parts[parts.length - 1] || "新项目";
-    const finalSessionTitle = sessionTitle.trim() || `AI会话_${Date.now().toString().slice(-4)}`;
+    const finalSessionTitle = sessionTitle.trim() || "新会话";
 
     try {
       const dirStatus = await invoke<string>("check_directory", { path: projectPath });
