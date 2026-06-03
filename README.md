@@ -1,8 +1,11 @@
 # KKCoder (极简 AI 终端管理器)
 
-<p align="center">
-  <img src="./src/assets/logo.png" alt="KKCoder Logo" width="128" height="128" onerror="this.src='https://raw.githubusercontent.com/xulijian666/KKCODER/main/src/assets/logo.png'; this.onerror=null;"/>
-</p>
+```text
+█  █ █  █ ▄▄▄▄          █
+██▀  ██▀  █    ▄▄▄▄ ▄▄▄█ ▄▄▄▄ ▄▄▄▄
+█ ▀▄ █ ▀▄ █    █  █ █  █ █▀▀  █▀▀
+█  █ █  █ ▀▄▄▄ ▀▄▄▀ ▀▄▄▀ ▀▄▄▄ █
+```
 
 <p align="center">
   <strong>基于 Tauri v2 + React + TypeScript 打造的高端、极简 AI 终端管理器</strong>

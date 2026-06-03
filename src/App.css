@@ -390,7 +390,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 4px 12px 4px 28px !important; /* 缩进会话，保持全贴边 */
+  padding: 4px 12px 4px 22px !important; /* 缩进会话，保持全贴边且容纳指示灯阴影 */
   border-radius: 0;
   cursor: pointer;
   font-size: 12.5px;
@@ -425,7 +425,7 @@ body {
 
 /* 标签页内重命名输入框 */
 .tab-rename-input {
-  background-color: #ffffff;
+  background-color: var(--bg-main);
   border: 1px solid var(--color-orange);
   border-radius: 4px;
   padding: 1px 6px;
@@ -454,6 +454,7 @@ body {
   border-radius: 50%;
   display: inline-block;
   flex-shrink: 0;
+  margin-left: 6px; /* 留出空隙，防止阴影由于 overflow: hidden 被截断 */
   transition: var(--transition-smooth);
 }
 
@@ -514,7 +515,7 @@ body {
 
 /* 侧边栏双击重命名行内输入框 */
 .session-rename-input {
-  background-color: #ffffff;
+  background-color: var(--bg-main);
   border: 1px solid var(--color-orange); /* 橙色高亮外框 */
   border-radius: 4px;
   padding: 2px 6px;
@@ -2455,5 +2456,133 @@ input:checked + .switch-slider:before {
 .trash-empty-btn:active {
   transform: scale(0.97);
 }
+
+/* ==================== 侧边栏拖拽、忙碌状态及思考中悬浮徽章新规 ==================== */
+
+/* 侧边栏拖拽条 */
+.sidebar-resizer {
+  width: 4px;
+  cursor: col-resize;
+  background-color: transparent;
+  position: relative;
+  z-index: 100;
+  flex-shrink: 0;
+  margin-left: -2px;
+  margin-right: -2px;
+  transition: background-color 0.15s ease;
+}
+.sidebar-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 1.5px;
+  width: 1px;
+  background-color: var(--border-color);
+  transition: background-color 0.15s ease;
+}
+.sidebar-resizer:hover::after,
+.sidebar-resizer.dragging::after {
+  background-color: var(--color-orange);
+  width: 2px;
+  left: 1px;
+}
+
+/* 终端内的思考中悬浮气泡 */
+.terminal-thinking-badge {
+  position: absolute;
+  top: 12px;
+  right: 20px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 20px;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border-color);
+  backdrop-filter: blur(10px);
+  box-shadow: var(--shadow-md);
+  pointer-events: none;
+  animation: fadeIn 0.25s ease-out;
+}
+
+.thinking-dot-pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--color-orange);
+  position: relative;
+}
+
+.thinking-dot-pulse::after {
+  content: "";
+  position: absolute;
+  top: -4px;
+  left: -4px;
+  right: -4px;
+  bottom: -4px;
+  border-radius: 50%;
+  border: 2px solid var(--color-orange);
+  opacity: 0;
+  animation: pulse-ring 1.5s cubic-bezier(0.215, 0.610, 0.355, 1) infinite;
+}
+
+.thinking-text {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-primary);
+  letter-spacing: 0.5px;
+}
+
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.33);
+    opacity: 0.8;
+  }
+  80%, 100% {
+    transform: scale(1.3);
+    opacity: 0;
+  }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* 顶部 Tab 标签内的加载微动画 */
+.tab-loading-spinner {
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid rgba(249, 115, 22, 0.2);
+  border-top-color: var(--color-orange);
+  border-radius: 50%;
+  animation: tab-spin 0.8s linear infinite;
+  display: inline-block;
+}
+
+@keyframes tab-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* 侧边栏呼吸脉冲状态点 */
+.status-indicator-dot.busy-pulse {
+  background-color: var(--color-orange) !important;
+  animation: status-dot-busy-pulse-anim 1.2s infinite ease-in-out;
+  box-shadow: 0 0 6px 1.5px rgba(249, 115, 22, 0.6);
+}
+
+@keyframes status-dot-busy-pulse-anim {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0px rgba(249, 115, 22, 0.7);
+  }
+  50% {
+    transform: scale(1.2);
+    box-shadow: 0 0 0 6px rgba(249, 115, 22, 0);
+  }
+}
+
 
 

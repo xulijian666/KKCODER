@@ -54,6 +54,8 @@ interface SidebarProps {
   onRestoreSession: (id: string) => void;
   onPermanentlyDeleteSession: (id: string) => void;
   onEmptyTrash: () => void;
+  width?: number;
+  sessionBusy?: Record<string, boolean>;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -77,6 +79,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onRestoreSession,
   onPermanentlyDeleteSession,
   onEmptyTrash,
+  width,
+  sessionBusy,
 }) => {
   // 1. 折叠项目列表的状态
   const [collapsedProjects, setCollapsedProjects] = useState<string[]>([]);
@@ -318,6 +322,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     const isEditing = editingSessionId === session.id;
     const isHighlighted = highlightSessionId === session.id;
     const isGlowing = glowingSessionIds.includes(session.id);
+    const isBusy = sessionBusy && sessionBusy[session.id];
 
     return (
       <li
@@ -335,8 +340,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div className="session-content">
           {/* 状态指示器：回答完成且非活动时展示黄色点提醒，否则：加载到右侧点亮(亮绿)，休眠状态(淡灰绿) */}
           <span 
-            className={`status-indicator-dot ${isGlowing ? "glowing-yellow" : (isLoaded ? "lit" : "faded")}`} 
-            title={isGlowing ? "回答完毕" : (isLoaded ? "会话处于活动状态" : "会话处于休眠状态")}
+            className={`status-indicator-dot ${isBusy ? "busy-pulse" : (isGlowing ? "glowing-yellow" : (isLoaded ? "lit" : "faded"))}`} 
+            title={isBusy ? "正在思考..." : (isGlowing ? "回答完毕" : (isLoaded ? "会话处于活动状态" : "会话处于休眠状态"))}
           />
           
           {/* 橙色收藏小星星 (如果是收藏会话) */}
@@ -390,7 +395,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   return (
-    <aside className="sidebar-aside">
+    <aside className="sidebar-aside" style={width !== undefined ? { width: `${width}px` } : undefined}>
       {/* 新建 AI 会话头部区域 */}
       <div className="sidebar-header">
         {/* Agent 选卡切换 */}
@@ -614,9 +619,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
               setContextMenu(null);
             }}
           >
-            <span className="context-menu-icon" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
-              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
-            </span>
             {contextMenu.session.favorite === 1 ? "取消收藏" : "收藏"}
           </button>
           
@@ -629,9 +631,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
               setContextMenu(null);
             }}
           >
-            <span className="context-menu-icon" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
-              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
-            </span>
             重命名
           </button>
 
@@ -643,14 +642,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
               setContextMenu(null);
             }}
           >
-            <span className="context-menu-icon" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", color: "#ef4444" }}>
-              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="3 6 5 6 21 6"></polyline>
-                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                <line x1="10" y1="11" x2="10" y2="17"></line>
-                <line x1="14" y1="11" x2="14" y2="17"></line>
-              </svg>
-            </span>
             删除
           </button>
         </div>
@@ -673,9 +664,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
               setProjectContextMenu(null);
             }}
           >
-            <span className="context-menu-icon" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
-              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-            </span>
             新建会话
           </button>
           <div style={{ borderBottom: "1px dashed var(--border-color)", margin: "4px 6px" }} />
@@ -686,9 +674,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
               setProjectContextMenu(null);
             }}
           >
-            <span className="context-menu-icon" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
-              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
-            </span>
             {projectContextMenu.isFavorited ? "取消收藏项目" : "收藏项目"}
           </button>
           <button 
@@ -698,9 +683,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
               setProjectContextMenu(null);
             }}
           >
-            <span className="context-menu-icon" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
-              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
-            </span>
             在文件管理器中打开
           </button>
           <div style={{ borderBottom: "1px dashed var(--border-color)", margin: "4px 6px" }} />
@@ -719,7 +701,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
               setProjectContextMenu(null);
             }}
           >
-            <span className="context-menu-icon">🗑️</span>
             移除整个目录
           </button>
         </div>

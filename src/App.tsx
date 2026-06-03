@@ -102,6 +102,51 @@ function App() {
   });
   const [isInitLoaded, setIsInitLoaded] = useState<boolean>(false);
 
+  // 侧边栏拖拽调宽状态与拖拽处理
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    const saved = localStorage.getItem("kkcoder_sidebar_width");
+    return saved ? parseInt(saved, 10) : 300;
+  });
+  const [isResizing, setIsResizing] = useState<boolean>(false);
+
+  const startResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+  };
+
+  useEffect(() => {
+    if (!isResizing) return;
+
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const newWidth = Math.max(200, Math.min(450, e.clientX));
+      setSidebarWidth(newWidth);
+      localStorage.setItem("kkcoder_sidebar_width", newWidth.toString());
+      window.dispatchEvent(new Event("resize"));
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+      setTimeout(() => {
+        window.dispatchEvent(new Event("resize"));
+      }, 50);
+    };
+
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+
+    return () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+    };
+  }, [isResizing]);
+
   // 快捷短语状态
   const [shortcutsEnabled, setShortcutsEnabled] = useState<boolean>(() => {
     const val = localStorage.getItem("kkcoder_shortcuts_enabled");
@@ -766,6 +811,7 @@ function App() {
     try {
       await invoke("delete_session_permanently", { id });
       setSessions((prev) => prev.filter((s) => s.id !== id));
+      localStorage.removeItem(`kkcoder_session_has_dialogue_${id}`);
     } catch (err) {
       alert(`彻底删除会话失败: ${err}`);
     }
@@ -774,6 +820,11 @@ function App() {
   // 🗑️ 清空回收站
   const handleEmptyTrash = async () => {
     try {
+      sessions.forEach((s) => {
+        if (s.deleted === 1) {
+          localStorage.removeItem(`kkcoder_session_has_dialogue_${s.id}`);
+        }
+      });
       await invoke("empty_trash");
       setSessions((prev) => prev.filter((s) => s.deleted !== 1));
     } catch (err) {
@@ -786,6 +837,7 @@ function App() {
     log(`handleDeleteSessionsBatch triggered: ids=[${ids.join(", ")}]`);
     try {
       await Promise.all(ids.map((id) => invoke("delete_session", { id })));
+      ids.forEach((id) => localStorage.removeItem(`kkcoder_session_has_dialogue_${id}`));
       setSessions((prev) => prev.filter((s) => !ids.includes(s.id)));
       setOpenTabIds((prev) => prev.filter((tid) => !ids.includes(tid)));
       if (ids.includes(activeSessionId)) {
@@ -1043,7 +1095,10 @@ function App() {
           onRestoreSession={handleRestoreSession}
           onPermanentlyDeleteSession={handlePermanentlyDeleteSession}
           onEmptyTrash={handleEmptyTrash}
+          width={sidebarWidth}
+          sessionBusy={sessionBusy}
         />
+        <div className={`sidebar-resizer ${isResizing ? "dragging" : ""}`} onMouseDown={startResize} />
 
         {/* 右侧主工作区 */}
         <main className="main-workspace">
@@ -1100,7 +1155,11 @@ function App() {
                       />
                     ) : (
                       <span style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
-                        {s.type === "claude" ? <ClaudeIcon size={14} color="#D97757" /> : <PiIcon size={14} color="var(--color-green)" />}
+                        {sessionBusy[s.id] ? (
+                          <span className="tab-loading-spinner" title="思考中..." />
+                        ) : (
+                          s.type === "claude" ? <ClaudeIcon size={14} color="#D97757" /> : <PiIcon size={14} color="var(--color-green)" />
+                        )}
                         <span className="tab-title-text">{s.isTemp ? s.name : `${s.name} (${s.project})`}</span>
                       </span>
                     )}
@@ -1141,6 +1200,7 @@ function App() {
                       flex: 1,
                       width: "100%",
                       height: "100%",
+                      position: "relative",
                     }}
                   >
                     <TerminalTab
@@ -1148,7 +1208,7 @@ function App() {
                       directory={s.path}
                       agentType={s.type}
                       agentSessionId={s.agentSessionId}
-                      isReopen={!newSessionIds.includes(s.id)}
+                      isReopen={!newSessionIds.includes(s.id) && localStorage.getItem("kkcoder_session_has_dialogue_" + s.id) === "true"}
                       onSpawned={() => {
                         log(`TerminalTab spawn resolved for session: ${s.id}. Removing from newSessionIds...`);
                         setNewSessionIds((prev) => prev.filter((nid) => nid !== s.id));
@@ -1161,6 +1221,12 @@ function App() {
                       isActive={isActive}
                       onCommandComplete={() => handleCommandComplete(s.id)}
                     />
+                    {sessionBusy[s.id] && (
+                      <div className="terminal-thinking-badge">
+                        <span className="thinking-dot-pulse"></span>
+                        <span className="thinking-text">AI 正在思考...</span>
+                      </div>
+                    )}
                   </div>
                 );
               })

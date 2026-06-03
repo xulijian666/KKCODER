@@ -84,6 +84,63 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
   const lastOutputTimeRef = useRef<number>(0);
   const debounceTimeoutRef = useRef<any>(null);
 
+  // 1. 用于还原粘贴内容的缓存 Ref
+  const pastedTextsRef = useRef<Record<number, string>>({});
+  const pasteCounterRef = useRef<number>(0);
+
+  const registerPastedText = (text: string) => {
+    if (text && (text.includes("\n") || text.includes("\r"))) {
+      pasteCounterRef.current += 1;
+      pastedTextsRef.current[pasteCounterRef.current] = text;
+      log(`Registered folded paste #${pasteCounterRef.current} (len=${text.length})`);
+    }
+  };
+
+  const processSelectionTextBeforeCopy = (text: string): string => {
+    if (!text) return text;
+    return text.replace(/\[Pasted text #(\d+)[^\]]*\]/g, (match, idStr) => {
+      const id = parseInt(idStr, 10);
+      const originalText = pastedTextsRef.current[id];
+      if (originalText !== undefined) {
+        log(`Replacing placeholder [Pasted text #${id}...] with original text (len=${originalText.length})`);
+        return originalText;
+      }
+      return match;
+    });
+  };
+
+  // 2. 智能检测终端 buffer 末尾是否包含提示符
+  const checkPromptAtEnd = (): boolean => {
+    try {
+      const term = xtermRef.current;
+      if (!term) return false;
+      const buffer = term.buffer.active;
+      let lastLinesText = "";
+      const startLine = Math.max(0, buffer.length - 4);
+      for (let i = buffer.length - 1; i >= startLine; i--) {
+        const line = buffer.getLine(i);
+        if (line) {
+          lastLinesText = line.translateToString() + "\n" + lastLinesText;
+        }
+      }
+      const trimmed = lastLinesText.trim();
+      
+      const isPrompt = 
+        />\s*$/.test(trimmed) ||
+        /\$\s*$/.test(trimmed) ||
+        /#\s*$/.test(trimmed) ||
+        /\?\s*$/.test(trimmed) ||
+        /bypass\s+permissions/i.test(trimmed) ||
+        /shift\+tab\s+to\s+cycle/i.test(trimmed) ||
+        /⇠\s+for\s+agents/i.test(trimmed);
+        
+      return isPrompt;
+    } catch (e) {
+      log(`Error checking prompt at end of buffer: ${e}`);
+    }
+    return false;
+  };
+
   const log = (msg: string) => {
     const time = new Date().toISOString();
     const fullMsg = `[JS][TerminalTab][${sessionId}][${time}] ${msg}`;
@@ -143,7 +200,8 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
         if (arg.type === "keydown") {
           if (term.hasSelection()) {
             const selectedText = term.getSelection();
-            navigator.clipboard.writeText(selectedText).catch((err) => {
+            const processedText = processSelectionTextBeforeCopy(selectedText);
+            navigator.clipboard.writeText(processedText).catch((err) => {
               log(`Failed to copy selected text via Ctrl+C: ${err}`);
             });
           }
@@ -195,6 +253,7 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
               navigator.clipboard.readText().then((text) => {
                 if (text) {
                   log(`Pasting clipboard text (len=${text.length}).`);
+                  registerPastedText(text);
                   if (agentType === "pi") {
                     const processedText = text.replace(/\r?\n/g, " ");
                     term.paste(processedText);
@@ -211,6 +270,7 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
             // Fallback immediately to readText if read() is not supported or failed
             navigator.clipboard.readText().then((text) => {
               if (text) {
+                registerPastedText(text);
                 if (agentType === "pi") {
                   const processedText = text.replace(/\r?\n/g, " ");
                   term.paste(processedText);
@@ -232,7 +292,8 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
     term.onSelectionChange(() => {
       if (term.hasSelection()) {
         const selectedText = term.getSelection();
-        navigator.clipboard.writeText(selectedText).catch((err) => {
+        const processedText = processSelectionTextBeforeCopy(selectedText);
+        navigator.clipboard.writeText(processedText).catch((err) => {
           log(`Failed to copy selection on select: ${err}`);
         });
       }
@@ -273,10 +334,14 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
                 if (debounceTimeoutRef.current) {
                   clearTimeout(debounceTimeoutRef.current);
                 }
+
+                // 智能检测是否到了命令行/权限提示符：若是则延迟 800ms，否则在代码生成或大段思考中间，延迟 3500ms
+                const isPrompt = checkPromptAtEnd();
+                const delay = isPrompt ? 800 : 3500;
+
                 debounceTimeoutRef.current = setTimeout(() => {
-                  // 600ms 内无新 PTY 输出，判定命令/回答执行完全结束
                   const elapsed = (Date.now() - commandStartTimeRef.current) / 1000;
-                  log(`检测到 PTY 静默，执行结束。本次持续耗时: ${elapsed.toFixed(2)} 秒`);
+                  log(`检测到 PTY 静默，延迟 ${delay}ms 后执行结束判定。本次持续耗时: ${elapsed.toFixed(2)} 秒`);
 
                   const notifyEnabled = localStorage.getItem("kkcoder_setting_notify_on_complete") !== "false";
                   const notifyThresholdStr = localStorage.getItem("kkcoder_setting_notify_threshold");
@@ -309,7 +374,7 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
                   if (onCommandCompleteRef.current) {
                     onCommandCompleteRef.current();
                   }
-                }, 600);
+                }, delay);
               }
 
               // 首次创建的 Pi 终端：自动捕获 /session 指令返回的实际 session ID 并回传保存
@@ -352,6 +417,12 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
     const onDataDisposable = term.onData((data) => {
       // 当输入流中含有回车键或换行符时，标志着用户发送了命令，启动回答计时器
       if (data.includes("\r") || data.includes("\n")) {
+        // 标记用户输入产生了对话 (只有按下回车发出第一个命令时才算，避免自动控制序列触发)
+        if (!localStorage.getItem(`kkcoder_session_has_dialogue_${sessionId}`)) {
+          localStorage.setItem(`kkcoder_session_has_dialogue_${sessionId}`, "true");
+          log(`Session ${sessionId} has dialogue now due to user Enter key.`);
+        }
+
         isAnsweringRef.current = true;
         commandStartTimeRef.current = Date.now();
         lastOutputTimeRef.current = Date.now();
@@ -380,8 +451,9 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
         if (onSpawned) {
           onSpawned();
         }
-        // PTY 成功拉起后，触发一次初始的尺寸同步
+        // PTY 成功拉起后，强制执行 fit，随后再 proposeDimensions 尺寸同步给 PTY
         try {
+          fitAddon.fit();
           const dims = fitAddon.proposeDimensions();
           if (dims) {
             log(`Proposing terminal dimensions: cols=${dims.cols}, rows=${dims.rows}`);
@@ -445,7 +517,8 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
         
         if (term.hasSelection()) {
           const selectedText = term.getSelection();
-          navigator.clipboard.writeText(selectedText)
+          const processedText = processSelectionTextBeforeCopy(selectedText);
+          navigator.clipboard.writeText(processedText)
             .then(() => {
               log("Copied selection quietly on right-click.");
             })
@@ -475,11 +548,9 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
 
     if (terminalElement) {
       terminalElement.addEventListener("paste", handlePaste, true);
-      if (agentType === "pi") {
-        terminalElement.addEventListener("scroll", handleScrollCapture, true);
-        if (parentElement) {
-          parentElement.addEventListener("scroll", handleScrollCapture, true);
-        }
+      terminalElement.addEventListener("scroll", handleScrollCapture, true);
+      if (parentElement) {
+        parentElement.addEventListener("scroll", handleScrollCapture, true);
       }
     }
 
@@ -540,11 +611,9 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
       document.removeEventListener("contextmenu", handleRawContextMenu, true);
       if (terminalElement) {
         terminalElement.removeEventListener("paste", handlePaste, true);
-        if (agentType === "pi") {
-          terminalElement.removeEventListener("scroll", handleScrollCapture, true);
-        }
+        terminalElement.removeEventListener("scroll", handleScrollCapture, true);
       }
-      if (parentElement && agentType === "pi") {
+      if (parentElement) {
         parentElement.removeEventListener("scroll", handleScrollCapture, true);
       }
       resizeObserver.disconnect();
@@ -567,6 +636,13 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
   useEffect(() => {
     if (isActive && xtermRef.current) {
       log(`Auto-focusing and fitting terminal instance for active session: ${sessionId}`);
+      // 立即执行一次 fit，防止在布局显示时出现短暂空白或闪烁
+      try {
+        if (fitAddonRef.current && xtermRef.current) {
+          fitAddonRef.current.fit();
+        }
+      } catch (e) {}
+
       // 延迟 80ms 等 DOM 完全刷新 (display: flex 生效) 后平滑捕获系统焦点并重新测绘画布
       const timer = setTimeout(() => {
         try {
