@@ -4,6 +4,10 @@ import { FitAddon } from "xterm-addon-fit";
 import "xterm/css/xterm.css";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import {
+  captureUserInputData,
+  deriveSessionTitleFromInput,
+} from "../utils/sessionTitle";
 
 interface TerminalTabProps {
   sessionId: string;
@@ -89,6 +93,7 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
 
   // 0. 用于自动命名的用户输入累积 buffer
   const userInputBufferRef = useRef<string>("");
+  const autoTitleDoneStorageKey = `kkcoder_session_auto_title_done_${sessionId}`;
 
   // 1. 用于还原粘贴内容的缓存 Ref
   const pastedTextsRef = useRef<Record<number, string>>({});
@@ -422,46 +427,27 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
     // 3. 监听前端的键盘按键并将 keystroke 发送到 Rust PTY
     log("Binding term.onData to write_to_terminal...");
     const onDataDisposable = term.onData((data) => {
-      // 累积用户的实际输入到 buffer（排除控制序列，只保留可打印字符）
-      if (!data.includes("\r") && !data.includes("\n")) {
-        // 退格键：删除 buffer 中最后一个字符
-        if (data === "\x7f" || data === "\b") {
-          userInputBufferRef.current = userInputBufferRef.current.slice(0, -1);
-        } else if (data.length === 1 && data.charCodeAt(0) >= 32) {
-          // 可打印字符：追加到 buffer
-          userInputBufferRef.current += data;
-        }
-        // 其他控制序列（如方向键、Escape等）不记录
-      }
+      // 累积用户的实际输入到 buffer：兼容中文 IME、粘贴、多字符批量提交，并过滤控制序列。
+      const capturedInput = captureUserInputData(userInputBufferRef.current, data);
+      userInputBufferRef.current = capturedInput.buffer;
 
       // 当输入流中含有回车键或换行符时，标志着用户发送了命令，启动回答计时器
-      if (data.includes("\r") || data.includes("\n")) {
-        // 标记用户输入产生了对话 (只有按下回车发出第一个命令时才算，避免自动控制序列触发)
-        if (!localStorage.getItem(`kkcoder_session_has_dialogue_${sessionId}`)) {
-          localStorage.setItem(`kkcoder_session_has_dialogue_${sessionId}`, "true");
-          log(`Session ${sessionId} has dialogue now due to user Enter key.`);
-
+      if (capturedInput.submitted) {
+        // 只在新建终端里用第一条真实用户输入自动命名，避免恢复会话时误吃终端状态文本。
+        if (!isReopen && !localStorage.getItem(autoTitleDoneStorageKey)) {
           // 从累积的用户输入 buffer 中提取第一句提问作为会话的新名称
           try {
-            const rawInput = userInputBufferRef.current.trim();
+            const rawInput = capturedInput.submittedInput.trim();
             log(`User input from buffer: "${rawInput}"`);
 
-            // 过滤掉提示符（比如 "> ", "$ ", "# ", "⇠ "）
-            let cleanName = rawInput;
-            const lastPromptIdx = Math.max(
-              rawInput.lastIndexOf(">"),
-              rawInput.lastIndexOf("$"),
-              rawInput.lastIndexOf("#"),
-              rawInput.lastIndexOf("⇠")
-            );
-            if (lastPromptIdx !== -1) {
-              cleanName = rawInput.substring(lastPromptIdx + 1);
-            }
-
-            const finalName = cleanName.trim();
+            const finalName = deriveSessionTitleFromInput(rawInput);
             if (finalName && onRenameSession) {
+              localStorage.setItem(autoTitleDoneStorageKey, "true");
+              localStorage.setItem(`kkcoder_session_has_dialogue_${sessionId}`, "true");
               log(`Auto-renaming session ${sessionId} to: "${finalName}"`);
               onRenameSession(sessionId, finalName);
+            } else {
+              log("Skip auto-renaming: first submitted input was empty or a terminal status prompt.");
             }
           } catch (e) {
             log(`Failed to auto-rename first session phrase: ${e}`);

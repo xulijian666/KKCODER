@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { Sidebar, Session, ClaudeIcon, PiIcon } from "./components/Sidebar";
@@ -6,6 +6,12 @@ import { TerminalTab } from "./components/TerminalTab";
 import { NewSessionModal } from "./components/NewSessionModal";
 import { SettingsModal } from "./components/SettingsModal";
 import { MdEditorModal } from "./components/MdEditorModal";
+import {
+  addUnreadCompletion,
+  getUnreadCompletionCount,
+  markSessionRead,
+} from "./utils/unreadCompletions";
+import { syncTaskbarUnreadBadge } from "./utils/taskbarBadge";
 import "./App.css";
 
 // 100% 安全的 UUID 生成器，防止 WebView2 部分版本及非安全上下文抛错闪退
@@ -47,9 +53,11 @@ function getFolderName(path: string): string {
   return parts[parts.length - 1] || path;
 }
 
+const CLAUDE_VERSION_CACHE_KEY = "kkcoder_cached_claude_version";
+
 function App() {
 
-  const appWindow = getCurrentWindow();
+  const appWindow = useMemo(() => getCurrentWindow(), []);
 
   const handleMinimize = () => {
     appWindow.minimize().catch((err) => log(`Failed to minimize: ${err}`));
@@ -69,6 +77,7 @@ function App() {
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
   }, [activeSessionId]);
+  const isWindowFocusedRef = useRef<boolean>(true);
   const [openTabIds, setOpenTabIds] = useState<string[]>([]);
   const [selectedAgent, setSelectedAgent] = useState<"claude" | "pi">("claude");
   const [showModal, setShowModal] = useState<boolean>(false);
@@ -83,12 +92,7 @@ function App() {
 
   useEffect(() => {
     if (activeSessionId) {
-      setGlowingSessionIds((prev) => {
-        if (prev.includes(activeSessionId)) {
-          return prev.filter((id) => id !== activeSessionId);
-        }
-        return prev;
-      });
+      setGlowingSessionIds((prev) => markSessionRead(prev, activeSessionId));
     }
   }, [activeSessionId]);
   // 恢复会话相关状态
@@ -103,7 +107,9 @@ function App() {
     return localStorage.getItem("kkcoder_setting_theme") || "light-premium";
   });
   const [isInitLoaded, setIsInitLoaded] = useState<boolean>(false);
-  const [claudeVersion, setClaudeVersion] = useState<string>("Claude Code");
+  const [claudeVersion, setClaudeVersion] = useState<string>(() => {
+    return localStorage.getItem(CLAUDE_VERSION_CACHE_KEY) || "Claude Code";
+  });
 
   // 侧边栏拖拽调宽状态与拖拽处理
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
@@ -302,6 +308,45 @@ function App() {
       localStorage.setItem("kkcoder_last_open_tab_ids", JSON.stringify(openTabIds));
     }
   }, [openTabIds, isInitLoaded]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+
+    appWindow.isFocused()
+      .then((focused) => {
+        isWindowFocusedRef.current = focused;
+        if (focused && activeSessionIdRef.current) {
+          setGlowingSessionIds((prev) => markSessionRead(prev, activeSessionIdRef.current));
+        }
+      })
+      .catch((err) => log(`Failed to read window focus state: ${err}`));
+
+    appWindow.onFocusChanged(({ payload: focused }) => {
+      isWindowFocusedRef.current = focused;
+      if (focused && activeSessionIdRef.current) {
+        setGlowingSessionIds((prev) => markSessionRead(prev, activeSessionIdRef.current));
+      }
+    })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch((err) => log(`Failed to register window focus listener: ${err}`));
+
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, [appWindow]);
+
+  useEffect(() => {
+    syncTaskbarUnreadBadge(getUnreadCompletionCount(glowingSessionIds), log);
+  }, [glowingSessionIds]);
+
+  useEffect(() => {
+    return () => {
+      syncTaskbarUnreadBadge(0, log);
+    };
+  }, []);
+
   // 💾 自动载入与保存持久化窗口窗体大小 (防抖 300ms 性能极致优化)
   useEffect(() => {
     const savedWidth = localStorage.getItem("kkcoder_window_width");
@@ -393,26 +438,36 @@ function App() {
 
   // 1. 初始化挂载时，从本地 SQLite 数据库载入历史会话，并还原上次活跃会话
   useEffect(() => {
-    // 恢复并展示上一次运行时的闪退/残留日志
-    try {
-      const persistedLogs = JSON.parse(localStorage.getItem("kkcoder_logs") || "[]");
-      if (persistedLogs.length > 0) {
-        console.group("=== KkCoder 历史崩溃/运行追踪日志 ===");
-        persistedLogs.forEach((l: string) => console.log(l));
-        console.groupEnd();
-      }
-    } catch (e) {}
+    let claudeVersionTimer: number | null = null;
+    let diagnosticsTimer: number | null = null;
 
-    log("App mounted. Fetching sessions from SQLite database and Claude version...");
-    invoke<string>("get_claude_version")
-      .then((ver) => {
-        log(`Fetched Claude version: ${ver}`);
-        setClaudeVersion(ver);
-      })
-      .catch((err) => {
-        log(`Failed to fetch Claude version: ${err}`);
-      });
+    const scheduleDeferredDiagnostics = () => {
+      diagnosticsTimer = window.setTimeout(() => {
+        try {
+          const persistedLogs = JSON.parse(localStorage.getItem("kkcoder_logs") || "[]");
+          if (persistedLogs.length > 0) {
+            console.group("=== KkCoder 历史崩溃/运行追踪日志 ===");
+            persistedLogs.forEach((l: string) => console.log(l));
+            console.groupEnd();
+          }
+        } catch (e) {}
+      }, 2000);
+    };
 
+    const fetchClaudeVersion = () => {
+      invoke<string>("get_claude_version")
+        .then((ver) => {
+          setClaudeVersion(ver);
+          localStorage.setItem(CLAUDE_VERSION_CACHE_KEY, ver);
+        })
+        .catch(() => {});
+    };
+
+    const scheduleClaudeVersionFetch = () => {
+      claudeVersionTimer = window.setTimeout(fetchClaudeVersion, 1500);
+    };
+
+    log("App mounted. Fetching sessions from SQLite database...");
     invoke<Session[]>("get_sessions")
       .then((data) => {
         log(`Successfully fetched ${data ? data.length : 0} sessions from database.`);
@@ -438,12 +493,21 @@ function App() {
           }
         }
         setIsInitLoaded(true);
+        scheduleClaudeVersionFetch();
+        scheduleDeferredDiagnostics();
       })
       .catch((err) => {
         log(`Failed to fetch sessions from SQLite: ${err}`);
         console.error("加载 SQLite 本地会话数据失败", err);
         setIsInitLoaded(true);
+        scheduleClaudeVersionFetch();
+        scheduleDeferredDiagnostics();
       });
+
+    return () => {
+      if (claudeVersionTimer !== null) window.clearTimeout(claudeVersionTimer);
+      if (diagnosticsTimer !== null) window.clearTimeout(diagnosticsTimer);
+    };
   }, []);
 
   // 📂 调用 Rust 后端，在资源管理器中打开项目物理文件夹路径
@@ -606,12 +670,14 @@ function App() {
   };
 
   const handleCommandComplete = (sid: string) => {
-    if (sid !== activeSessionIdRef.current) {
-      setGlowingSessionIds((prev) => {
-        if (prev.includes(sid)) return prev;
-        return [...prev, sid];
-      });
-    }
+    setGlowingSessionIds((prev) =>
+      addUnreadCompletion(
+        prev,
+        sid,
+        activeSessionIdRef.current,
+        isWindowFocusedRef.current
+      )
+    );
   };
 
   // 点击页面任意位置关闭调色盘菜单

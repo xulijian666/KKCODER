@@ -756,7 +756,13 @@ fn get_claude_version() -> Result<String, String> {
     
     let run_cmd = || -> Result<String, std::io::Error> {
         #[cfg(target_os = "windows")]
-        let output = Command::new("cmd").args(&["/C", "claude --version"]).output()?;
+        let output = {
+            use std::os::windows::process::CommandExt;
+            Command::new("cmd")
+                .args(&["/C", "claude --version"])
+                .creation_flags(0x08000000) // CREATE_NO_WINDOW
+                .output()?
+        };
         #[cfg(not(target_os = "windows"))]
         let output = Command::new("sh").args(&["-c", "claude --version"]).output()?;
         

@@ -12,6 +12,7 @@
     "core:window:allow-start-dragging",
     "core:window:allow-hide",
     "core:window:allow-show",
-    "core:window:allow-destroy"
+    "core:window:allow-destroy",
+    "core:window:allow-set-overlay-icon"
   ]
 }
