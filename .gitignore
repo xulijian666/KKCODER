@@ -25,3 +25,6 @@ dist-ssr
 
 # SQLite Database files
 kkcoder.db*
+
+# 单元测试文件（本地临时使用，不提交）
+tests/
