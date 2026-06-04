@@ -41,7 +41,9 @@ function log(msg: string) {
 
 function getFolderName(path: string): string {
   if (!path) return "";
-  const parts = path.split(/[/\\]/);
+  // 去除末尾斜杠，避免 split 后最后一个元素为空导致显示异常
+  const cleanPath = path.replace(/[\\/]+$/, "");
+  const parts = cleanPath.split(/[/\\]/);
   return parts[parts.length - 1] || path;
 }
 
@@ -1219,7 +1221,7 @@ function App() {
                       directory={s.path}
                       agentType={s.type}
                       agentSessionId={s.agentSessionId}
-                      isReopen={!newSessionIds.includes(s.id) && localStorage.getItem("kkcoder_session_has_dialogue_" + s.id) === "true"}
+                      isReopen={!newSessionIds.includes(s.id)}
                       onSpawned={() => {
                         log(`TerminalTab spawn resolved for session: ${s.id}. Removing from newSessionIds...`);
                         setNewSessionIds((prev) => prev.filter((nid) => nid !== s.id));

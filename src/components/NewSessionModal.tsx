@@ -83,14 +83,16 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
     try {
       const selected = await invoke<string | null>("select_directory");
       if (selected) {
-        setProjectPath(selected);
+        // 去除末尾斜杠，保持路径一致性
+        const cleanPath = selected.replace(/[\\/]+$/, "");
+        setProjectPath(cleanPath);
         // 自动提取项目名称
-        const parts = selected.split(/[\\/]/);
+        const parts = cleanPath.split(/[\\/]/);
         const name = parts[parts.length - 1] || "未命名项目";
-        
+
         // 若该项目不在最近列表中，则动态追加
-        if (!recentProjects.some((p) => p.path === selected)) {
-          setRecentProjects([{ name, path: selected }, ...recentProjects]);
+        if (!recentProjects.some((p) => p.path === cleanPath)) {
+          setRecentProjects([{ name, path: cleanPath }, ...recentProjects]);
         }
       }
     } catch (err) {
@@ -108,19 +110,23 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
       return;
     }
 
+    // 去除末尾斜杠，避免 split 后最后一个元素为空导致项目名显示为"新项目"
+    const cleanPath = projectPath.replace(/[\\/]+$/, "");
+    setProjectPath(cleanPath);
+
     // 从项目路径中自动截取项目名称
-    const parts = projectPath.split(/[\\/]/);
+    const parts = cleanPath.split(/[\\/]/);
     const projectName = parts[parts.length - 1] || "新项目";
     const finalSessionTitle = sessionTitle.trim() || "新会话";
 
     try {
-      const dirStatus = await invoke<string>("check_directory", { path: projectPath });
+      const dirStatus = await invoke<string>("check_directory", { path: cleanPath });
       if (dirStatus === "not_dir") {
         alert("项目路径指向的不是一个有效文件夹，请核对！");
         return;
       } else if (dirStatus === "not_exists") {
         setConfirmDirState({
-          path: projectPath,
+          path: cleanPath,
           sessionTitle: finalSessionTitle,
           projectName,
         });
@@ -131,7 +137,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
       return;
     }
 
-    onCreate(finalSessionTitle, projectPath, projectName);
+    onCreate(finalSessionTitle, cleanPath, projectName);
     onClose();
   };
 
