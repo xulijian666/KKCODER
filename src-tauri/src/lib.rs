@@ -732,6 +732,25 @@ fn save_clipboard_image(bytes: Vec<u8>, filename: String) -> Result<String, Stri
 }
 
 #[tauri::command]
+fn check_if_paths_exist(text: String) -> bool {
+    if text.is_empty() {
+        return false;
+    }
+    let lines: Vec<&str> = text.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
+    if lines.is_empty() {
+        return false;
+    }
+    for line in lines {
+        let clean = line.trim_matches(|c| c == '"' || c == '\'');
+        let p = std::path::Path::new(clean);
+        if !p.exists() {
+            return false;
+        }
+    }
+    true
+}
+
+#[tauri::command]
 fn read_markdown_file(path: String, filename: String) -> Result<String, String> {
     use std::fs;
     let file_path = std::path::Path::new(&path).join(&filename);
@@ -876,7 +895,8 @@ pub fn run() {
             save_clipboard_image,
             read_markdown_file,
             write_markdown_file,
-            get_claude_version
+            get_claude_version,
+            check_if_paths_exist
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

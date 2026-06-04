@@ -223,48 +223,82 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
 
       if (arg.ctrlKey && arg.code === "KeyV") {
         if (arg.type === "keydown" && !arg.repeat) {
-          log("Ctrl+V keydown event captured in terminal. Reading clipboard items...");
-          navigator.clipboard.read().then(async (clipboardItems) => {
-            let hasImage = false;
-            for (const clipboardItem of clipboardItems) {
-              for (const type of clipboardItem.types) {
-                if (type.startsWith("image/")) {
-                  hasImage = true;
-                  log(`Detected image paste of type: ${type}`);
-                  try {
-                    const blob = await clipboardItem.getType(type);
-                    const filename = `clipboard_img_${Date.now()}_${Math.random().toString(36).substring(2, 9)}.png`;
-                    
-                    const reader = new FileReader();
-                    reader.onload = async () => {
-                      try {
-                        const arrayBuffer = reader.result as ArrayBuffer;
-                        const bytes = new Uint8Array(arrayBuffer);
-                        const filePath = await invoke<string>("save_clipboard_image", {
-                          bytes: Array.from(bytes),
-                          filename
-                        });
-                        log(`Successfully saved clipboard image to: ${filePath}`);
-                        term.paste(filePath);
-                      } catch (e) {
-                        log(`Failed to save clipboard image via Tauri: ${e}`);
-                      }
-                    };
-                    reader.readAsArrayBuffer(blob);
-                  } catch (e) {
-                    log(`Failed to read clipboard image blob: ${e}`);
-                  }
-                  break;
-                }
+          log("Ctrl+V keydown event captured in terminal. Reading clipboard text first...");
+          navigator.clipboard.readText().then(async (text) => {
+            let isFilePath = false;
+            if (text && text.trim().length > 0) {
+              try {
+                isFilePath = await invoke<boolean>("check_if_paths_exist", { text });
+              } catch (err) {
+                log(`Failed to check if paths exist: ${err}`);
               }
-              if (hasImage) break;
             }
-            
-            if (!hasImage) {
-              // Fallback to text reading
-              navigator.clipboard.readText().then((text) => {
+
+            if (isFilePath) {
+              log(`Detected file paths in clipboard text: ${text}`);
+              const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+              const formatted = lines.map(line => {
+                const clean = line.replace(/^"(.*)"$/, '$1').replace(/^'(.*)'$/, '$1');
+                if (/\.(png|jpe?g|gif|webp|bmp|tiff)$/i.test(clean)) {
+                  // Add a trailing space inside the quotes to prevent Claude Code from auto-converting to [Image]
+                  return `"${clean} "`;
+                }
+                return `"${clean}"`;
+              }).join(" ");
+              term.paste(formatted);
+            } else {
+              try {
+                const clipboardItems = await navigator.clipboard.read();
+                let hasImage = false;
+                for (const clipboardItem of clipboardItems) {
+                  for (const type of clipboardItem.types) {
+                    if (type.startsWith("image/")) {
+                      hasImage = true;
+                      log(`Detected image paste of type: ${type}`);
+                      try {
+                        const blob = await clipboardItem.getType(type);
+                        const filename = `clipboard_img_${Date.now()}_${Math.random().toString(36).substring(2, 9)}.png.tmp`;
+                        
+                        const reader = new FileReader();
+                        reader.onload = async () => {
+                          try {
+                            const arrayBuffer = reader.result as ArrayBuffer;
+                            const bytes = new Uint8Array(arrayBuffer);
+                            const filePath = await invoke<string>("save_clipboard_image", {
+                              bytes: Array.from(bytes),
+                              filename
+                            });
+                            log(`Successfully saved clipboard image to: ${filePath}`);
+                            term.paste(`"${filePath}"`);
+                          } catch (e) {
+                            log(`Failed to save clipboard image via Tauri: ${e}`);
+                          }
+                        };
+                        reader.readAsArrayBuffer(blob);
+                      } catch (e) {
+                        log(`Failed to read clipboard image blob: ${e}`);
+                      }
+                      break;
+                    }
+                  }
+                  if (hasImage) break;
+                }
+                
+                if (!hasImage) {
+                  if (text) {
+                    log(`Pasting clipboard text (len=${text.length}).`);
+                    registerPastedText(text);
+                    if (agentType === "pi") {
+                      const processedText = text.replace(/\r?\n/g, " ");
+                      term.paste(processedText);
+                    } else {
+                      term.paste(text);
+                    }
+                  }
+                }
+              } catch (err) {
+                log(`Failed to read clipboard items, falling back to text: ${err}`);
                 if (text) {
-                  log(`Pasting clipboard text (len=${text.length}).`);
                   registerPastedText(text);
                   if (agentType === "pi") {
                     const processedText = text.replace(/\r?\n/g, " ");
@@ -273,25 +307,47 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
                     term.paste(text);
                   }
                 }
-              }).catch((err) => {
-                log(`Failed to read text fallback: ${err}`);
-              });
+              }
             }
           }).catch((err) => {
-            log(`Failed to read clipboard items, falling back to text: ${err}`);
-            // Fallback immediately to readText if read() is not supported or failed
-            navigator.clipboard.readText().then((text) => {
-              if (text) {
-                registerPastedText(text);
-                if (agentType === "pi") {
-                  const processedText = text.replace(/\r?\n/g, " ");
-                  term.paste(processedText);
-                } else {
-                  term.paste(text);
+            log(`Failed to read clipboard text: ${err}`);
+            navigator.clipboard.read().then(async (clipboardItems) => {
+              let hasImage = false;
+              for (const clipboardItem of clipboardItems) {
+                for (const type of clipboardItem.types) {
+                  if (type.startsWith("image/")) {
+                    hasImage = true;
+                    log(`Detected image paste of type: ${type}`);
+                    try {
+                      const blob = await clipboardItem.getType(type);
+                      const filename = `clipboard_img_${Date.now()}_${Math.random().toString(36).substring(2, 9)}.png.tmp`;
+                      
+                      const reader = new FileReader();
+                      reader.onload = async () => {
+                        try {
+                          const arrayBuffer = reader.result as ArrayBuffer;
+                          const bytes = new Uint8Array(arrayBuffer);
+                          const filePath = await invoke<string>("save_clipboard_image", {
+                            bytes: Array.from(bytes),
+                            filename
+                          });
+                          log(`Successfully saved clipboard image to: ${filePath}`);
+                          term.paste(`"${filePath}"`);
+                        } catch (e) {
+                          log(`Failed to save clipboard image via Tauri: ${e}`);
+                        }
+                      };
+                      reader.readAsArrayBuffer(blob);
+                    } catch (e) {
+                      log(`Failed to read clipboard image blob: ${e}`);
+                    }
+                    break;
+                  }
                 }
+                if (hasImage) break;
               }
             }).catch((e) => {
-              log(`Failed text fallback: ${e}`);
+              log(`Failed all clipboard fallbacks: ${e}`);
             });
           });
         }
