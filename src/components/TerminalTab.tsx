@@ -87,6 +87,9 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
   const debounceTimeoutRef = useRef<any>(null);
 
 
+  // 0. 用于自动命名的用户输入累积 buffer
+  const userInputBufferRef = useRef<string>("");
+
   // 1. 用于还原粘贴内容的缓存 Ref
   const pastedTextsRef = useRef<Record<number, string>>({});
   const pasteCounterRef = useRef<number>(0);
@@ -419,6 +422,18 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
     // 3. 监听前端的键盘按键并将 keystroke 发送到 Rust PTY
     log("Binding term.onData to write_to_terminal...");
     const onDataDisposable = term.onData((data) => {
+      // 累积用户的实际输入到 buffer（排除控制序列，只保留可打印字符）
+      if (!data.includes("\r") && !data.includes("\n")) {
+        // 退格键：删除 buffer 中最后一个字符
+        if (data === "\x7f" || data === "\b") {
+          userInputBufferRef.current = userInputBufferRef.current.slice(0, -1);
+        } else if (data.length === 1 && data.charCodeAt(0) >= 32) {
+          // 可打印字符：追加到 buffer
+          userInputBufferRef.current += data;
+        }
+        // 其他控制序列（如方向键、Escape等）不记录
+      }
+
       // 当输入流中含有回车键或换行符时，标志着用户发送了命令，启动回答计时器
       if (data.includes("\r") || data.includes("\n")) {
         // 标记用户输入产生了对话 (只有按下回车发出第一个命令时才算，避免自动控制序列触发)
@@ -426,39 +441,21 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
           localStorage.setItem(`kkcoder_session_has_dialogue_${sessionId}`, "true");
           log(`Session ${sessionId} has dialogue now due to user Enter key.`);
 
-          // 提取第一句提问作为会话的新名称
+          // 从累积的用户输入 buffer 中提取第一句提问作为会话的新名称
           try {
-            const buffer = term.buffer.active;
-            let rawText = "";
+            const rawInput = userInputBufferRef.current.trim();
+            log(`User input from buffer: "${rawInput}"`);
 
-            // 1. 尝试读当前光标所在行
-            const currentLine = buffer.getLine(buffer.baseY + buffer.cursorY);
-            if (currentLine) {
-              rawText = currentLine.translateToString(true);
-            }
-
-            // 2. 防御判定：如果当前行太短或只包含提示符，可能是光标已先行移动，我们回退读取上一行
-            const trimmedRaw = rawText.trim();
-            const isJustPrompt = trimmedRaw === ">" || trimmedRaw === "$" || trimmedRaw === "#" || trimmedRaw === "⇠" || !trimmedRaw;
-            if (isJustPrompt && buffer.cursorY > 0) {
-              const prevLine = buffer.getLine(buffer.baseY + buffer.cursorY - 1);
-              if (prevLine) {
-                rawText = prevLine.translateToString(true);
-              }
-            }
-
-            log(`User input first raw line before processing: "${rawText}"`);
-
-            // 3. 过滤掉提示符（比如 "> ", "$ ", "# ", "AI_CODE> "）
-            let cleanName = rawText;
+            // 过滤掉提示符（比如 "> ", "$ ", "# ", "⇠ "）
+            let cleanName = rawInput;
             const lastPromptIdx = Math.max(
-              rawText.lastIndexOf(">"),
-              rawText.lastIndexOf("$"),
-              rawText.lastIndexOf("#"),
-              rawText.lastIndexOf("⇠")
+              rawInput.lastIndexOf(">"),
+              rawInput.lastIndexOf("$"),
+              rawInput.lastIndexOf("#"),
+              rawInput.lastIndexOf("⇠")
             );
             if (lastPromptIdx !== -1) {
-              cleanName = rawText.substring(lastPromptIdx + 1);
+              cleanName = rawInput.substring(lastPromptIdx + 1);
             }
 
             const finalName = cleanName.trim();
@@ -470,6 +467,9 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
             log(`Failed to auto-rename first session phrase: ${e}`);
           }
         }
+
+        // 回车后清空输入 buffer，为下一次输入做准备
+        userInputBufferRef.current = "";
 
         isAnsweringRef.current = true;
         commandStartTimeRef.current = Date.now();
