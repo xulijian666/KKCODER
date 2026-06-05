@@ -26,6 +26,7 @@ portable-pty = "0.8"
 rfd = "0.14"
 anyhow = "1"
 rusqlite = { version = "0.31", features = ["bundled"] }
+chrono = "0.4"
 
 
 

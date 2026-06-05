@@ -390,6 +390,26 @@ function App() {
     return () => window.removeEventListener("click", closeTabMenu);
   }, []);
 
+  // 监听关闭标签页右键菜单的事件（由侧边栏触发）
+  useEffect(() => {
+    const handleCloseTabContextMenu = () => setTabContextMenu(null);
+    window.addEventListener("close-tab-context-menu", handleCloseTabContextMenu);
+    return () => window.removeEventListener("close-tab-context-menu", handleCloseTabContextMenu);
+  }, []);
+
+  // 监听归档还原事件，重新加载所有会话
+  useEffect(() => {
+    const handleArchiveRestored = () => {
+      invoke<Session[]>("get_sessions")
+        .then((data) => {
+          setSessions(data || []);
+        })
+        .catch((err) => console.error("Failed to reload sessions after archive restore:", err));
+    };
+    window.addEventListener("archive-sessions-restored", handleArchiveRestored);
+    return () => window.removeEventListener("archive-sessions-restored", handleArchiveRestored);
+  }, []);
+
   // 🚫 全局彻底拦截并禁用系统默认右键菜单，彻底实现无菜单点击无反应
   useEffect(() => {
     const handleGlobalContextMenu = (e: MouseEvent) => {
@@ -571,6 +591,17 @@ function App() {
       });
   };
 
+  // 直接创建会话（跳过模态框）
+  const handleCreateSessionDirectly = (projectPath: string) => {
+    const cleanPath = projectPath.replace(/[\\/]+$/, "");
+    const parts = cleanPath.split(/[\\/]/);
+    const projectName = parts[parts.length - 1] || "新项目";
+    const sessionTitle = "新会话";
+    
+    log(`handleCreateSessionDirectly triggered: path=${cleanPath}, project=${projectName}`);
+    handleCreateSession(sessionTitle, cleanPath, projectName);
+  };
+
   // 新建无痕临时终端
   const handleCreateTempSession = () => {
     const tempNumbers = sessions
@@ -611,6 +642,9 @@ function App() {
       setOpenTabIds((prev) => [...prev, id]);
     }
     setActiveSessionId(id);
+    // 点击任意会话标签时自动关闭恢复提示
+    setShowRestoreToast(false);
+    setShowRestoreModal(false);
   };
 
   // 恢复会话相关处理逻辑
@@ -832,6 +866,9 @@ function App() {
     invoke("close_terminal", { sessionId: id }).catch((err) => {
       log(`Failed to close terminal PTY process for ${id}: ${err}`);
     });
+
+    // 清除该会话的busy状态，让侧边栏显示绿点
+    setSessionBusy(prev => ({ ...prev, [id]: false }));
 
     const closedSession = sessions.find((s) => s.id === id);
     if (closedSession?.isTemp) {
@@ -1157,6 +1194,7 @@ function App() {
             setPrefilledProjectPath(path);
             setShowModal(true);
           }}
+          onCreateSessionDirectly={handleCreateSessionDirectly}
           onOpenTempSession={handleCreateTempSession}
           sessions={sessions}
           activeSessionId={activeSessionId}
@@ -1216,6 +1254,8 @@ function App() {
                         y: e.clientY,
                         sessionId: s.id,
                       });
+                      // 触发事件关闭侧边栏右键菜单
+                      window.dispatchEvent(new CustomEvent("close-sidebar-context-menu"));
                     }}
                   >
                     {isRenaming ? (
@@ -1591,6 +1631,31 @@ function App() {
                 }}
               >
                 在侧边栏中定位
+              </button>
+              <div style={{ borderBottom: "1px dashed var(--border-color)", margin: "4px 6px" }} />
+              <button
+                className="context-menu-item"
+                onClick={() => {
+                  const s = sessions.find(sess => sess.id === tabContextMenu.sessionId);
+                  if (s) {
+                    navigator.clipboard.writeText(s.path).catch(() => {});
+                  }
+                  setTabContextMenu(null);
+                }}
+              >
+                复制项目路径
+              </button>
+              <button
+                className="context-menu-item"
+                onClick={() => {
+                  const s = sessions.find(sess => sess.id === tabContextMenu.sessionId);
+                  if (s) {
+                    invoke("open_project_folder", { path: s.path }).catch(() => {});
+                  }
+                  setTabContextMenu(null);
+                }}
+              >
+                在文件管理器中打开
               </button>
             </>
           )}

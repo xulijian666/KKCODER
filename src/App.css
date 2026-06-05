@@ -2584,3 +2584,38 @@ input:checked + .switch-slider:before {
   }
 }
 
+/* 归档区样式 */
+.archive-section {
+  border-top: 1px solid var(--border-color);
+  background-color: var(--bg-sidebar);
+  margin-top: auto;
+}
+
+.archive-header {
+  transition: var(--transition-smooth);
+}
+
+.archive-header:hover {
+  background-color: var(--bg-hover-item) !important;
+}
+
+.archive-content {
+  background-color: var(--bg-main);
+}
+
+.archive-item {
+  transition: var(--transition-smooth);
+}
+
+.archive-item:hover {
+  background-color: var(--bg-hover-item);
+}
+
+/* 项目右键菜单中的归档按钮样式 */
+.context-menu-item.archive-btn {
+  color: var(--color-orange);
+}
+
+.context-menu-item.archive-btn:hover {
+  background-color: rgba(249, 115, 22, 0.1);
+}

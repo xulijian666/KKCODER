@@ -58,6 +58,16 @@ struct RecentProject {
     path: String,
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct ArchivedProject {
+    id: i32,
+    project_name: String,
+    project_path: String,
+    archived_at: String,
+    archive_month: String,
+    sessions_data: String,
+}
+
 #[derive(Clone, serde::Serialize)]
 struct PtyOutputPayload {
     session_id: String,
@@ -109,6 +119,26 @@ fn initialize_database() -> Result<(), rusqlite::Error> {
         )",
         [],
     )?;
+
+    // 创建归档项目表
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS archived_projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_name TEXT NOT NULL,
+            project_path TEXT NOT NULL,
+            archived_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            archive_month TEXT NOT NULL,
+            sessions_data TEXT DEFAULT '[]'
+        )",
+        [],
+    )?;
+
+    // 兼容旧表：如果 sessions_data 列不存在则自动添加
+    let _ = conn.execute(
+        "ALTER TABLE archived_projects ADD COLUMN sessions_data TEXT DEFAULT '[]'",
+        [],
+    );
+
     log_to_file("initialize_database completed successfully.");
     Ok(())
 }
@@ -812,6 +842,81 @@ fn get_claude_version() -> Result<String, String> {
     }
 }
 
+// ==================== 归档项目 Tauri Commands ====================
+
+// 归档项目
+#[tauri::command]
+fn archive_project(project_name: String, project_path: String, sessions_json: String) -> Result<(), String> {
+    log_to_file(&format!("archive_project called: name={}, path={}", project_name, project_path));
+    let db_path = get_db_path();
+    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    
+    // 获取当前月份作为归档分类
+    let archive_month = chrono::Local::now().format("%Y-%m").to_string();
+    
+    conn.execute(
+        "INSERT INTO archived_projects (project_name, project_path, archive_month, sessions_data) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![project_name, project_path, archive_month, sessions_json],
+    ).map_err(|e| e.to_string())?;
+    
+    log_to_file(&format!("Project archived successfully: {} (month: {})", project_name, archive_month));
+    Ok(())
+}
+
+// 获取所有归档项目
+#[tauri::command]
+fn get_archived_projects() -> Result<Vec<ArchivedProject>, String> {
+    log_to_file("get_archived_projects called.");
+    let db_path = get_db_path();
+    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    
+    let mut stmt = conn.prepare(
+        "SELECT id, project_name, project_path, archived_at, archive_month, sessions_data FROM archived_projects ORDER BY archived_at DESC"
+    ).map_err(|e| e.to_string())?;
+    
+    let rows = stmt.query_map([], |row| {
+        Ok(ArchivedProject {
+            id: row.get(0)?,
+            project_name: row.get(1)?,
+            project_path: row.get(2)?,
+            archived_at: row.get(3)?,
+            archive_month: row.get(4)?,
+            sessions_data: row.get::<_, Option<String>>(5)?.unwrap_or_else(|| "[]".to_string()),
+        })
+    }).map_err(|e| e.to_string())?;
+    
+    let mut projects = Vec::new();
+    for row in rows {
+        projects.push(row.map_err(|e| e.to_string())?);
+    }
+    
+    log_to_file(&format!("Found {} archived projects.", projects.len()));
+    Ok(projects)
+}
+
+// 还原归档项目
+#[tauri::command]
+fn restore_archived_project(id: i32) -> Result<String, String> {
+    log_to_file(&format!("restore_archived_project called: id={}", id));
+    let db_path = get_db_path();
+    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    
+    // 先获取 sessions_data，再删除归档记录
+    let sessions_data: String = conn.query_row(
+        "SELECT COALESCE(sessions_data, '[]') FROM archived_projects WHERE id = ?1",
+        rusqlite::params![id],
+        |row| row.get(0),
+    ).map_err(|e| e.to_string())?;
+    
+    conn.execute(
+        "DELETE FROM archived_projects WHERE id = ?1",
+        rusqlite::params![id],
+    ).map_err(|e| e.to_string())?;
+    
+    log_to_file(&format!("Archived project restored (deleted) successfully: id={}", id));
+    Ok(sessions_data)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 启动时初始化数据库表
@@ -896,7 +1001,10 @@ pub fn run() {
             read_markdown_file,
             write_markdown_file,
             get_claude_version,
-            check_if_paths_exist
+            check_if_paths_exist,
+            archive_project,
+            get_archived_projects,
+            restore_archived_project
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

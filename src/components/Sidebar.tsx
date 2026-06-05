@@ -33,10 +33,20 @@ export interface Session {
   isTemp?: boolean;
 }
 
+export interface ArchivedProject {
+  id: number;
+  project_name: string;
+  project_path: string;
+  archived_at: string;
+  archive_month: string;
+  sessions_data: string; // JSON string of sessions
+}
+
 interface SidebarProps {
   selectedAgent: "claude" | "pi";
   onSelectAgent: (agent: "claude" | "pi") => void;
   onOpenNewSession: (prefilledPath?: string) => void;
+  onCreateSessionDirectly?: (projectPath: string) => void;
   onOpenTempSession: () => void;
   sessions: Session[];
   activeSessionId: string;
@@ -62,6 +72,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   selectedAgent,
   onSelectAgent,
   onOpenNewSession,
+  onCreateSessionDirectly,
   onOpenTempSession,
   sessions,
   activeSessionId,
@@ -103,6 +114,85 @@ export const Sidebar: React.FC<SidebarProps> = ({
   useEffect(() => {
     localStorage.setItem("kkcoder_favorite_projects", JSON.stringify(favoriteProjects));
   }, [favoriteProjects]);
+
+  // 归档区状态
+  const [showArchive, setShowArchive] = useState<boolean>(false);
+  const [archivedProjects, setArchivedProjects] = useState<ArchivedProject[]>([]);
+  const [archiveContextMenu, setArchiveContextMenu] = useState<{
+    x: number;
+    y: number;
+    project: ArchivedProject;
+  } | null>(null);
+  const archiveSectionRef = useRef<HTMLDivElement>(null);
+
+  // 点击归档区外部时自动收起归档区
+  useEffect(() => {
+    if (!showArchive) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (archiveSectionRef.current && !archiveSectionRef.current.contains(e.target as Node)) {
+        setShowArchive(false);
+      }
+    };
+    // 延迟添加监听，避免当前点击事件立即触发
+    const timer = setTimeout(() => {
+      window.addEventListener("mousedown", handleClickOutside);
+    }, 0);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [showArchive]);
+
+  // 加载归档项目列表
+  const loadArchivedProjects = async () => {
+    try {
+      const data = await invoke<ArchivedProject[]>("get_archived_projects");
+      setArchivedProjects(data);
+    } catch (err) {
+      console.error("Failed to load archived projects:", err);
+    }
+  };
+
+  useEffect(() => {
+    loadArchivedProjects();
+  }, []);
+
+  // 归档项目
+  const handleArchiveProject = async (projectName: string, projectPath: string) => {
+    try {
+      // 收集该项目下的所有会话数据用于归档保存
+      const projectSessions = sessions.filter(s => s.project === projectName);
+      const sessionsJson = JSON.stringify(projectSessions);
+      await invoke("archive_project", { projectName, projectPath, sessionsJson });
+      // 删除该项目下的所有会话
+      const sessionIds = projectSessions.map(s => s.id);
+      if (sessionIds.length > 0) {
+        onDeleteSessionsBatch(sessionIds);
+      }
+      loadArchivedProjects();
+    } catch (err) {
+      alert(`归档项目失败: ${err}`);
+    }
+  };
+
+  // 还原归档项目
+  const handleRestoreArchivedProject = async (id: number) => {
+    try {
+      const sessionsJson: string = await invoke("restore_archived_project", { id });
+      // 解析归档时保存的会话数据并重建会话
+      const archivedSessions: Session[] = JSON.parse(sessionsJson || "[]");
+      for (const session of archivedSessions) {
+        await invoke("add_session", { session: { ...session, deleted: 0, deletedAt: null } });
+      }
+      loadArchivedProjects();
+      // 通知父组件重新加载会话列表
+      if (archivedSessions.length > 0) {
+        window.dispatchEvent(new CustomEvent("archive-sessions-restored"));
+      }
+    } catch (err) {
+      alert(`还原项目失败: ${err}`);
+    }
+  };
 
   // 当 highlightSessionId 发生变化时，确保它隶属的项目文件夹处于展开状态
   useEffect(() => {
@@ -150,6 +240,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
     };
     window.addEventListener("click", closeMenu);
     return () => window.removeEventListener("click", closeMenu);
+  }, []);
+
+  // 监听关闭侧边栏右键菜单的事件（由标签页触发）
+  useEffect(() => {
+    const handleCloseSidebarContextMenu = () => {
+      setContextMenu(null);
+      setProjectContextMenu(null);
+    };
+    window.addEventListener("close-sidebar-context-menu", handleCloseSidebarContextMenu);
+    return () => window.removeEventListener("close-sidebar-context-menu", handleCloseSidebarContextMenu);
   }, []);
 
   // 监听 ESC 键关闭移除确认弹窗
@@ -206,6 +306,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   ) => {
     e.preventDefault();
     e.stopPropagation();
+    setContextMenu(null); // 关闭会话右键菜单
     setProjectContextMenu({
       x: e.clientX,
       y: e.clientY,
@@ -214,6 +315,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
       sessionCount: sessionsList.length,
       isFavorited,
     });
+    // 触发事件关闭标签页右键菜单
+    window.dispatchEvent(new CustomEvent("close-tab-context-menu"));
   };
 
   // 在文件管理器中物理打开项目路径
@@ -257,6 +360,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     .filter((fp) => projectNames.includes(fp.name))
     .map((fp) => fp.name);
   const regularProjNames = projectNames.filter((name) => !favProjNames.includes(name));
+  
   const sortedProjectNames = [...favProjNames, ...regularProjNames];
 
   // 5. 将 SQLite 写入的 UTC 时间戳转换为对用户友好的相对时间 (如 "2分钟前", "4小时前", "3天前")
@@ -308,11 +412,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const handleItemContextMenu = (e: React.MouseEvent, session: Session) => {
     e.preventDefault();
     e.stopPropagation();
+    setProjectContextMenu(null); // 关闭项目右键菜单
     setContextMenu({
       x: e.clientX,
       y: e.clientY,
       session,
     });
+    // 触发事件关闭标签页右键菜单
+    window.dispatchEvent(new CustomEvent("close-tab-context-menu"));
   };
 
   // 8. 统一会话行渲染函数 (复用在置顶收藏组和常规项目树中)
@@ -554,9 +661,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
             const isProjectFavorited = favoriteProjects.some((fp) => fp.name === projName);
             return (
               <div key={projName} className="project-group">
-                {/* 📂 项目层级标题 */}
+                {/* 项目层级标题 */}
                 <div 
-                  className="project-header" 
+                  className="project-header"
                   onClick={() => toggleProject(projName)}
                   onContextMenu={(e) => handleProjectContextMenu(e, projName, proj.path, proj.sessions, isProjectFavorited)}
                   style={{ cursor: "pointer", userSelect: "none" }}
@@ -602,6 +709,103 @@ export const Sidebar: React.FC<SidebarProps> = ({
         )}
       </div>
 
+      {/* 归档区 */}
+      <div className="archive-section" ref={archiveSectionRef}>
+        <div 
+          className="archive-header"
+          onClick={() => setShowArchive(!showArchive)}
+          style={{ cursor: "pointer", userSelect: "none", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", borderTop: "1px solid var(--border-color)", backgroundColor: "var(--bg-sidebar)" }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="21 8 21 21 3 21 3 8"></polyline>
+              <rect x="1" y="3" width="22" height="5"></rect>
+              <line x1="10" y1="12" x2="14" y2="12"></line>
+            </svg>
+            <span style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-secondary)" }}>归档区</span>
+            <span style={{ fontSize: "11px", color: "var(--text-secondary)", backgroundColor: "rgba(0,0,0,0.05)", padding: "1px 6px", borderRadius: "10px" }}>{archivedProjects.length}</span>
+          </div>
+          <span className="project-chevron" style={{ transform: showArchive ? "rotate(0deg)" : "rotate(-90deg)", fontSize: "9px", color: "var(--text-secondary)" }}>▼</span>
+        </div>
+
+        {showArchive && (
+          <div className="archive-content" style={{ maxHeight: "200px", overflowY: "auto" }}>
+            {archivedProjects.length === 0 ? (
+              <div style={{ padding: "12px", fontSize: "12px", color: "var(--text-secondary)", textAlign: "center" }}>
+                暂无归档项目
+              </div>
+            ) : (
+              Object.entries(
+                archivedProjects.reduce((acc, proj) => {
+                  if (!acc[proj.archive_month]) acc[proj.archive_month] = [];
+                  acc[proj.archive_month].push(proj);
+                  return acc;
+                }, {} as Record<string, ArchivedProject[]>)
+              ).map(([month, projects]) => (
+                <div key={month} className="archive-month-group">
+                  <div style={{ padding: "4px 12px", fontSize: "11px", fontWeight: 600, color: "var(--text-secondary)", backgroundColor: "var(--bg-active-item)", borderBottom: "1px solid var(--border-color)" }}>
+                    {month}
+                  </div>
+                  {projects.map((proj) => (
+                    <div 
+                      key={proj.id} 
+                      className="archive-item"
+                      style={{ padding: "6px 12px", display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer", transition: "var(--transition-smooth)" }}
+                      onClick={() => {
+                        if (confirm(`确定要将「${proj.project_name}」还原到工作区吗？`)) {
+                          handleRestoreArchivedProject(proj.id);
+                        }
+                      }}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setArchiveContextMenu({ x: e.clientX, y: e.clientY, project: proj });
+                      }}
+                      title={proj.project_path}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                        </svg>
+                        <span style={{ fontSize: "12px", color: "var(--text-primary)", maxWidth: "120px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{proj.project_name}</span>
+                      </div>
+                      <span style={{ fontSize: "10px", color: "var(--text-secondary)" }} title="点击还原到工作区">还原</span>
+                    </div>
+                  ))}
+                </div>
+              ))
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* 归档项目右键菜单 */}
+      {archiveContextMenu && (
+        <div 
+          className="context-menu"
+          style={{ top: archiveContextMenu.y, left: archiveContextMenu.x }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button 
+            className="context-menu-item"
+            onClick={() => {
+              handleRestoreArchivedProject(archiveContextMenu.project.id);
+              setArchiveContextMenu(null);
+            }}
+          >
+            还原到工作区
+          </button>
+          <button 
+            className="context-menu-item"
+            onClick={() => {
+              navigator.clipboard.writeText(archiveContextMenu.project.project_path).catch(() => {});
+              setArchiveContextMenu(null);
+            }}
+          >
+            复制路径
+          </button>
+        </div>
+      )}
+
       {/* 9. 自定义高档白天右键上下文悬浮菜单 */}
       {contextMenu && (
         <div 
@@ -636,6 +840,27 @@ export const Sidebar: React.FC<SidebarProps> = ({
             重命名
           </button>
 
+          <div className="context-menu-divider" style={{ height: "1px", backgroundColor: "var(--border-color)", margin: "4px 0" }}></div>
+
+          <button
+            className="context-menu-item"
+            onClick={() => {
+              navigator.clipboard.writeText(contextMenu.session.path).catch(() => {});
+              setContextMenu(null);
+            }}
+          >
+            复制项目路径
+          </button>
+          <button
+            className="context-menu-item"
+            onClick={() => {
+              invoke("open_project_folder", { path: contextMenu.session.path }).catch(() => {});
+              setContextMenu(null);
+            }}
+          >
+            在文件管理器中打开
+          </button>
+
           <button 
             className="context-menu-item"
             style={{ color: "#ef4444" }}
@@ -662,7 +887,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <button 
             className="context-menu-item"
             onClick={() => {
-              onOpenNewSession(projectContextMenu.projectPath);
+              if (onCreateSessionDirectly) {
+                onCreateSessionDirectly(projectContextMenu.projectPath);
+              } else {
+                onOpenNewSession(projectContextMenu.projectPath);
+              }
               setProjectContextMenu(null);
             }}
           >
@@ -686,6 +915,28 @@ export const Sidebar: React.FC<SidebarProps> = ({
             }}
           >
             在文件管理器中打开
+          </button>
+          <button 
+            className="context-menu-item"
+            onClick={() => {
+              navigator.clipboard.writeText(projectContextMenu.projectPath).then(() => {
+                // 静默复制成功
+              }).catch(() => {
+                alert("复制路径失败");
+              });
+              setProjectContextMenu(null);
+            }}
+          >
+            复制路径
+          </button>
+          <button 
+            className="context-menu-item"
+            onClick={() => {
+              handleArchiveProject(projectContextMenu.projectName, projectContextMenu.projectPath);
+              setProjectContextMenu(null);
+            }}
+          >
+            归档项目
           </button>
           <div style={{ borderBottom: "1px dashed var(--border-color)", margin: "4px 6px" }} />
           <button 
