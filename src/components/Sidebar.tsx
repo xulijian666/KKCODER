@@ -1,5 +1,10 @@
 import React, { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import {
+  formatRelativeSessionActivityTime,
+  sortProjectEntriesByActivityDesc,
+  sortSessionsByActivityDesc,
+} from "../utils/sessionActivity";
 
 export const ClaudeIcon: React.FC<{ size?: number; color?: string }> = ({ size = 18, color }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" style={{ color, display: "inline-block", verticalAlign: "middle" }}>
@@ -27,6 +32,7 @@ export interface Session {
   type: "claude" | "pi";
   agentSessionId: string;
   createdAt?: string; // 保存数据库创建时间戳
+  lastUserMessageAt?: string;
   favorite: number;   // 0 代表普通，1 代表已收藏
   deleted?: number;   // 0 代表活动，1 代表回收站
   deletedAt?: string; // 保存软删除时间戳
@@ -347,12 +353,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }
   });
 
+  Object.values(projectsMap).forEach((project) => {
+    project.sessions = sortSessionsByActivityDesc(project.sessions);
+  });
+
   // 提取收藏的会话
-  const favoriteSessions = filteredSessions.filter((s) => s.favorite === 1 && (
-    s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    s.project.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    s.path.toLowerCase().includes(searchQuery.toLowerCase())
-  ));
+  const favoriteSessions = sortSessionsByActivityDesc(
+    filteredSessions.filter((s) => s.favorite === 1 && (
+      s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      s.project.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      s.path.toLowerCase().includes(searchQuery.toLowerCase())
+    ))
+  );
 
   // 按照收藏时间置顶项目，后收藏的在前面
   const projectNames = Object.keys(projectsMap);
@@ -360,32 +372,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
     .filter((fp) => projectNames.includes(fp.name))
     .map((fp) => fp.name);
   const regularProjNames = projectNames.filter((name) => !favProjNames.includes(name));
-  
-  const sortedProjectNames = [...favProjNames, ...regularProjNames];
 
-  // 5. 将 SQLite 写入的 UTC 时间戳转换为对用户友好的相对时间 (如 "2分钟前", "4小时前", "3天前")
-  const formatRelativeTime = (createdAt?: string) => {
-    if (!createdAt) return "刚刚";
-    try {
-      const formattedUtc = createdAt.replace(" ", "T") + "Z";
-      const createdDate = new Date(formattedUtc);
-      const now = new Date();
-      
-      const diffMs = now.getTime() - createdDate.getTime();
-      const diffMins = Math.floor(diffMs / 60000);
-      
-      if (diffMins < 1) return "刚刚";
-      if (diffMins < 60) return `${diffMins}分钟前`;
-      
-      const diffHours = Math.floor(diffMins / 60);
-      if (diffHours < 24) return `${diffHours}小时前`;
-      
-      const diffDays = Math.floor(diffHours / 24);
-      return `${diffDays}天前`;
-    } catch (e) {
-      return "刚刚";
-    }
-  };
+  const regularSortedEntries = sortProjectEntriesByActivityDesc(
+    regularProjNames.map((name) => [name, projectsMap[name]] as [string, { path: string; sessions: Session[] }])
+  );
+  const sortedProjectNames = [...favProjNames, ...regularSortedEntries.map(([name]) => name)];
 
   // 6. 行内编辑操作
   const startEditing = (session: Session) => {
@@ -487,7 +478,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
           {/* 时间标签 (如 2分钟前) */}
           <span className="session-time-tag">
-            {formatRelativeTime(session.createdAt)}
+            {formatRelativeSessionActivityTime(session)}
           </span>
           
           {/* 删除按钮 */}

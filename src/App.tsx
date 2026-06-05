@@ -11,6 +11,9 @@ import {
   getUnreadCompletionCount,
   markSessionRead,
 } from "./utils/unreadCompletions";
+import { updateSessionLastUserMessageAt } from "./utils/sessionActivity";
+import { readSessionCleanupSettings } from "./utils/sessionCleanup";
+import { shouldResumeSession } from "./utils/sessionResume";
 import { syncTaskbarUnreadBadge } from "./utils/taskbarBadge";
 import "./App.css";
 
@@ -222,6 +225,9 @@ function App() {
     } else {
       setSessionBusy(prev => ({ ...prev, [activeSessionId]: true }));
       invoke("write_to_terminal", { sessionId: activeSessionId, data: content + "\r\n" })
+        .then(() => {
+          handleUserSubmittedInput(activeSessionId);
+        })
         .catch((err) => {
           log(`Failed to send shortcut phrase: ${err}`);
           setSessionBusy(prev => ({ ...prev, [activeSessionId]: false }));
@@ -244,6 +250,20 @@ function App() {
   const [showQueueModal, setShowQueueModal] = useState<boolean>(false);
   const [queueInput, setQueueInput] = useState<string>("");
   const [sessionBusy, setSessionBusy] = useState<Record<string, boolean>>({});
+
+  const handleUserSubmittedInput = (sessionId: string, submittedAt: string = new Date().toISOString()) => {
+    localStorage.setItem(`kkcoder_session_has_dialogue_${sessionId}`, "true");
+    setSessions((prev) => updateSessionLastUserMessageAt(prev, sessionId, submittedAt));
+
+    const targetSession = sessions.find((session) => session.id === sessionId);
+    if (!targetSession || targetSession.isTemp) {
+      return;
+    }
+
+    invoke("touch_session_last_user_message", { id: sessionId }).catch((err) => {
+      log(`Failed to persist last user message time for ${sessionId}: ${err}`);
+    });
+  };
 
   const handleAddToQueue = () => {
     const trimmed = queueInput.trim();
@@ -275,6 +295,7 @@ function App() {
       // 写入终端
       invoke("write_to_terminal", { sessionId: activeSessionId, data: nextTask.prompt + "\r\n" })
         .then(() => {
+          handleUserSubmittedInput(activeSessionId);
           log(`[Queue] Successfully sent task to terminal. Removing from queue...`);
           setQueue(prev => prev.slice(1));
         })
@@ -487,8 +508,19 @@ function App() {
       claudeVersionTimer = window.setTimeout(fetchClaudeVersion, 1500);
     };
 
+    const cleanupSettings = readSessionCleanupSettings();
+    const cleanupPromise = cleanupSettings.enabled
+      ? invoke<number>("cleanup_stale_sessions", { days: cleanupSettings.days })
+          .then((count) => {
+            log(`Startup session cleanup moved ${count} stale sessions to trash.`);
+          })
+          .catch((err) => {
+            log(`Startup session cleanup failed: ${err}`);
+          })
+      : Promise.resolve();
+
     log("App mounted. Fetching sessions from SQLite database...");
-    invoke<Session[]>("get_sessions")
+    cleanupPromise.then(() => invoke<Session[]>("get_sessions"))
       .then((data) => {
         log(`Successfully fetched ${data ? data.length : 0} sessions from database.`);
         setSessions(data || []);
@@ -1310,6 +1342,7 @@ function App() {
                 const s = sessions.find((sess) => sess.id === tid);
                 if (!s) return null;
                 const isActive = activeSessionId === tid;
+                const shouldResume = shouldResumeSession(s.id, newSessionIds);
                 return (
                   <div
                     key={s.id}
@@ -1327,7 +1360,7 @@ function App() {
                       directory={s.path}
                       agentType={s.type}
                       agentSessionId={s.agentSessionId}
-                      isReopen={!newSessionIds.includes(s.id)}
+                      isReopen={shouldResume}
                       onSpawned={() => {
                         log(`TerminalTab spawn resolved for session: ${s.id}. Removing from newSessionIds...`);
                         setNewSessionIds((prev) => prev.filter((nid) => nid !== s.id));
@@ -1339,6 +1372,7 @@ function App() {
                       }}
                       isActive={isActive}
                       onCommandComplete={() => handleCommandComplete(s.id)}
+                      onUserSubmittedInput={handleUserSubmittedInput}
                       onRenameSession={handleRenameSession}
                     />
                     {sessionBusy[s.id] && (

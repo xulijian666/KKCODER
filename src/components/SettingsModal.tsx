@@ -1,5 +1,12 @@
 import React, { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import {
+  DEFAULT_SESSION_CLEANUP_DAYS,
+  MIN_SESSION_CLEANUP_DAYS,
+  normalizeSessionCleanupDays,
+  SESSION_CLEANUP_DAYS_KEY,
+  SESSION_CLEANUP_ENABLED_KEY,
+} from "../utils/sessionCleanup";
 
 interface SettingsModalProps {
   show: boolean;
@@ -7,7 +14,7 @@ interface SettingsModalProps {
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose }) => {
-  const [activeMenu, setActiveMenu] = useState<"general" | "about">("general");
+  const [activeMenu, setActiveMenu] = useState<"general" | "sessions" | "about">("general");
 
   // 播放提示音效预览（不显示通知气泡）
   const triggerPreview = (tone: string, volume: number) => {
@@ -52,6 +59,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose }) =
   const [fontSize, setFontSize] = useState<number>(() => {
     const val = localStorage.getItem("kkcoder_setting_font_size");
     return val === null ? 13.5 : parseFloat(val);
+  });
+  const [sessionCleanupEnabled, setSessionCleanupEnabled] = useState<boolean>(() => {
+    return localStorage.getItem(SESSION_CLEANUP_ENABLED_KEY) === "true";
+  });
+  const [sessionCleanupDays, setSessionCleanupDays] = useState<number>(() => {
+    return normalizeSessionCleanupDays(localStorage.getItem(SESSION_CLEANUP_DAYS_KEY));
   });
 
   const [shortcutsEnabled, setShortcutsEnabled] = useState<boolean>(() => {
@@ -135,6 +148,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose }) =
     localStorage.setItem("kkcoder_setting_font_size", String(fontSize));
     window.dispatchEvent(new CustomEvent("kkcoder-font-size-change", { detail: fontSize }));
   }, [fontSize]);
+
+  useEffect(() => {
+    localStorage.setItem(SESSION_CLEANUP_ENABLED_KEY, String(sessionCleanupEnabled));
+  }, [sessionCleanupEnabled]);
+
+  useEffect(() => {
+    localStorage.setItem(SESSION_CLEANUP_DAYS_KEY, String(normalizeSessionCleanupDays(sessionCleanupDays)));
+  }, [sessionCleanupDays]);
 
   useEffect(() => {
     localStorage.setItem("kkcoder_shortcuts_enabled", String(shortcutsEnabled));
@@ -279,6 +300,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose }) =
             通用
           </button>
           <button
+            className={`settings-menu-item ${activeMenu === "sessions" ? "active" : ""}`}
+            onClick={() => setActiveMenu("sessions")}
+          >
+            会话管理
+          </button>
+          <button
             className={`settings-menu-item ${activeMenu === "about" ? "active" : ""}`}
             onClick={() => setActiveMenu("about")}
           >
@@ -291,7 +318,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose }) =
           {/* 头部标题与关闭按钮 */}
           <div className="settings-header">
             <span className="settings-title">
-              {activeMenu === "general" ? "通用" : "关于"}
+              {activeMenu === "general" ? "通用" : activeMenu === "sessions" ? "会话管理" : "关于"}
             </span>
             <button className="settings-close" onClick={onClose}>
               ×
@@ -628,6 +655,43 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose }) =
                 </div>
               </div>
 
+            ) : activeMenu === "sessions" ? (
+              <div className="settings-content">
+                <div className="settings-group">
+                  <div className="settings-group-label">定时清理</div>
+                  <div className="settings-switch-row">
+                    <label className="switch-container">
+                      <input
+                        type="checkbox"
+                        checked={sessionCleanupEnabled}
+                        onChange={(e) => setSessionCleanupEnabled(e.target.checked)}
+                      />
+                      <span className="switch-slider"></span>
+                    </label>
+                    <span className="switch-label">启动时自动将长期未交互的会话移入垃圾桶</span>
+                  </div>
+                </div>
+
+                <div className="settings-group">
+                  <div className="settings-group-label">未交互天数</div>
+                  <div className="slider-row">
+                    <input
+                      type="range"
+                      min={MIN_SESSION_CLEANUP_DAYS}
+                      max="365"
+                      step="1"
+                      className="settings-slider"
+                      value={sessionCleanupDays}
+                      onChange={(e) => setSessionCleanupDays(normalizeSessionCleanupDays(e.target.value))}
+                      disabled={!sessionCleanupEnabled}
+                    />
+                    <span className="slider-value">{sessionCleanupDays} 天</span>
+                  </div>
+                  <div className="settings-helper-text">
+                    默认 {DEFAULT_SESSION_CLEANUP_DAYS} 天；只会移动到垃圾桶，可在 7 天内恢复。
+                  </div>
+                </div>
+              </div>
             ) : (
               <div className="settings-content about-page">
                 <div className="about-logo">KK</div>

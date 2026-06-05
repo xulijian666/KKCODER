@@ -21,6 +21,7 @@ interface TerminalTabProps {
   busy?: boolean;
   isActive?: boolean;
   onCommandComplete?: () => void;
+  onUserSubmittedInput?: (sessionId: string, submittedAt: string) => void;
   onRenameSession?: (sessionId: string, newName: string) => void;
 }
 
@@ -73,6 +74,7 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
   busy,
   isActive,
   onCommandComplete,
+  onUserSubmittedInput,
   onRenameSession,
 }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
@@ -205,9 +207,20 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(terminalRef.current);
+    let initialTerminalDimensions: { cols: number; rows: number } | null = null;
+    try {
+      fitAddon.fit();
+      const dims = fitAddon.proposeDimensions();
+      if (dims && dims.cols >= 20 && dims.rows >= 5) {
+        initialTerminalDimensions = { cols: dims.cols, rows: dims.rows };
+        log(`Initial terminal dimensions before spawn: cols=${dims.cols}, rows=${dims.rows}`);
+      }
+    } catch (e) {
+      log(`Failed to measure initial terminal dimensions before spawn: ${e}`);
+    }
+
     // 绑定自定义键盘按键处理器：支持 Ctrl+C 进行快捷复制且禁用退出命令，支持 Ctrl+V 完美粘贴且阻断重复
     term.attachCustomKeyEventHandler((arg) => {
-
       if (arg.ctrlKey && arg.code === "KeyC") {
         if (arg.type === "keydown") {
           if (term.hasSelection()) {
@@ -488,14 +501,19 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
       userInputBufferRef.current = capturedInput.buffer;
 
       // 当输入流中含有回车键或换行符时，标志着用户发送了命令，启动回答计时器
+      let submittedAt: string | null = null;
       if (capturedInput.submitted) {
+        const rawInput = capturedInput.submittedInput.trim();
+        log(`User input from buffer: "${rawInput}"`);
+
+        if (rawInput) {
+          submittedAt = new Date().toISOString();
+        }
+
         // 只在新建终端里用第一条真实用户输入自动命名，避免恢复会话时误吃终端状态文本。
         if (!isReopen && !localStorage.getItem(autoTitleDoneStorageKey)) {
           // 从累积的用户输入 buffer 中提取第一句提问作为会话的新名称
           try {
-            const rawInput = capturedInput.submittedInput.trim();
-            log(`User input from buffer: "${rawInput}"`);
-
             const finalName = deriveSessionTitleFromInput(rawInput);
             if (finalName && onRenameSession) {
               localStorage.setItem(autoTitleDoneStorageKey, "true");
@@ -520,9 +538,15 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
           onStateChange(true);
         }
       }
-      invoke("write_to_terminal", { sessionId, data }).catch((err) => {
-        log(`write_to_terminal error: ${err}`);
-      });
+      invoke("write_to_terminal", { sessionId, data })
+        .then(() => {
+          if (submittedAt) {
+            onUserSubmittedInput?.(sessionId, submittedAt);
+          }
+        })
+        .catch((err) => {
+          log(`write_to_terminal error: ${err}`);
+        });
     });
 
     // 4. 监听终端自身的 resize 事件并同步到 PTY
@@ -535,7 +559,15 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
 
     // 5. 调用 Rust spawn_terminal 接口拉起后端 PTY 进程
     log("Calling Backend invoke('spawn_terminal')...");
-    invoke("spawn_terminal", { sessionId, directory, agentType, agentSessionId, isReopen })
+    invoke("spawn_terminal", {
+      sessionId,
+      directory,
+      agentType,
+      agentSessionId,
+      isReopen,
+      initialCols: initialTerminalDimensions?.cols ?? null,
+      initialRows: initialTerminalDimensions?.rows ?? null,
+    })
       .then(() => {
         log("Backend spawn_terminal resolved successfully.");
         if (onSpawned) {

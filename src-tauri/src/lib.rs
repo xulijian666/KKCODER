@@ -44,6 +44,8 @@ struct Session {
     agent_session_id: String,
     #[serde(rename = "createdAt", skip_serializing_if = "Option::is_none")]
     created_at: Option<String>,
+    #[serde(rename = "lastUserMessageAt", skip_serializing_if = "Option::is_none")]
+    last_user_message_at: Option<String>,
     #[serde(default)]
     favorite: i32, // 0 for normal, 1 for favorite
     #[serde(default)]
@@ -95,6 +97,7 @@ fn initialize_database() -> Result<(), rusqlite::Error> {
             type TEXT NOT NULL,
             agent_session_id TEXT NOT NULL,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            last_user_message_at DATETIME,
             favorite INTEGER DEFAULT 0
         )",
         [],
@@ -104,6 +107,11 @@ fn initialize_database() -> Result<(), rusqlite::Error> {
     let _ = conn.execute("ALTER TABLE sessions ADD COLUMN favorite INTEGER DEFAULT 0", []);
     let _ = conn.execute("ALTER TABLE sessions ADD COLUMN deleted INTEGER DEFAULT 0", []);
     let _ = conn.execute("ALTER TABLE sessions ADD COLUMN deleted_at DATETIME", []);
+    let _ = conn.execute("ALTER TABLE sessions ADD COLUMN last_user_message_at DATETIME", []);
+    let _ = conn.execute(
+        "UPDATE sessions SET last_user_message_at = created_at WHERE last_user_message_at IS NULL",
+        [],
+    );
 
     // 物理清理超过 7 天的已删除会话 (基于本地时间计算或直接按 UTC)
     let _ = conn.execute(
@@ -154,7 +162,7 @@ fn get_sessions() -> Result<Vec<Session>, String> {
         log_to_file(&format!("get_sessions DB open error: {}", e));
         e.to_string()
     })?;
-    let mut stmt = conn.prepare("SELECT id, name, project, path, type, agent_session_id, created_at, favorite, deleted, deleted_at FROM sessions ORDER BY created_at ASC")
+    let mut stmt = conn.prepare("SELECT id, name, project, path, type, agent_session_id, created_at, last_user_message_at, favorite, deleted, deleted_at FROM sessions ORDER BY created_at ASC")
         .map_err(|e| {
             log_to_file(&format!("get_sessions prepare stmt error: {}", e));
             e.to_string()
@@ -168,10 +176,11 @@ fn get_sessions() -> Result<Vec<Session>, String> {
             path: row.get(3)?,
             session_type: row.get(4)?,
             agent_session_id: row.get(5)?,
-            created_at: Some(row.get(6)?),
-            favorite: row.get(7)?,
-            deleted: row.get(8)?,
-            deleted_at: row.get(9)?,
+            created_at: row.get(6)?,
+            last_user_message_at: row.get(7)?,
+            favorite: row.get(8)?,
+            deleted: row.get(9)?,
+            deleted_at: row.get(10)?,
         })
     }).map_err(|e| {
         log_to_file(&format!("get_sessions query map error: {}", e));
@@ -199,9 +208,24 @@ fn add_session(session: Session) -> Result<(), String> {
         e.to_string()
     })?;
     
-    log_to_file("add_session execute INSERT OR REPLACE into sessions...");
+    log_to_file("add_session execute UPSERT into sessions...");
     conn.execute(
-        "INSERT OR REPLACE INTO sessions (id, name, project, path, type, agent_session_id, favorite, deleted, deleted_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        "INSERT INTO sessions (
+            id, name, project, path, type, agent_session_id, created_at, last_user_message_at, favorite, deleted, deleted_at
+        ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6, COALESCE(?7, CURRENT_TIMESTAMP), ?8, ?9, ?10, ?11
+        )
+        ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            project = excluded.project,
+            path = excluded.path,
+            type = excluded.type,
+            agent_session_id = excluded.agent_session_id,
+            created_at = COALESCE(excluded.created_at, sessions.created_at),
+            last_user_message_at = COALESCE(excluded.last_user_message_at, sessions.last_user_message_at),
+            favorite = excluded.favorite,
+            deleted = excluded.deleted,
+            deleted_at = excluded.deleted_at",
         rusqlite::params![
             &session.id,
             &session.name,
@@ -209,6 +233,8 @@ fn add_session(session: Session) -> Result<(), String> {
             &session.path,
             &session.session_type,
             &session.agent_session_id,
+            session.created_at,
+            session.last_user_message_at,
             session.favorite,
             session.deleted,
             session.deleted_at,
@@ -278,6 +304,26 @@ fn empty_trash() -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn cleanup_stale_sessions(days: i64) -> Result<usize, String> {
+    let safe_days = days.clamp(1, 3650);
+    log_to_file(&format!("cleanup_stale_sessions called: days={}", safe_days));
+    let db_path = get_db_path();
+    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    let modifier = format!("-{} days", safe_days);
+    let affected = conn
+        .execute(
+            "UPDATE sessions
+             SET deleted = 1, deleted_at = datetime('now', 'localtime')
+             WHERE deleted = 0
+               AND datetime(COALESCE(last_user_message_at, created_at)) < datetime('now', ?1)",
+            [&modifier],
+        )
+        .map_err(|e| e.to_string())?;
+    log_to_file(&format!("cleanup_stale_sessions completed. affected={}", affected));
+    Ok(affected)
+}
+
 // 4. 读取最近点选的项目路径 (前 20 个，过滤掉左侧栏已不存在的无会话项目)
 #[tauri::command]
 fn get_recent_projects() -> Result<Vec<RecentProject>, String> {
@@ -339,12 +385,14 @@ fn spawn_terminal(
     agent_type: String,
     agent_session_id: String,
     is_reopen: bool,
+    initial_cols: Option<u16>,
+    initial_rows: Option<u16>,
     state: State<'_, PtyManager>,
     app_handle: AppHandle,
 ) -> Result<(), String> {
     log_to_file(&format!(
-        "spawn_terminal called: session_id={}, directory={}, agent_type={}, agent_session_id={}, is_reopen={}",
-        session_id, directory, agent_type, agent_session_id, is_reopen
+        "spawn_terminal called: session_id={}, directory={}, agent_type={}, agent_session_id={}, is_reopen={}, initial_cols={:?}, initial_rows={:?}",
+        session_id, directory, agent_type, agent_session_id, is_reopen, initial_cols, initial_rows
     ));
 
     // 生成微秒级唯一启动识别 Token，防止 React StrictMode 双重挂载或快速切换导致的多线程重复输入
@@ -375,9 +423,11 @@ fn spawn_terminal(
     log_to_file("Obtaining native PTY system...");
     let pty_system = native_pty_system();
     log_to_file("PTY system obtained. Opening PTY...");
+    let pty_cols = initial_cols.unwrap_or(80).clamp(20, 300);
+    let pty_rows = initial_rows.unwrap_or(24).clamp(5, 120);
     let pair = pty_system.openpty(PtySize {
-        rows: 24,
-        cols: 80,
+        rows: pty_rows,
+        cols: pty_cols,
         pixel_width: 0,
         pixel_height: 0,
     }).map_err(|e: anyhow::Error| {
@@ -401,6 +451,9 @@ fn spawn_terminal(
 
     log_to_file(&format!("Setting slave working directory to: {}", directory));
     cmd.cwd(std::path::PathBuf::from(&directory));
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("COLORTERM", "truecolor");
+    cmd.env("TERM_PROGRAM", "KKCoder");
 
     log_to_file("Spawning command in PTY slave...");
     let mut _child = pair.slave.spawn_command(cmd).map_err(|e: anyhow::Error| {
@@ -632,6 +685,20 @@ fn toggle_favorite(id: String, favorite: i32) -> Result<(), String> {
     conn.execute("UPDATE sessions SET favorite = ?1 WHERE id = ?2", [&favorite.to_string(), &id])
         .map_err(|e| e.to_string())?;
     log_to_file("toggle_favorite completed successfully.");
+    Ok(())
+}
+
+#[tauri::command]
+fn touch_session_last_user_message(id: String) -> Result<(), String> {
+    log_to_file(&format!("touch_session_last_user_message called: id={}", id));
+    let db_path = get_db_path();
+    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    conn.execute(
+        "UPDATE sessions SET last_user_message_at = CURRENT_TIMESTAMP WHERE id = ?1",
+        [&id],
+    )
+    .map_err(|e| e.to_string())?;
+    log_to_file("touch_session_last_user_message completed successfully.");
     Ok(())
 }
 
@@ -985,6 +1052,7 @@ pub fn run() {
             delete_session_permanently,
             restore_session,
             empty_trash,
+            cleanup_stale_sessions,
             get_recent_projects,
             select_directory,
             open_project_folder,
@@ -994,6 +1062,7 @@ pub fn run() {
             close_terminal,
             rename_session,
             toggle_favorite,
+            touch_session_last_user_message,
             check_directory,
             create_directory,
             play_notification_sound,
