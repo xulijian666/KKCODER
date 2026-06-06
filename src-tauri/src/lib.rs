@@ -1469,8 +1469,9 @@ async fn llm_rename_sessions(
                 if cleaned.is_empty() {
                     continue;
                 }
-                let truncated = if cleaned.len() > 200 {
-                    format!("{}...", &cleaned[..200])
+                let truncated = if cleaned.chars().count() > 200 {
+                    let s: String = cleaned.chars().take(200).collect();
+                    format!("{}...", s)
                 } else {
                     cleaned
                 };
@@ -1557,7 +1558,8 @@ async fn llm_rename_sessions(
 
         if !status.is_success() {
             log_to_file(&format!("llm_rename: API error {} - {}", status, resp_text));
-            return Err(format!("LLM API 返回错误 {}: {}", status, &resp_text[..resp_text.len().min(200)]));
+            let err_preview: String = resp_text.chars().take(200).collect();
+            return Err(format!("LLM API 返回错误 {}: {}", status, err_preview));
         }
 
         log_to_file(&format!("llm_rename: got response ({} chars)", resp_text.len()));
@@ -1588,7 +1590,10 @@ async fn llm_rename_sessions(
         };
 
         let titles_json: serde_json::Value = serde_json::from_str(json_str)
-            .map_err(|e| format!("解析标题 JSON 失败: {} (raw: {})", e, &json_str[..json_str.len().min(200)]))?;
+            .map_err(|e| {
+                let raw_preview: String = json_str.chars().take(200).collect();
+                format!("解析标题 JSON 失败: {} (raw: {})", e, raw_preview)
+            })?;
 
         let titles_arr = titles_json.get("titles")
             .and_then(|t| t.as_array())
