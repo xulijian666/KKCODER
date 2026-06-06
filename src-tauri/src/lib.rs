@@ -1360,6 +1360,8 @@ async fn auto_rename_sessions(
 }
 
 /// LLM 批量标题生成：一次请求生成所有会话标题
+/// last_rename_times: JSON 字符串 {"session_id": last_rename_epoch_seconds, ...}
+/// 只处理 JSONL 文件 mtime > 上次修正时间的会话，避免无新内容时浪费 API 调用
 #[tauri::command]
 async fn llm_rename_sessions(
     api_url: String,
@@ -1367,6 +1369,7 @@ async fn llm_rename_sessions(
     model: String,
     skip_favorites: bool,
     project_filter: Option<String>,
+    last_rename_times: Option<String>,
 ) -> Result<Vec<RenameResult>, String> {
     if api_key.is_empty() {
         return Err("API Key 未配置".into());
@@ -1409,13 +1412,36 @@ async fn llm_rename_sessions(
 
         log_to_file(&format!("llm_rename: found {} claude sessions", sessions.len()));
 
-        // 2. 为每个会话准备摘要
+        // 解析上次修正时间表
+        let rename_times: std::collections::HashMap<String, f64> = last_rename_times
+            .as_ref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_default();
+
+        // 2. 为每个会话准备摘要（只处理有新内容的会话）
         let mut session_summaries: Vec<(String, String, String)> = Vec::new(); // (id, name, summary)
+        let mut skipped_no_change = 0usize;
         for session in &sessions {
             let jsonl_path = match find_claude_jsonl(&session.agent_session_id, &session.path) {
                 Some(p) => p,
                 None => continue,
             };
+
+            // 检查 JSONL 文件是否有新内容（mtime > 上次修正时间）
+            if let Some(&last_time) = rename_times.get(&session.id) {
+                if let Ok(meta) = std::fs::metadata(&jsonl_path) {
+                    if let Ok(modified) = meta.modified() {
+                        let mtime = modified.duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs_f64();
+                        if mtime <= last_time {
+                            skipped_no_change += 1;
+                            continue;
+                        }
+                    }
+                }
+            }
+
             let transcript = read_claude_transcript(&jsonl_path);
             if transcript.is_empty() {
                 continue;
@@ -1458,7 +1484,8 @@ async fn llm_rename_sessions(
             return Ok(vec![]);
         }
 
-        log_to_file(&format!("llm_rename: prepared {} session summaries, calling LLM...", session_summaries.len()));
+        log_to_file(&format!("llm_rename: prepared {} session summaries (skipped {} with no new content), calling LLM...",
+            session_summaries.len(), skipped_no_change));
 
         // 3. 构造批量 prompt
         let mut prompt_parts: Vec<String> = Vec::new();

@@ -16,6 +16,7 @@ const NAMER_MODE_KEY = "kkcoder_setting_namer_mode";
 const LLM_API_URL_KEY = "kkcoder_setting_llm_api_url";
 const LLM_API_KEY_KEY = "kkcoder_setting_llm_api_key";
 const LLM_MODEL_KEY = "kkcoder_setting_llm_model";
+const IDLE_MINUTES_KEY = "kkcoder_setting_idle_minutes";
 
 interface RenameResult {
   session_id: string;
@@ -138,6 +139,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
   const [llmModel, setLlmModel] = useState<string>(() => {
     return localStorage.getItem(LLM_MODEL_KEY) || "deepseek-v4-flash";
   });
+  const [idleMinutes, setIdleMinutes] = useState<number>(() => {
+    const val = localStorage.getItem(IDLE_MINUTES_KEY);
+    return val === null ? 5 : parseInt(val, 10);
+  });
 
 
   // --- 2. 写入各项设置至 localStorage ---
@@ -239,6 +244,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
   useEffect(() => {
     localStorage.setItem(LLM_MODEL_KEY, llmModel);
   }, [llmModel]);
+
+  useEffect(() => {
+    localStorage.setItem(IDLE_MINUTES_KEY, String(idleMinutes));
+  }, [idleMinutes]);
 
 
   // 监听键盘 ESC 键关闭设置弹窗
@@ -373,13 +382,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
           setIsRenaming(false);
           return;
         }
+        let lastTimes: Record<string, number> = {};
+        try { lastTimes = JSON.parse(localStorage.getItem("kkcoder_last_rename_times") || "{}"); } catch {}
         results = await invoke<RenameResult[]>("llm_rename_sessions", {
           apiUrl: llmApiUrl,
           apiKey: llmApiKey,
           model: llmModel,
           skipFavorites: autoRenameSkipFavorites,
           projectFilter: null,
+          lastRenameTimes: JSON.stringify(lastTimes),
         });
+        // 更新修正时间表
+        const now = Date.now() / 1000;
+        for (const r of results.filter((r) => r.changed)) {
+          lastTimes[r.session_id] = now;
+        }
+        try { localStorage.setItem("kkcoder_last_rename_times", JSON.stringify(lastTimes)); } catch {}
       } else {
         results = await invoke<RenameResult[]>("auto_rename_sessions", {
           skipFavorites: autoRenameSkipFavorites,
@@ -910,8 +928,27 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
                       />
                       <span className="switch-slider"></span>
                     </label>
-                    <span className="switch-label">会话空闲 5 分钟后自动修正</span>
+                    <span className="switch-label">会话空闲后自动修正</span>
                   </div>
+                  {autoRenameOnIdle && (
+                    <div style={{ paddingLeft: "44px", marginTop: "4px" }}>
+                      <div className="slider-row">
+                        <input
+                          type="range"
+                          min="1"
+                          max="60"
+                          step="1"
+                          className="settings-slider"
+                          value={idleMinutes}
+                          onChange={(e) => setIdleMinutes(parseInt(e.target.value, 10))}
+                        />
+                        <span className="slider-value">{idleMinutes} 分钟</span>
+                      </div>
+                      <div className="settings-helper-text">
+                        空闲超过此时间且有新对话内容时才触发修正
+                      </div>
+                    </div>
+                  )}
                   <div className="settings-switch-row">
                     <label className="switch-container">
                       <input

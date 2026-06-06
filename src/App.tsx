@@ -266,6 +266,11 @@ function App() {
   };
 
   // 统一的自动修正触发函数（根据命名模式选择 heuristic 或 LLM）
+  const initialRenameTimes = (() => {
+    try { return JSON.parse(localStorage.getItem("kkcoder_last_rename_times") || "{}") as Record<string, number>; }
+    catch { return {} as Record<string, number>; }
+  })();
+  const lastRenameTimesRef = useRef<Record<string, number>>(initialRenameTimes);
   const triggerAutoRename = (source: string) => {
     const mode = localStorage.getItem("kkcoder_setting_namer_mode") || "heuristic";
     const skipFav = localStorage.getItem("kkcoder_setting_auto_rename_skip_favorites") !== "false";
@@ -282,6 +287,8 @@ function App() {
       params.apiUrl = localStorage.getItem("kkcoder_setting_llm_api_url") || "https://api.deepseek.com";
       params.apiKey = apiKey;
       params.model = localStorage.getItem("kkcoder_setting_llm_model") || "deepseek-v4-flash";
+      // 传入上次修正时间表，Rust 端只处理有新内容的会话
+      params.lastRenameTimes = JSON.stringify(lastRenameTimesRef.current);
     }
 
     invoke<{ session_id: string; old_name: string; new_name: string; changed: boolean }[]>(cmd, params)
@@ -289,6 +296,12 @@ function App() {
         const changed = results.filter((r) => r.changed);
         if (changed.length > 0) {
           log(`${source} auto-rename (${mode}): ${changed.length} sessions renamed.`);
+          // 更新修正时间表
+          const now = Date.now() / 1000;
+          for (const r of changed) {
+            lastRenameTimesRef.current[r.session_id] = now;
+          }
+          try { localStorage.setItem("kkcoder_last_rename_times", JSON.stringify(lastRenameTimesRef.current)); } catch {}
           invoke<Session[]>("get_sessions").then((updated) => {
             if (updated) setSessions(updated);
           }).catch(() => {});
@@ -297,14 +310,15 @@ function App() {
       .catch((err) => log(`${source} auto-rename failed: ${err}`));
   };
 
-  // 空闲时自动修正会话名称（每 60 秒检查一次，空闲 5 分钟的会话触发修正）
+  // 空闲时自动修正会话名称（每 60 秒检查一次）
   const renamedSinceLastInputRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     const interval = window.setInterval(() => {
       if (localStorage.getItem("kkcoder_setting_auto_rename_idle") !== "true") return;
 
       const now = Date.now();
-      const IDLE_MS = 5 * 60 * 1000;
+      const idleMinutes = parseInt(localStorage.getItem("kkcoder_setting_idle_minutes") || "5", 10);
+      const IDLE_MS = idleMinutes * 60 * 1000;
       const skipFav = localStorage.getItem("kkcoder_setting_auto_rename_skip_favorites") !== "false";
 
       // 找出空闲 >= 5 分钟且未被修正过的会话
