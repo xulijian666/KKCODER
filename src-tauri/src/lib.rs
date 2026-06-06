@@ -1359,6 +1359,243 @@ async fn auto_rename_sessions(
     }).await.map_err(|e| format!("Task join error: {}", e))?
 }
 
+/// LLM 批量标题生成：一次请求生成所有会话标题
+#[tauri::command]
+async fn llm_rename_sessions(
+    api_url: String,
+    api_key: String,
+    model: String,
+    skip_favorites: bool,
+    project_filter: Option<String>,
+) -> Result<Vec<RenameResult>, String> {
+    if api_key.is_empty() {
+        return Err("API Key 未配置".into());
+    }
+
+    tokio::task::spawn_blocking(move || -> Result<Vec<RenameResult>, String> {
+        let db_path = get_db_path();
+        let conn = rusqlite::Connection::open(&db_path).map_err(|e| e.to_string())?;
+
+        // 1. 查询所有活跃 Claude 会话
+        let mut query = String::from(
+            "SELECT id, name, project, path, type, agent_session_id, favorite \
+             FROM sessions WHERE deleted = 0 AND type = 'claude'"
+        );
+        if skip_favorites {
+            query.push_str(" AND favorite = 0");
+        }
+        if let Some(ref proj) = project_filter {
+            query.push_str(&format!(" AND project = '{}'", proj.replace('\'', "''")));
+        }
+
+        let mut stmt = conn.prepare(&query).map_err(|e| e.to_string())?;
+        let sessions: Vec<Session> = stmt.query_map([], |row| {
+            Ok(Session {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                project: row.get(2)?,
+                path: row.get(3)?,
+                session_type: row.get(4)?,
+                agent_session_id: row.get(5)?,
+                created_at: None,
+                last_user_message_at: None,
+                favorite: row.get(6)?,
+                deleted: 0,
+                deleted_at: None,
+            })
+        }).map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+
+        log_to_file(&format!("llm_rename: found {} claude sessions", sessions.len()));
+
+        // 2. 为每个会话准备摘要
+        let mut session_summaries: Vec<(String, String, String)> = Vec::new(); // (id, name, summary)
+        for session in &sessions {
+            let jsonl_path = match find_claude_jsonl(&session.agent_session_id, &session.path) {
+                Some(p) => p,
+                None => continue,
+            };
+            let transcript = read_claude_transcript(&jsonl_path);
+            if transcript.is_empty() {
+                continue;
+            }
+
+            // 取最后几条消息，压缩到 ~500 字符
+            let mut summary_parts: Vec<String> = Vec::new();
+            let mut char_count = 0usize;
+            for (role, text) in transcript.iter().rev() {
+                let cleaned = clean_text(text);
+                if cleaned.is_empty() {
+                    continue;
+                }
+                let truncated = if cleaned.len() > 200 {
+                    format!("{}...", &cleaned[..200])
+                } else {
+                    cleaned
+                };
+                let line = format!("{}: {}", role, truncated);
+                let line_len = line.len();
+                if char_count + line_len > 500 {
+                    break;
+                }
+                summary_parts.push(line);
+                char_count += line_len;
+            }
+            summary_parts.reverse();
+
+            if !summary_parts.is_empty() {
+                session_summaries.push((
+                    session.id.clone(),
+                    session.name.clone(),
+                    summary_parts.join("\n"),
+                ));
+            }
+        }
+
+        if session_summaries.is_empty() {
+            log_to_file("llm_rename: no sessions with transcripts found");
+            return Ok(vec![]);
+        }
+
+        log_to_file(&format!("llm_rename: prepared {} session summaries, calling LLM...", session_summaries.len()));
+
+        // 3. 构造批量 prompt
+        let mut prompt_parts: Vec<String> = Vec::new();
+        prompt_parts.push("你是一个会话标题生成器。根据以下每个会话的对话摘要，为每个会话生成一个简短的中文标题（不超过20个字）。\n".into());
+        prompt_parts.push("标题应该概括对话的核心内容，而不是截取开头文字。\n\n".into());
+
+        for (i, (_id, name, summary)) in session_summaries.iter().enumerate() {
+            prompt_parts.push(format!(
+                "会话 {} (当前标题: \"{}\"):\n{}\n\n",
+                i + 1,
+                name,
+                summary
+            ));
+        }
+
+        prompt_parts.push(format!(
+            "请严格按以下 JSON 格式返回，不要添加任何其他文字：\n\
+             {{\"titles\": [{{\"index\": 1, \"title\": \"生成的标题\"}}, ...]}}\n\n\
+             共 {} 个会话，必须全部返回。",
+            session_summaries.len()
+        ));
+
+        let prompt = prompt_parts.join("");
+
+        // 4. 调用 LLM API（同步阻塞，在 spawn_blocking 线程中）
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .map_err(|e| format!("HTTP 客户端创建失败: {}", e))?;
+
+        let api_url_trimmed = api_url.trim_end_matches('/');
+        let url = format!("{}/v1/chat/completions", api_url_trimmed);
+
+        let body = serde_json::json!({
+            "model": model,
+            "messages": [
+                {"role": "system", "content": "你是会话标题生成器，只输出JSON。"},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.3,
+            "max_tokens": 2048
+        });
+
+        log_to_file(&format!("llm_rename: calling {} with model {}", url, model));
+
+        let resp = client.post(&url)
+            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .map_err(|e| format!("LLM 请求失败: {}", e))?;
+
+        let status = resp.status();
+        let resp_text = resp.text().map_err(|e| format!("读取响应失败: {}", e))?;
+
+        if !status.is_success() {
+            log_to_file(&format!("llm_rename: API error {} - {}", status, resp_text));
+            return Err(format!("LLM API 返回错误 {}: {}", status, &resp_text[..resp_text.len().min(200)]));
+        }
+
+        log_to_file(&format!("llm_rename: got response ({} chars)", resp_text.len()));
+
+        // 5. 解析响应
+        let resp_json: serde_json::Value = serde_json::from_str(&resp_text)
+            .map_err(|e| format!("解析 LLM 响应失败: {}", e))?;
+
+        let content = resp_json
+            .get("choices")
+            .and_then(|c| c.get(0))
+            .and_then(|c| c.get("message"))
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_str())
+            .ok_or("LLM 响应格式异常：缺少 choices[0].message.content")?;
+
+        log_to_file(&format!("llm_rename: content = {}", &content[..content.len().min(500)]));
+
+        // 提取 JSON（可能被 markdown 代码块包裹）
+        let json_str = if let Some(start) = content.find('{') {
+            if let Some(end) = content.rfind('}') {
+                &content[start..=end]
+            } else {
+                content
+            }
+        } else {
+            content
+        };
+
+        let titles_json: serde_json::Value = serde_json::from_str(json_str)
+            .map_err(|e| format!("解析标题 JSON 失败: {} (raw: {})", e, &json_str[..json_str.len().min(200)]))?;
+
+        let titles_arr = titles_json.get("titles")
+            .and_then(|t| t.as_array())
+            .ok_or("JSON 缺少 titles 数组")?;
+
+        // 6. 更新数据库
+        let mut results = Vec::new();
+        for (i, (session_id, old_name, _)) in session_summaries.iter().enumerate() {
+            let new_title = titles_arr.iter()
+                .find(|t| t.get("index").and_then(|v| v.as_u64()).unwrap_or(0) == (i as u64 + 1))
+                .and_then(|t| t.get("title"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("");
+
+            if new_title.is_empty() || new_title == old_name.as_str() {
+                results.push(RenameResult {
+                    session_id: session_id.clone(),
+                    old_name: old_name.clone(),
+                    new_name: new_title.to_string(),
+                    changed: false,
+                });
+                continue;
+            }
+
+            if let Err(e) = conn.execute(
+                "UPDATE sessions SET name = ?1 WHERE id = ?2",
+                rusqlite::params![new_title, session_id],
+            ) {
+                log_to_file(&format!("llm_rename: DB update error for {}: {}", session_id, e));
+                continue;
+            }
+
+            log_to_file(&format!("llm_rename: '{}' -> '{}'", old_name, new_title));
+            results.push(RenameResult {
+                session_id: session_id.clone(),
+                old_name: old_name.clone(),
+                new_name: new_title.to_string(),
+                changed: true,
+            });
+        }
+
+        let changed_count = results.iter().filter(|r| r.changed).count();
+        log_to_file(&format!("llm_rename: completed, {} titles updated out of {}", changed_count, results.len()));
+
+        Ok(results)
+    }).await.map_err(|e| format!("Task join error: {}", e))?
+}
+
 // ==================== 归档项目 Tauri Commands ====================
 
 // 归档项目
@@ -1524,7 +1761,8 @@ pub fn run() {
             archive_project,
             get_archived_projects,
             restore_archived_project,
-            auto_rename_sessions
+            auto_rename_sessions,
+            llm_rename_sessions
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -265,6 +265,38 @@ function App() {
     });
   };
 
+  // 统一的自动修正触发函数（根据命名模式选择 heuristic 或 LLM）
+  const triggerAutoRename = (source: string) => {
+    const mode = localStorage.getItem("kkcoder_setting_namer_mode") || "heuristic";
+    const skipFav = localStorage.getItem("kkcoder_setting_auto_rename_skip_favorites") !== "false";
+
+    const cmd = mode === "llm" ? "llm_rename_sessions" : "auto_rename_sessions";
+    const params: Record<string, unknown> = { skipFavorites: skipFav, projectFilter: null };
+
+    if (mode === "llm") {
+      const apiKey = localStorage.getItem("kkcoder_setting_llm_api_key") || "";
+      if (!apiKey) {
+        log(`${source} auto-rename: LLM mode enabled but API key is empty, skipping.`);
+        return;
+      }
+      params.apiUrl = localStorage.getItem("kkcoder_setting_llm_api_url") || "https://api.deepseek.com";
+      params.apiKey = apiKey;
+      params.model = localStorage.getItem("kkcoder_setting_llm_model") || "deepseek-v4-flash";
+    }
+
+    invoke<{ session_id: string; old_name: string; new_name: string; changed: boolean }[]>(cmd, params)
+      .then((results) => {
+        const changed = results.filter((r) => r.changed);
+        if (changed.length > 0) {
+          log(`${source} auto-rename (${mode}): ${changed.length} sessions renamed.`);
+          invoke<Session[]>("get_sessions").then((updated) => {
+            if (updated) setSessions(updated);
+          }).catch(() => {});
+        }
+      })
+      .catch((err) => log(`${source} auto-rename failed: ${err}`));
+  };
+
   // 空闲时自动修正会话名称（每 60 秒检查一次，空闲 5 分钟的会话触发修正）
   const renamedSinceLastInputRef = useRef<Set<string>>(new Set());
   useEffect(() => {
@@ -272,43 +304,25 @@ function App() {
       if (localStorage.getItem("kkcoder_setting_auto_rename_idle") !== "true") return;
 
       const now = Date.now();
-      const IDLE_MS = 5 * 60 * 1000; // 5 分钟
+      const IDLE_MS = 5 * 60 * 1000;
       const skipFav = localStorage.getItem("kkcoder_setting_auto_rename_skip_favorites") !== "false";
 
       // 找出空闲 >= 5 分钟且未被修正过的会话
-      const idleSessionIds: string[] = [];
+      let hasIdle = false;
       for (const s of sessions) {
         if (s.deleted || s.type !== "claude") continue;
         if (skipFav && s.favorite) continue;
         if (renamedSinceLastInputRef.current.has(s.id)) continue;
         const lastActive = s.lastUserMessageAt ? new Date(s.lastUserMessageAt).getTime() : 0;
         if (lastActive > 0 && now - lastActive >= IDLE_MS) {
-          idleSessionIds.push(s.id);
+          renamedSinceLastInputRef.current.add(s.id);
+          hasIdle = true;
         }
       }
 
-      if (idleSessionIds.length === 0) return;
-
-      // 标记为已处理，避免重复触发
-      for (const id of idleSessionIds) {
-        renamedSinceLastInputRef.current.add(id);
+      if (hasIdle) {
+        triggerAutoRename("Idle");
       }
-
-      log(`Idle auto-rename: ${idleSessionIds.length} sessions idle for 5+ minutes.`);
-      invoke<{ session_id: string; old_name: string; new_name: string; changed: boolean }[]>(
-        "auto_rename_sessions",
-        { skipFavorites: skipFav, projectFilter: null }
-      )
-        .then((results) => {
-          const changed = results.filter((r) => r.changed);
-          if (changed.length > 0) {
-            log(`Idle auto-rename: ${changed.length} sessions renamed.`);
-            invoke<Session[]>("get_sessions").then((updated) => {
-              if (updated) setSessions(updated);
-            }).catch(() => {});
-          }
-        })
-        .catch((err) => log(`Idle auto-rename failed: ${err}`));
     }, 60000);
 
     return () => window.clearInterval(interval);
@@ -606,23 +620,8 @@ function App() {
         // 启动时自动修正会话名称（延迟执行，不阻塞 UI 加载）
         if (localStorage.getItem("kkcoder_setting_auto_rename_startup") === "true") {
           window.setTimeout(() => {
-            const skipFav = localStorage.getItem("kkcoder_setting_auto_rename_skip_favorites") !== "false";
-            invoke<{ session_id: string; old_name: string; new_name: string; changed: boolean }[]>(
-              "auto_rename_sessions",
-              { skipFavorites: skipFav, projectFilter: null }
-            )
-              .then((results) => {
-                const changed = results.filter((r) => r.changed);
-                if (changed.length > 0) {
-                  log(`Startup auto-rename: ${changed.length} sessions renamed.`);
-                  // 重新加载会话列表以反映新名称
-                  invoke<Session[]>("get_sessions").then((updated) => {
-                    if (updated) setSessions(updated);
-                  }).catch(() => {});
-                }
-              })
-              .catch((err) => log(`Startup auto-rename failed: ${err}`));
-          }, 3000); // 延迟 3 秒，确保 UI 完全加载
+            triggerAutoRename("Startup");
+          }, 3000);
         }
       })
       .catch((err) => {

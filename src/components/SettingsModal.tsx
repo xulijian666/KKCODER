@@ -12,6 +12,10 @@ import {
 const AUTO_RENAME_ON_STARTUP_KEY = "kkcoder_setting_auto_rename_startup";
 const AUTO_RENAME_ON_IDLE_KEY = "kkcoder_setting_auto_rename_idle";
 const AUTO_RENAME_SKIP_FAVORITES_KEY = "kkcoder_setting_auto_rename_skip_favorites";
+const NAMER_MODE_KEY = "kkcoder_setting_namer_mode";
+const LLM_API_URL_KEY = "kkcoder_setting_llm_api_url";
+const LLM_API_KEY_KEY = "kkcoder_setting_llm_api_key";
+const LLM_MODEL_KEY = "kkcoder_setting_llm_model";
 
 interface RenameResult {
   session_id: string;
@@ -121,6 +125,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
   const [isRenaming, setIsRenaming] = useState(false);
   const [lastRenameResult, setLastRenameResult] = useState<string | null>(null);
 
+  // LLM 模式配置
+  const [namerMode, setNamerMode] = useState<"heuristic" | "llm">(() => {
+    return (localStorage.getItem(NAMER_MODE_KEY) as "heuristic" | "llm") || "heuristic";
+  });
+  const [llmApiUrl, setLlmApiUrl] = useState<string>(() => {
+    return localStorage.getItem(LLM_API_URL_KEY) || "https://api.deepseek.com";
+  });
+  const [llmApiKey, setLlmApiKey] = useState<string>(() => {
+    return localStorage.getItem(LLM_API_KEY_KEY) || "";
+  });
+  const [llmModel, setLlmModel] = useState<string>(() => {
+    return localStorage.getItem(LLM_MODEL_KEY) || "deepseek-v4-flash";
+  });
+
 
   // --- 2. 写入各项设置至 localStorage ---
   useEffect(() => {
@@ -205,6 +223,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
   useEffect(() => {
     localStorage.setItem(AUTO_RENAME_SKIP_FAVORITES_KEY, String(autoRenameSkipFavorites));
   }, [autoRenameSkipFavorites]);
+
+  useEffect(() => {
+    localStorage.setItem(NAMER_MODE_KEY, namerMode);
+  }, [namerMode]);
+
+  useEffect(() => {
+    localStorage.setItem(LLM_API_URL_KEY, llmApiUrl);
+  }, [llmApiUrl]);
+
+  useEffect(() => {
+    localStorage.setItem(LLM_API_KEY_KEY, llmApiKey);
+  }, [llmApiKey]);
+
+  useEffect(() => {
+    localStorage.setItem(LLM_MODEL_KEY, llmModel);
+  }, [llmModel]);
 
 
   // 监听键盘 ESC 键关闭设置弹窗
@@ -332,10 +366,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
     setIsRenaming(true);
     setLastRenameResult(null);
     try {
-      const results = await invoke<RenameResult[]>("auto_rename_sessions", {
-        skipFavorites: autoRenameSkipFavorites,
-        projectFilter: null,
-      });
+      let results: RenameResult[];
+      if (namerMode === "llm") {
+        if (!llmApiKey.trim()) {
+          setLastRenameResult("请先填写 API Key");
+          setIsRenaming(false);
+          return;
+        }
+        results = await invoke<RenameResult[]>("llm_rename_sessions", {
+          apiUrl: llmApiUrl,
+          apiKey: llmApiKey,
+          model: llmModel,
+          skipFavorites: autoRenameSkipFavorites,
+          projectFilter: null,
+        });
+      } else {
+        results = await invoke<RenameResult[]>("auto_rename_sessions", {
+          skipFavorites: autoRenameSkipFavorites,
+          projectFilter: null,
+        });
+      }
       const changed = results.filter((r) => r.changed).length;
       const total = results.length;
       if (changed === 0) {
@@ -343,7 +393,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
       } else {
         setLastRenameResult(`已修正 ${changed} / ${total} 个会话名称`);
       }
-      // 通知父组件刷新会话列表
       if (changed > 0 && onSessionsRenamed) {
         onSessionsRenamed();
       }
@@ -765,9 +814,82 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
                 {/* 会话名称修正 */}
                 <div className="settings-group">
                   <div className="settings-group-label">会话名称修正</div>
-                  <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "12px", lineHeight: "1.6" }}>
-                    根据对话内容自动修正会话名称，无需 API Key，纯本地处理。
+                  <div className="settings-btn-group">
+                    <button
+                      className={`settings-toggle-btn ${namerMode === "heuristic" ? "active" : ""}`}
+                      onClick={() => setNamerMode("heuristic")}
+                    >
+                      快速模式（本地）
+                    </button>
+                    <button
+                      className={`settings-toggle-btn ${namerMode === "llm" ? "active" : ""}`}
+                      onClick={() => setNamerMode("llm")}
+                    >
+                      精准模式（LLM）
+                    </button>
                   </div>
+                  <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginTop: "6px", lineHeight: "1.6" }}>
+                    {namerMode === "heuristic"
+                      ? "纯本地字符串处理，零消耗，速度快但标题较粗糙"
+                      : "调用 LLM 理解对话含义，生成精准标题，批量请求节省 token"}
+                  </div>
+                </div>
+
+                {namerMode === "llm" && (
+                  <div className="settings-group">
+                    <div className="settings-group-label">LLM 配置（OpenAI 兼容接口）</div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <span style={{ fontSize: "12px", width: "60px", color: "var(--text-secondary)" }}>URL</span>
+                        <input
+                          type="text"
+                          value={llmApiUrl}
+                          onChange={(e) => setLlmApiUrl(e.target.value)}
+                          placeholder="https://api.deepseek.com"
+                          style={{
+                            flex: 1, padding: "6px 10px", borderRadius: "6px",
+                            border: "1px solid var(--border-color)",
+                            backgroundColor: "var(--bg-terminal)", color: "var(--text-primary)",
+                            fontSize: "12px", outline: "none",
+                          }}
+                        />
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <span style={{ fontSize: "12px", width: "60px", color: "var(--text-secondary)" }}>Key</span>
+                        <input
+                          type="password"
+                          value={llmApiKey}
+                          onChange={(e) => setLlmApiKey(e.target.value)}
+                          placeholder="sk-..."
+                          style={{
+                            flex: 1, padding: "6px 10px", borderRadius: "6px",
+                            border: "1px solid var(--border-color)",
+                            backgroundColor: "var(--bg-terminal)", color: "var(--text-primary)",
+                            fontSize: "12px", outline: "none",
+                          }}
+                        />
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <span style={{ fontSize: "12px", width: "60px", color: "var(--text-secondary)" }}>模型</span>
+                        <input
+                          type="text"
+                          value={llmModel}
+                          onChange={(e) => setLlmModel(e.target.value)}
+                          placeholder="deepseek-v4-flash"
+                          style={{
+                            flex: 1, padding: "6px 10px", borderRadius: "6px",
+                            border: "1px solid var(--border-color)",
+                            backgroundColor: "var(--bg-terminal)", color: "var(--text-primary)",
+                            fontSize: "12px", outline: "none",
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="settings-group">
+                  <div className="settings-group-label">触发规则</div>
                   <div className="settings-switch-row">
                     <label className="switch-container">
                       <input
