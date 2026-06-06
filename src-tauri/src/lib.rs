@@ -909,6 +909,456 @@ fn get_claude_version() -> Result<String, String> {
     }
 }
 
+// ==================== 会话名称自动修正 (移植自 rename 项目) ====================
+
+/// 将系统路径编码为 Claude Code 的项目目录名格式
+/// 例如: D:\MyCode\KKCODER → D--MyCode-KKCODER
+fn encode_claude_project_path(path: &str) -> String {
+    path.replace(':', "-")
+        .replace('\\', "-")
+        .replace('/', "-")
+}
+
+/// 在 ~/.claude/projects/ 下查找指定 session 的 JSONL 文件
+fn find_claude_jsonl(agent_session_id: &str, project_path: &str) -> Option<std::path::PathBuf> {
+    let home = dirs::home_dir()?;
+    let projects_root = home.join(".claude").join("projects");
+    if !projects_root.is_dir() {
+        return None;
+    }
+
+    // 先尝试精确匹配编码后的路径
+    let encoded = encode_claude_project_path(project_path);
+    let exact_path = projects_root.join(&encoded).join(format!("{}.jsonl", agent_session_id));
+    if exact_path.is_file() {
+        return Some(exact_path);
+    }
+
+    // 精确匹配失败则扫描所有项目目录（兼容路径变化）
+    if let Ok(entries) = std::fs::read_dir(&projects_root) {
+        for entry in entries.flatten() {
+            if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            let jsonl = entry.path().join(format!("{}.jsonl", agent_session_id));
+            if jsonl.is_file() {
+                return Some(jsonl);
+            }
+        }
+    }
+    None
+}
+
+/// 从 JSONL 文件中读取用户消息（移植自 rename 的 claude_code adapter）
+fn read_claude_transcript(jsonl_path: &std::path::Path) -> Vec<(String, String)> {
+    let file = match std::fs::File::open(jsonl_path) {
+        Ok(f) => f,
+        Err(_) => return vec![],
+    };
+    use std::io::{BufRead, BufReader};
+    let reader = BufReader::new(file);
+    let mut msgs: Vec<(String, String)> = Vec::new(); // (role, text)
+    let mut last_user = String::new();
+
+    for line in reader.lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => continue,
+        };
+        // 快速跳过不相关的行
+        if !line.contains("\"user\"") && !line.contains("\"assistant\"") && !line.contains("\"last-prompt\"") {
+            continue;
+        }
+        let obj: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let typ = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if typ == "last-prompt" {
+            let prompt = obj.get("lastPrompt")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if !prompt.is_empty() && prompt != last_user {
+                msgs.push(("user".into(), prompt.clone()));
+                last_user = prompt;
+            }
+        } else if typ == "user" {
+            // Claude Code JSONL 格式: {"type":"user","message":{"role":"user","content":"..."},...}
+            let text = extract_message_content(&obj);
+            if !text.trim().is_empty() && text != last_user {
+                msgs.push(("user".into(), text.clone()));
+                last_user = text;
+            }
+        } else if typ == "assistant" {
+            let text = extract_assistant_text(&obj);
+            if !text.trim().is_empty() {
+                msgs.push(("assistant".into(), text));
+            }
+        }
+    }
+    msgs
+}
+
+/// 从 user 消息 JSON 中提取 content
+fn extract_message_content(obj: &serde_json::Value) -> String {
+    let message = match obj.get("message") {
+        Some(m) => m,
+        None => return String::new(),
+    };
+    let content = match message.get("content") {
+        Some(c) => c,
+        None => return String::new(),
+    };
+    if let Some(s) = content.as_str() {
+        return s.to_string();
+    }
+    if let Some(arr) = content.as_array() {
+        let parts: Vec<String> = arr.iter()
+            .filter_map(|block| {
+                if block.get("type")?.as_str()? == "text" {
+                    Some(block.get("text")?.as_str()?.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        return parts.join("\n");
+    }
+    String::new()
+}
+
+/// 从 assistant 消息 JSON 中提取纯文本
+fn extract_assistant_text(obj: &serde_json::Value) -> String {
+    let message = match obj.get("message") {
+        Some(m) => m,
+        None => return String::new(),
+    };
+    let content = match message.get("content") {
+        Some(c) => c,
+        None => return String::new(),
+    };
+    if let Some(s) = content.as_str() {
+        return s.to_string();
+    }
+    if let Some(arr) = content.as_array() {
+        let parts: Vec<String> = arr.iter()
+            .filter_map(|block| {
+                if block.get("type")?.as_str()? == "text" {
+                    Some(block.get("text")?.as_str()?.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        return parts.join("\n");
+    }
+    String::new()
+}
+
+// --- 启发式标题生成 (移植自 rename 的 heuristic namer) ---
+
+const TRIVIAL_WORDS: &[&str] = &[
+    "ok", "okay", "k", "yes", "no", "y", "n", "yep", "yeah", "sure", "thanks",
+    "thank you", "go", "go on", "continue", "next", "done", "good", "great",
+    "nice", "cool", "stop", "wait",
+    "好", "好的", "可以", "行", "继续", "嗯", "对", "是", "不", "没问题", "没事",
+    "谢谢", "好吧", "ok的", "嗯嗯", "对的", "是的", "停", "等等", "下一步",
+];
+
+const LEAD_FILLER: &[&str] = &[
+    "please", "pls", "can you", "could you", "help me",
+    "i want to", "i need to", "let's", "lets",
+    "now", "ok", "okay", "so", "then", "next",
+    "帮我", "请", "麻烦", "我想", "我要", "然后", "现在", "帮忙", "给我",
+];
+
+const TRAIL_STOP: &[&str] = &[
+    "the", "a", "an", "to", "of", "and", "or", "for", "in", "on", "with",
+    "at", "by", "is", "are", "be", "was", "were", "this", "that", "these",
+    "those", "my", "your", "our", "please", "just", "so", "then", "now", "it",
+];
+
+const CJK_TRAIL: &str = "的了吗呢吧啊呀嘛哦着呗咯";
+
+fn has_cjk(s: &str) -> bool {
+    s.chars().any(|c| c >= '\u{4e00}' && c <= '\u{9fff}')
+}
+
+fn is_trivial(text: &str) -> bool {
+    let t = text.trim().trim_matches(|c| " .!?。！？,，".contains(c));
+    if t.is_empty() || t.len() <= 1 {
+        return true;
+    }
+    let low = t.to_lowercase();
+    if TRIVIAL_WORDS.contains(&low.as_str()) {
+        return true;
+    }
+    if t.starts_with('/') && !t.contains(' ') {
+        return true;
+    }
+    false
+}
+
+/// 清洗文本：去掉代码块、标签、URL、路径等噪音
+fn clean_text(text: &str) -> String {
+    let mut t = text.to_string();
+
+    // 去掉 XML/HTML 标签
+    let tag_re = regex_lite::Regex::new(r"</?[a-z][a-z0-9-]*(?:\s[^>]*)?>").unwrap();
+    t = tag_re.replace_all(&t, " ").to_string();
+
+    // 去掉代码块
+    let code_re = regex_lite::Regex::new(r"(?s)```.*?```").unwrap();
+    t = code_re.replace_all(&t, " ").to_string();
+
+    // 去掉行内代码
+    let inline_re = regex_lite::Regex::new(r"`[^`]*`").unwrap();
+    t = inline_re.replace_all(&t, " ").to_string();
+
+    // 去掉 URL
+    let url_re = regex_lite::Regex::new(r"https?://\S+").unwrap();
+    t = url_re.replace_all(&t, " ").to_string();
+
+    // 去掉绝对路径
+    let path_re = regex_lite::Regex::new(r"(?:/[^\s/]+){2,}/?").unwrap();
+    t = path_re.replace_all(&t, " ").to_string();
+
+    // 合并空白
+    let ws_re = regex_lite::Regex::new(r"\s+").unwrap();
+    t = ws_re.replace_all(&t, " ").trim().to_string();
+
+    t
+}
+
+/// 将一条消息压缩成标题级别的短语
+fn condense(text: &str) -> String {
+    // 去掉前导斜杠命令
+    let slash_re = regex_lite::Regex::new(r"^/[a-zA-Z][\w-]*\s+").unwrap();
+    let mut first = slash_re.replace(text, "").trim().to_string();
+
+    // 按句号/问号/换行截断，取第一句
+    let clause_re = regex_lite::Regex::new(r"[。.!?！？\n;；:：]").unwrap();
+    if let Some(m) = clause_re.find(&first) {
+        first = first[..m.start()].trim().to_string();
+    }
+    if first.is_empty() {
+        first = text.trim().to_string();
+    }
+
+    // 去掉前导废话
+    for filler in LEAD_FILLER {
+        let prefix = format!("{} ", filler);
+        if first.to_lowercase().starts_with(&prefix.to_lowercase()) {
+            first = first[prefix.len()..].trim().to_string();
+            break;
+        }
+    }
+
+    // CJK 截断
+    if has_cjk(&first) {
+        let mut s: String = first.chars().take(20).collect();
+        while s.ends_with(|c: char| CJK_TRAIL.contains(c)) {
+            s.pop();
+        }
+        return s;
+    }
+
+    // 英文截断到 9 个词
+    let mut words: Vec<&str> = first.split_whitespace().collect();
+    if words.len() > 9 {
+        words.truncate(9);
+    }
+    // 去掉尾部停用词
+    while words.len() > 2 {
+        let last = words.last().unwrap().trim_matches(|c| ",.;:'\"".contains(c));
+        if TRAIL_STOP.contains(&last.to_lowercase().as_str()) {
+            words.pop();
+        } else {
+            break;
+        }
+    }
+    words.join(" ")
+}
+
+/// 启发式标题生成：从最后一条有实质内容的用户消息中提取标题
+fn heuristic_title(messages: &[(String, String)]) -> Option<String> {
+    // 过滤出非 trivial 的用户消息
+    let users: Vec<&str> = messages.iter()
+        .filter(|(role, text)| role == "user" && !is_trivial(text))
+        .map(|(_, text)| text.as_str())
+        .collect();
+
+    if users.is_empty() {
+        return None;
+    }
+
+    // 优先选最后一条 >= 12 字符的消息
+    let chosen = users.iter().rev()
+        .find(|t| clean_text(t).len() >= 12)
+        .or_else(|| users.last())?;
+
+    let cleaned = clean_text(chosen);
+    let condensed = condense(&cleaned);
+
+    if condensed.is_empty() || condensed.len() < 2 {
+        return None;
+    }
+
+    // 形状化：截断 + 首字母大写
+    let max_len = 60usize;
+    let mut title = if condensed.len() > max_len {
+        if has_cjk(&condensed) {
+            let mut s: String = condensed.chars().take(max_len - 1).collect();
+            s.push('…');
+            s
+        } else {
+            let cut = &condensed[..max_len];
+            let trimmed = cut.rsplit(' ').next().unwrap_or(cut);
+            format!("{}…", trimmed.trim_end())
+        }
+    } else {
+        condensed
+    };
+
+    // 首字母大写（非 CJK）
+    if !title.is_empty() {
+        let first_char = title.chars().next().unwrap();
+        if first_char.is_ascii_alphabetic() && !has_cjk(&title[..first_char.len_utf8()]) {
+            let upper = first_char.to_uppercase().to_string();
+            title = format!("{}{}", upper, &title[first_char.len_utf8()..]);
+        }
+    }
+
+    Some(title)
+}
+
+/// 单个会话的修正结果
+#[derive(Clone, serde::Serialize)]
+struct RenameResult {
+    session_id: String,
+    old_name: String,
+    new_name: String,
+    changed: bool,
+}
+
+/// 批量自动修正会话名称（后台线程执行，不阻塞 UI）
+#[tauri::command]
+async fn auto_rename_sessions(
+    skip_favorites: bool,
+    project_filter: Option<String>,
+) -> Result<Vec<RenameResult>, String> {
+    // 在后台线程执行所有 IO 操作
+    tokio::task::spawn_blocking(move || {
+        let db_path = get_db_path();
+        let conn = rusqlite::Connection::open(&db_path).map_err(|e| e.to_string())?;
+
+        let mut query = String::from(
+            "SELECT id, name, project, path, type, agent_session_id, favorite \
+             FROM sessions WHERE deleted = 0"
+        );
+        if skip_favorites {
+            query.push_str(" AND favorite = 0");
+        }
+        if let Some(ref proj) = project_filter {
+            query.push_str(&format!(" AND project = '{}'", proj.replace('\'', "''")));
+        }
+
+        let mut stmt = conn.prepare(&query).map_err(|e| e.to_string())?;
+        let sessions: Vec<Session> = stmt.query_map([], |row| {
+            Ok(Session {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                project: row.get(2)?,
+                path: row.get(3)?,
+                session_type: row.get(4)?,
+                agent_session_id: row.get(5)?,
+                created_at: None,
+                last_user_message_at: None,
+                favorite: row.get(6)?,
+                deleted: 0,
+                deleted_at: None,
+            })
+        }).map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+
+        let mut results = Vec::new();
+        let home = dirs::home_dir().map(|p| p.display().to_string()).unwrap_or_else(|| "NONE".into());
+        log_to_file(&format!("auto_rename: home_dir={}, found {} total sessions", home, sessions.len()));
+
+        for session in &sessions {
+            // 只处理 Claude 类型的会话
+            if session.session_type != "claude" {
+                log_to_file(&format!("auto_rename: skipping {} (type={})", session.id, session.session_type));
+                continue;
+            }
+
+            log_to_file(&format!("auto_rename: looking for JSONL: agent_id={}, path={}", session.agent_session_id, session.path));
+            let jsonl_path = match find_claude_jsonl(&session.agent_session_id, &session.path) {
+                Some(p) => {
+                    log_to_file(&format!("auto_rename: found JSONL at {:?}", p));
+                    p
+                },
+                None => {
+                    log_to_file(&format!("auto_rename: JSONL NOT FOUND for session {}", session.id));
+                    continue;
+                }
+            };
+
+            let transcript = read_claude_transcript(&jsonl_path);
+            log_to_file(&format!("auto_rename: read {} messages from transcript", transcript.len()));
+            if transcript.is_empty() {
+                continue;
+            }
+
+            let new_title = match heuristic_title(&transcript) {
+                Some(t) => {
+                    log_to_file(&format!("auto_rename: generated title '{}' for session {}", t, session.id));
+                    t
+                },
+                None => {
+                    log_to_file(&format!("auto_rename: heuristic returned None for session {}", session.id));
+                    continue;
+                }
+            };
+
+            // 标题没变就不更新
+            if new_title == session.name {
+                results.push(RenameResult {
+                    session_id: session.id.clone(),
+                    old_name: session.name.clone(),
+                    new_name: new_title,
+                    changed: false,
+                });
+                continue;
+            }
+
+            // 写入数据库
+            if let Err(e) = conn.execute(
+                "UPDATE sessions SET name = ?1 WHERE id = ?2",
+                rusqlite::params![new_title, session.id],
+            ) {
+                log_to_file(&format!("auto_rename error for {}: {}", session.id, e));
+                continue;
+            }
+
+            results.push(RenameResult {
+                session_id: session.id.clone(),
+                old_name: session.name.clone(),
+                new_name: new_title.clone(),
+                changed: true,
+            });
+        }
+
+        let changed_count = results.iter().filter(|r| r.changed).count();
+        log_to_file(&format!("auto_rename_sessions completed: {} sessions updated out of {} total", changed_count, results.len()));
+
+        Ok(results)
+    }).await.map_err(|e| format!("Task join error: {}", e))?
+}
+
 // ==================== 归档项目 Tauri Commands ====================
 
 // 归档项目
@@ -1073,7 +1523,8 @@ pub fn run() {
             check_if_paths_exist,
             archive_project,
             get_archived_projects,
-            restore_archived_project
+            restore_archived_project,
+            auto_rename_sessions
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

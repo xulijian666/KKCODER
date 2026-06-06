@@ -226,7 +226,7 @@ function App() {
       setSessionBusy(prev => ({ ...prev, [activeSessionId]: true }));
       invoke("write_to_terminal", { sessionId: activeSessionId, data: content + "\r\n" })
         .then(() => {
-          handleUserSubmittedInput(activeSessionId);
+          handleUserSubmittedInputWithRenameReset(activeSessionId);
         })
         .catch((err) => {
           log(`Failed to send shortcut phrase: ${err}`);
@@ -265,6 +265,61 @@ function App() {
     });
   };
 
+  // 空闲时自动修正会话名称（每 60 秒检查一次，空闲 5 分钟的会话触发修正）
+  const renamedSinceLastInputRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      if (localStorage.getItem("kkcoder_setting_auto_rename_idle") !== "true") return;
+
+      const now = Date.now();
+      const IDLE_MS = 5 * 60 * 1000; // 5 分钟
+      const skipFav = localStorage.getItem("kkcoder_setting_auto_rename_skip_favorites") !== "false";
+
+      // 找出空闲 >= 5 分钟且未被修正过的会话
+      const idleSessionIds: string[] = [];
+      for (const s of sessions) {
+        if (s.deleted || s.type !== "claude") continue;
+        if (skipFav && s.favorite) continue;
+        if (renamedSinceLastInputRef.current.has(s.id)) continue;
+        const lastActive = s.lastUserMessageAt ? new Date(s.lastUserMessageAt).getTime() : 0;
+        if (lastActive > 0 && now - lastActive >= IDLE_MS) {
+          idleSessionIds.push(s.id);
+        }
+      }
+
+      if (idleSessionIds.length === 0) return;
+
+      // 标记为已处理，避免重复触发
+      for (const id of idleSessionIds) {
+        renamedSinceLastInputRef.current.add(id);
+      }
+
+      log(`Idle auto-rename: ${idleSessionIds.length} sessions idle for 5+ minutes.`);
+      invoke<{ session_id: string; old_name: string; new_name: string; changed: boolean }[]>(
+        "auto_rename_sessions",
+        { skipFavorites: skipFav, projectFilter: null }
+      )
+        .then((results) => {
+          const changed = results.filter((r) => r.changed);
+          if (changed.length > 0) {
+            log(`Idle auto-rename: ${changed.length} sessions renamed.`);
+            invoke<Session[]>("get_sessions").then((updated) => {
+              if (updated) setSessions(updated);
+            }).catch(() => {});
+          }
+        })
+        .catch((err) => log(`Idle auto-rename failed: ${err}`));
+    }, 60000);
+
+    return () => window.clearInterval(interval);
+  }, [sessions]);
+
+  // 用户发消息时，清除该会话的"已修正"标记，允许下次空闲时再次修正
+  const handleUserSubmittedInputWithRenameReset = (sessionId: string, submittedAt?: string) => {
+    renamedSinceLastInputRef.current.delete(sessionId);
+    handleUserSubmittedInput(sessionId, submittedAt);
+  };
+
   const handleAddToQueue = () => {
     const trimmed = queueInput.trim();
     if (!trimmed) {
@@ -295,7 +350,7 @@ function App() {
       // 写入终端
       invoke("write_to_terminal", { sessionId: activeSessionId, data: nextTask.prompt + "\r\n" })
         .then(() => {
-          handleUserSubmittedInput(activeSessionId);
+          handleUserSubmittedInputWithRenameReset(activeSessionId);
           log(`[Queue] Successfully sent task to terminal. Removing from queue...`);
           setQueue(prev => prev.slice(1));
         })
@@ -547,6 +602,28 @@ function App() {
         setIsInitLoaded(true);
         scheduleClaudeVersionFetch();
         scheduleDeferredDiagnostics();
+
+        // 启动时自动修正会话名称（延迟执行，不阻塞 UI 加载）
+        if (localStorage.getItem("kkcoder_setting_auto_rename_startup") === "true") {
+          window.setTimeout(() => {
+            const skipFav = localStorage.getItem("kkcoder_setting_auto_rename_skip_favorites") !== "false";
+            invoke<{ session_id: string; old_name: string; new_name: string; changed: boolean }[]>(
+              "auto_rename_sessions",
+              { skipFavorites: skipFav, projectFilter: null }
+            )
+              .then((results) => {
+                const changed = results.filter((r) => r.changed);
+                if (changed.length > 0) {
+                  log(`Startup auto-rename: ${changed.length} sessions renamed.`);
+                  // 重新加载会话列表以反映新名称
+                  invoke<Session[]>("get_sessions").then((updated) => {
+                    if (updated) setSessions(updated);
+                  }).catch(() => {});
+                }
+              })
+              .catch((err) => log(`Startup auto-rename failed: ${err}`));
+          }, 3000); // 延迟 3 秒，确保 UI 完全加载
+        }
       })
       .catch((err) => {
         log(`Failed to fetch sessions from SQLite: ${err}`);
@@ -1372,7 +1449,7 @@ function App() {
                       }}
                       isActive={isActive}
                       onCommandComplete={() => handleCommandComplete(s.id)}
-                      onUserSubmittedInput={handleUserSubmittedInput}
+                      onUserSubmittedInput={handleUserSubmittedInputWithRenameReset}
                       onRenameSession={handleRenameSession}
                     />
                     {sessionBusy[s.id] && (
@@ -1540,6 +1617,11 @@ function App() {
       <SettingsModal
         show={showSettings}
         onClose={() => setShowSettings(false)}
+        onSessionsRenamed={() => {
+          invoke<Session[]>("get_sessions")
+            .then((data) => { if (data) setSessions(data); })
+            .catch(() => {});
+        }}
       />
 
       {/* 📝 Markdown 编辑器弹窗组件 */}

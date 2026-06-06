@@ -8,12 +8,25 @@ import {
   SESSION_CLEANUP_ENABLED_KEY,
 } from "../utils/sessionCleanup";
 
+// 会话名称修正 localStorage keys
+const AUTO_RENAME_ON_STARTUP_KEY = "kkcoder_setting_auto_rename_startup";
+const AUTO_RENAME_ON_IDLE_KEY = "kkcoder_setting_auto_rename_idle";
+const AUTO_RENAME_SKIP_FAVORITES_KEY = "kkcoder_setting_auto_rename_skip_favorites";
+
+interface RenameResult {
+  session_id: string;
+  old_name: string;
+  new_name: string;
+  changed: boolean;
+}
+
 interface SettingsModalProps {
   show: boolean;
   onClose: () => void;
+  onSessionsRenamed?: () => void; // 修正完成后刷新会话列表
 }
 
-export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose }) => {
+export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onSessionsRenamed }) => {
   const [activeMenu, setActiveMenu] = useState<"general" | "sessions" | "about">("general");
 
   // 播放提示音效预览（不显示通知气泡）
@@ -94,6 +107,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose }) =
     ];
   });
 
+  // --- 会话名称修正设置 ---
+  const [autoRenameOnStartup, setAutoRenameOnStartup] = useState<boolean>(() => {
+    return localStorage.getItem(AUTO_RENAME_ON_STARTUP_KEY) === "true";
+  });
+  const [autoRenameOnIdle, setAutoRenameOnIdle] = useState<boolean>(() => {
+    return localStorage.getItem(AUTO_RENAME_ON_IDLE_KEY) === "true";
+  });
+  const [autoRenameSkipFavorites, setAutoRenameSkipFavorites] = useState<boolean>(() => {
+    const val = localStorage.getItem(AUTO_RENAME_SKIP_FAVORITES_KEY);
+    return val === null ? true : val === "true";
+  });
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [lastRenameResult, setLastRenameResult] = useState<string | null>(null);
+
 
   // --- 2. 写入各项设置至 localStorage ---
   useEffect(() => {
@@ -166,6 +193,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose }) =
     localStorage.setItem("kkcoder_shortcuts_list", JSON.stringify(shortcutsList));
     window.dispatchEvent(new Event("kkcoder-shortcuts-change"));
   }, [shortcutsList]);
+
+  useEffect(() => {
+    localStorage.setItem(AUTO_RENAME_ON_STARTUP_KEY, String(autoRenameOnStartup));
+  }, [autoRenameOnStartup]);
+
+  useEffect(() => {
+    localStorage.setItem(AUTO_RENAME_ON_IDLE_KEY, String(autoRenameOnIdle));
+  }, [autoRenameOnIdle]);
+
+  useEffect(() => {
+    localStorage.setItem(AUTO_RENAME_SKIP_FAVORITES_KEY, String(autoRenameSkipFavorites));
+  }, [autoRenameSkipFavorites]);
 
 
   // 监听键盘 ESC 键关闭设置弹窗
@@ -286,6 +325,34 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose }) =
   };
 
   if (!show) return null;
+
+  // 手动触发修正
+  const handleManualRename = async () => {
+    if (isRenaming) return;
+    setIsRenaming(true);
+    setLastRenameResult(null);
+    try {
+      const results = await invoke<RenameResult[]>("auto_rename_sessions", {
+        skipFavorites: autoRenameSkipFavorites,
+        projectFilter: null,
+      });
+      const changed = results.filter((r) => r.changed).length;
+      const total = results.length;
+      if (changed === 0) {
+        setLastRenameResult(`扫描了 ${total} 个会话，所有名称已是最新`);
+      } else {
+        setLastRenameResult(`已修正 ${changed} / ${total} 个会话名称`);
+      }
+      // 通知父组件刷新会话列表
+      if (changed > 0 && onSessionsRenamed) {
+        onSessionsRenamed();
+      }
+    } catch (err) {
+      setLastRenameResult(`修正失败: ${err}`);
+    } finally {
+      setIsRenaming(false);
+    }
+  };
 
   return (
     <div className="modal-overlay show" onClick={onClose}>
@@ -689,6 +756,68 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose }) =
                   </div>
                   <div className="settings-helper-text">
                     默认 {DEFAULT_SESSION_CLEANUP_DAYS} 天；只会移动到垃圾桶，可在 7 天内恢复。
+                  </div>
+                </div>
+
+                {/* 分割线 */}
+                <div style={{ borderTop: "1px solid var(--border-color)", margin: "16px 0" }} />
+
+                {/* 会话名称修正 */}
+                <div className="settings-group">
+                  <div className="settings-group-label">会话名称修正</div>
+                  <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "12px", lineHeight: "1.6" }}>
+                    根据对话内容自动修正会话名称，无需 API Key，纯本地处理。
+                  </div>
+                  <div className="settings-switch-row">
+                    <label className="switch-container">
+                      <input
+                        type="checkbox"
+                        checked={autoRenameOnStartup}
+                        onChange={(e) => setAutoRenameOnStartup(e.target.checked)}
+                      />
+                      <span className="switch-slider"></span>
+                    </label>
+                    <span className="switch-label">启动时自动修正</span>
+                  </div>
+                  <div className="settings-switch-row">
+                    <label className="switch-container">
+                      <input
+                        type="checkbox"
+                        checked={autoRenameOnIdle}
+                        onChange={(e) => setAutoRenameOnIdle(e.target.checked)}
+                      />
+                      <span className="switch-slider"></span>
+                    </label>
+                    <span className="switch-label">会话空闲 5 分钟后自动修正</span>
+                  </div>
+                  <div className="settings-switch-row">
+                    <label className="switch-container">
+                      <input
+                        type="checkbox"
+                        checked={autoRenameSkipFavorites}
+                        onChange={(e) => setAutoRenameSkipFavorites(e.target.checked)}
+                      />
+                      <span className="switch-slider"></span>
+                    </label>
+                    <span className="switch-label">跳过收藏的会话</span>
+                  </div>
+                </div>
+
+                <div className="settings-group">
+                  <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                    <button
+                      className="settings-toggle-btn active"
+                      onClick={handleManualRename}
+                      disabled={isRenaming}
+                      style={{ minWidth: "120px", opacity: isRenaming ? 0.6 : 1 }}
+                    >
+                      {isRenaming ? "修正中..." : "立即修正全部"}
+                    </button>
+                    {lastRenameResult && (
+                      <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                        {lastRenameResult}
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
