@@ -96,6 +96,7 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
   // 0. 用于自动命名的用户输入累积 buffer
   const userInputBufferRef = useRef<string>("");
   const autoTitleDoneStorageKey = `kkcoder_session_auto_title_done_${sessionId}`;
+  const isPastingRef = useRef(false);
 
   // 1. 用于还原粘贴内容的缓存 Ref
   const pastedTextsRef = useRef<Record<number, string>>({});
@@ -496,6 +497,15 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
     // 3. 监听前端的键盘按键并将 keystroke 发送到 Rust PTY
     log("Binding term.onData to write_to_terminal...");
     const onDataDisposable = term.onData((data) => {
+      // 粘贴操作不触发提交检测，换行符仅作为普通输入传递给终端
+      if (isPastingRef.current) {
+        isPastingRef.current = false;
+        invoke("write_to_terminal", { sessionId, data }).catch((err) => {
+          log(`write_to_terminal error: ${err}`);
+        });
+        return;
+      }
+
       // 累积用户的实际输入到 buffer：兼容中文 IME、粘贴、多字符批量提交，并过滤控制序列。
       const capturedInput = captureUserInputData(userInputBufferRef.current, data);
       userInputBufferRef.current = capturedInput.buffer;
@@ -665,6 +675,7 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
     // 注册系统级粘贴静默盾牌，彻底防范任何 WebView2 原生 edit 命令引发的双份粘贴或非预期落盘事件
     const handlePaste = (e: ClipboardEvent) => {
       log("Native paste event captured in silent shield. Silencing standard insertion...");
+      isPastingRef.current = true;
       e.preventDefault();
       e.stopPropagation();
     };

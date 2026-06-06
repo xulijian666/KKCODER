@@ -30,11 +30,16 @@ export function captureUserInputData(buffer: string, data: string): CapturedUser
   const cleanData = stripAnsi(data);
 
   for (const char of cleanData) {
-    if (char === "\r" || char === "\n") {
+    if (char === "\r") {
       if (!submitted) {
         submitted = true;
         submittedInput = nextBuffer;
       }
+      continue;
+    }
+
+    // 粘贴的换行符不作为提交触发，也不加入 buffer
+    if (char === "\n") {
       continue;
     }
 
