@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   formatRelativeSessionActivityTime,
-  sortProjectEntriesByActivityDesc,
   sortSessionsByActivityDesc,
 } from "../utils/sessionActivity";
 
@@ -373,9 +372,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
     .map((fp) => fp.name);
   const regularProjNames = projectNames.filter((name) => !favProjNames.includes(name));
 
-  const regularSortedEntries = sortProjectEntriesByActivityDesc(
-    regularProjNames.map((name) => [name, projectsMap[name]] as [string, { path: string; sessions: Session[] }])
-  );
+  const regularSortedEntries = [...regularProjNames.map((name) => [name, projectsMap[name]] as [string, { path: string; sessions: Session[] }])]
+    .sort((left, right) => {
+      const leftEarliest = Math.min(...left[1].sessions.map((s) => new Date(s.createdAt || 0).getTime()));
+      const rightEarliest = Math.min(...right[1].sessions.map((s) => new Date(s.createdAt || 0).getTime()));
+      return leftEarliest - rightEarliest;
+    });
   const sortedProjectNames = [...favProjNames, ...regularSortedEntries.map(([name]) => name)];
 
   // 6. 行内编辑操作
