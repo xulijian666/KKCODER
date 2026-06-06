@@ -1291,35 +1291,42 @@ async fn auto_rename_sessions(
         for session in &sessions {
             // 只处理 Claude 类型的会话
             if session.session_type != "claude" {
-                log_to_file(&format!("auto_rename: skipping {} (type={})", session.id, session.session_type));
                 continue;
             }
 
-            log_to_file(&format!("auto_rename: looking for JSONL: agent_id={}, path={}", session.agent_session_id, session.path));
             let jsonl_path = match find_claude_jsonl(&session.agent_session_id, &session.path) {
-                Some(p) => {
-                    log_to_file(&format!("auto_rename: found JSONL at {:?}", p));
-                    p
-                },
+                Some(p) => p,
                 None => {
-                    log_to_file(&format!("auto_rename: JSONL NOT FOUND for session {}", session.id));
+                    results.push(RenameResult {
+                        session_id: session.id.clone(),
+                        old_name: session.name.clone(),
+                        new_name: session.name.clone(),
+                        changed: false,
+                    });
                     continue;
                 }
             };
 
             let transcript = read_claude_transcript(&jsonl_path);
-            log_to_file(&format!("auto_rename: read {} messages from transcript", transcript.len()));
             if transcript.is_empty() {
+                results.push(RenameResult {
+                    session_id: session.id.clone(),
+                    old_name: session.name.clone(),
+                    new_name: session.name.clone(),
+                    changed: false,
+                });
                 continue;
             }
 
             let new_title = match heuristic_title(&transcript) {
-                Some(t) => {
-                    log_to_file(&format!("auto_rename: generated title '{}' for session {}", t, session.id));
-                    t
-                },
+                Some(t) => t,
                 None => {
-                    log_to_file(&format!("auto_rename: heuristic returned None for session {}", session.id));
+                    results.push(RenameResult {
+                        session_id: session.id.clone(),
+                        old_name: session.name.clone(),
+                        new_name: session.name.clone(),
+                        changed: false,
+                    });
                     continue;
                 }
             };
@@ -1421,6 +1428,7 @@ async fn llm_rename_sessions(
         // 2. 为每个会话准备摘要（只处理有新内容的会话）
         let mut session_summaries: Vec<(String, String, String)> = Vec::new(); // (id, name, summary)
         let mut skipped_no_change = 0usize;
+        let mut all_results: Vec<RenameResult> = Vec::new(); // 包含跳过的会话
         for session in &sessions {
             let jsonl_path = match find_claude_jsonl(&session.agent_session_id, &session.path) {
                 Some(p) => p,
@@ -1436,6 +1444,12 @@ async fn llm_rename_sessions(
                             .as_secs_f64();
                         if mtime <= last_time {
                             skipped_no_change += 1;
+                            all_results.push(RenameResult {
+                                session_id: session.id.clone(),
+                                old_name: session.name.clone(),
+                                new_name: session.name.clone(),
+                                changed: false,
+                            });
                             continue;
                         }
                     }
@@ -1480,8 +1494,8 @@ async fn llm_rename_sessions(
         }
 
         if session_summaries.is_empty() {
-            log_to_file("llm_rename: no sessions with transcripts found");
-            return Ok(vec![]);
+            log_to_file(&format!("llm_rename: no sessions with new content ({} skipped, {} total)", skipped_no_change, all_results.len()));
+            return Ok(all_results);
         }
 
         log_to_file(&format!("llm_rename: prepared {} session summaries (skipped {} with no new content), calling LLM...",
@@ -1616,10 +1630,12 @@ async fn llm_rename_sessions(
             });
         }
 
-        let changed_count = results.iter().filter(|r| r.changed).count();
-        log_to_file(&format!("llm_rename: completed, {} titles updated out of {}", changed_count, results.len()));
+        // 合并跳过的会话和实际修正的会话
+        all_results.extend(results);
+        let changed_count = all_results.iter().filter(|r| r.changed).count();
+        log_to_file(&format!("llm_rename: completed, {} titles updated out of {} total ({} skipped)", changed_count, all_results.len(), skipped_no_change));
 
-        Ok(results)
+        Ok(all_results)
     }).await.map_err(|e| format!("Task join error: {}", e))?
 }
 
