@@ -793,7 +793,31 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       ▼
                     </span>
                     <span style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
-                      <svg className="folder-svg-icon" xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="#EAB308" stroke="#EAB308" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.95 }}><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+                      <span 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleToggleFavoriteProject(projName, e);
+                        }}
+                        className="project-folder-toggle"
+                        style={{ display: "inline-flex", alignItems: "center", cursor: "pointer" }}
+                        title={isProjectFavorited ? "取消收藏" : "收藏项目"}
+                      >
+                        <svg
+                          className="folder-svg-icon"
+                          xmlns="http://www.w3.org/2000/svg"
+                          width="13"
+                          height="13"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke={isProjectFavorited ? "var(--color-primary)" : "var(--text-secondary)"}
+                          strokeWidth="2.0"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          style={{ opacity: 0.95, transition: "stroke 0.15s ease" }}
+                        >
+                          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                        </svg>
+                      </span>
                       <span>{projName}</span>
                     </span>
                     {isProjectFavorited && (
@@ -802,15 +826,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   </div>
                   
                   <div style={{ display: "flex", alignItems: "center", gap: "8px" }} onClick={(e) => e.stopPropagation()}>
-                    <div className="project-actions">
-                      <button
-                        className={`project-star-btn ${isProjectFavorited ? "active" : ""}`}
-                        onClick={(e) => handleToggleFavoriteProject(projName, e)}
-                        title={isProjectFavorited ? "取消收藏项目" : "收藏项目"}
-                      >
-                        {isProjectFavorited ? "★" : "☆"}
-                      </button>
-                    </div>
                     <span className="project-session-count">
                       {proj.sessions.length}
                     </span>

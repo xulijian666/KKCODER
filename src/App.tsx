@@ -877,6 +877,8 @@ function App() {
       root.style.setProperty("--text-secondary", "#94a3b8");
       root.style.setProperty("--color-primary", "#3b82f6");
       root.style.setProperty("--color-primary-hover", "#2563eb");
+      root.style.setProperty("--color-orange", "#f97316");
+      root.style.setProperty("--color-orange-light", "rgba(249, 115, 22, 0.15)");
       root.style.setProperty("--bg-active-item", "#1e293b");
       root.style.setProperty("--text-active-item", "#ffffff");
       root.style.setProperty("--bg-hover-item", "rgba(59, 130, 246, 0.15)");
@@ -892,6 +894,8 @@ function App() {
       root.style.setProperty("--text-secondary", "#b7a8d6");
       root.style.setProperty("--color-primary", "#8b5cf6");
       root.style.setProperty("--color-primary-hover", "#7c3aed");
+      root.style.setProperty("--color-orange", "#f97316");
+      root.style.setProperty("--color-orange-light", "rgba(249, 115, 22, 0.15)");
       root.style.setProperty("--bg-active-item", "#2f2647");
       root.style.setProperty("--text-active-item", "#ffffff");
       root.style.setProperty("--bg-hover-item", "rgba(139, 92, 246, 0.15)");
@@ -907,6 +911,8 @@ function App() {
       root.style.setProperty("--text-secondary", "#cbd5e1");
       root.style.setProperty("--color-primary", "#d97706");
       root.style.setProperty("--color-primary-hover", "#b55c04");
+      root.style.setProperty("--color-orange", "#d97706");
+      root.style.setProperty("--color-orange-light", "rgba(217, 119, 6, 0.15)");
       root.style.setProperty("--bg-active-item", "#383227");
       root.style.setProperty("--text-active-item", "#ffffff");
       root.style.setProperty("--bg-hover-item", "rgba(245, 158, 11, 0.15)");
@@ -922,6 +928,8 @@ function App() {
       root.style.setProperty("--text-secondary", "#0284c7");
       root.style.setProperty("--color-primary", "#0284c7");
       root.style.setProperty("--color-primary-hover", "#0369a1");
+      root.style.setProperty("--color-orange", "#f97316");
+      root.style.setProperty("--color-orange-light", "#fff7ed");
       root.style.setProperty("--bg-active-item", "#e0f2fe");
       root.style.setProperty("--text-active-item", "#0369a1");
       root.style.setProperty("--bg-hover-item", "rgba(2, 132, 199, 0.08)");
@@ -937,6 +945,8 @@ function App() {
       root.style.setProperty("--text-secondary", "#ea580c");
       root.style.setProperty("--color-primary", "#c2410c");
       root.style.setProperty("--color-primary-hover", "#9a3412");
+      root.style.setProperty("--color-orange", "#ea580c");
+      root.style.setProperty("--color-orange-light", "#fff7ed");
       root.style.setProperty("--bg-active-item", "#ffedd5");
       root.style.setProperty("--text-active-item", "#7c2d12");
       root.style.setProperty("--bg-hover-item", "rgba(234, 88, 12, 0.08)");
@@ -952,6 +962,8 @@ function App() {
       root.style.setProperty("--text-secondary", "#64748b");
       root.style.setProperty("--color-primary", "#2563eb");
       root.style.setProperty("--color-primary-hover", "#1d4ed8");
+      root.style.setProperty("--color-orange", "#f97316");
+      root.style.setProperty("--color-orange-light", "#fff7ed");
       root.style.setProperty("--bg-active-item", "#dbeafe");
       root.style.setProperty("--text-active-item", "#1e40af");
       root.style.setProperty("--bg-hover-item", "rgba(59, 130, 246, 0.08)");

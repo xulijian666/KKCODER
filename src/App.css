@@ -2652,3 +2652,8 @@ input:checked + .switch-slider:before {
 .no-native-spinners {
   -moz-appearance: textfield;
 }
+
+/* 项目文件夹图标交互样式 */
+.project-folder-toggle:hover .folder-svg-icon {
+  stroke: var(--color-primary-hover) !important;
+}
