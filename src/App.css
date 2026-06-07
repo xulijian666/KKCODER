@@ -3148,9 +3148,9 @@ input:checked + .switch-slider:before {
 .diff-status-btn {
   height: 22px;
   padding: 3px 8px;
-  background-color: transparent;
-  border: 1px solid var(--border-color);
-  color: var(--text-secondary);
+  background-color: transparent !important;
+  border: none !important;
+  color: var(--text-secondary) !important;
   border-radius: 4px;
   cursor: pointer;
   display: flex;
@@ -3159,18 +3159,16 @@ input:checked + .switch-slider:before {
   font-size: 11px;
   font-weight: 500;
   transition: var(--transition-smooth);
+  box-shadow: none !important;
 }
 
 .diff-status-btn:hover {
-  background-color: var(--bg-hover-item);
-  color: var(--text-primary);
-  border-color: var(--text-secondary);
+  background-color: var(--bg-hover-item) !important;
+  color: var(--text-primary) !important;
 }
 
 .diff-status-btn.active {
   color: var(--color-orange) !important;
-  border-color: rgba(249, 115, 22, 0.4) !important;
-  background-color: var(--color-orange-light) !important;
 }
 
 .diff-status-btn:active {

@@ -1783,7 +1783,7 @@ function App() {
                       <line x1="16" y1="13" x2="8" y2="13"></line>
                       <line x1="16" y1="17" x2="8" y2="17"></line>
                     </svg>
-                    <span>变更</span>
+                    <span>会话变更</span>
                     {modifiedFiles.length > 0 && (
                       <span className="queue-badge" style={{ backgroundColor: "#ef4444" }}>
                         {modifiedFiles.length}
