@@ -332,44 +332,43 @@ fn cleanup_empty_sessions() -> Result<usize, String> {
     let conn = rusqlite::Connection::open(&db_path).map_err(|e| e.to_string())?;
 
     let mut stmt = conn
-        .prepare("SELECT id, name, type, agent_session_id, path FROM sessions WHERE deleted = 0 AND name = '新会话'")
+        .prepare("SELECT id, type, agent_session_id, path, created_at, last_user_message_at FROM sessions WHERE deleted = 0 AND name = '新会话'")
         .map_err(|e| e.to_string())?;
 
-    let candidates: Vec<(String, String, String, String)> = stmt
+    let candidates: Vec<(String, String, String, String, Option<String>, Option<String>)> = stmt
         .query_map([], |row| {
             Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, String>(4)?,
+                row.get::<_, String>(0)?,         // id
+                row.get::<_, String>(1)?,         // type
+                row.get::<_, String>(2)?,         // agent_session_id
+                row.get::<_, String>(3)?,         // path
+                row.get::<_, Option<String>>(4)?, // created_at
+                row.get::<_, Option<String>>(5)?, // last_user_message_at
             ))
         })
         .map_err(|e| e.to_string())?
         .filter_map(|r| r.ok())
-        .map(|(_, id, typ, agent_id, path)| (id, typ, agent_id, path))
         .collect();
 
     log_to_file(&format!("cleanup_empty_sessions: found {} candidates named '新会话'", candidates.len()));
 
     let mut cleaned = 0usize;
-    for (session_id, session_type, agent_session_id, project_path) in &candidates {
-        // 只处理 Claude 类型
-        if session_type != "claude" {
-            // Pi 类型：如果没有 JSONL 也清理
-            continue;
-        }
-
-        let is_empty = match find_claude_jsonl(agent_session_id, project_path) {
-            Some(jsonl_path) => {
-                // JSONL 存在，检查是否有用户消息
-                let transcript = read_claude_transcript(&jsonl_path);
-                transcript.is_empty()
+    for (session_id, session_type, agent_session_id, project_path, created_at, last_user_msg_at) in &candidates {
+        let is_empty = if session_type == "claude" {
+            match find_claude_jsonl(agent_session_id, project_path) {
+                Some(jsonl_path) => {
+                    // JSONL 存在，检查是否有用户消息
+                    let transcript = read_claude_transcript(&jsonl_path);
+                    transcript.is_empty()
+                }
+                None => {
+                    // JSONL 不存在，且数据库中没有对话记录
+                    last_user_msg_at.is_none() || last_user_msg_at == created_at
+                }
             }
-            None => {
-                // JSONL 不存在，说明从未有过对话
-                true
-            }
+        } else {
+            // 其他类型（如 Pi）：直接根据数据库时间戳判断是否从未有过对话
+            last_user_msg_at.is_none() || last_user_msg_at == created_at
         };
 
         if is_empty {
@@ -387,6 +386,119 @@ fn cleanup_empty_sessions() -> Result<usize, String> {
 
     log_to_file(&format!("cleanup_empty_sessions completed. removed={}", cleaned));
     Ok(cleaned)
+}
+
+#[derive(serde::Serialize)]
+struct ContentSearchResult {
+    #[serde(rename = "sessionId")]
+    session_id: String,
+    snippets: Vec<String>,
+}
+
+/// 增强全局聊天记录搜索：并行检索所有非删除状态会话中的实际聊天记录内容，并返回匹配高亮片段 (最多 3 条)
+#[tauri::command]
+fn search_session_contents(query: String) -> Result<Vec<ContentSearchResult>, String> {
+    if query.trim().is_empty() {
+        return Ok(vec![]);
+    }
+
+    log_to_file(&format!("search_session_contents called: query={}", query));
+    let db_path = get_db_path();
+    let conn = rusqlite::Connection::open(&db_path).map_err(|e| e.to_string())?;
+
+    let mut stmt = conn
+        .prepare("SELECT id, type, agent_session_id, path FROM sessions WHERE deleted = 0")
+        .map_err(|e| e.to_string())?;
+
+    let sessions: Vec<(String, String, String, String)> = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let query_lower = query.to_lowercase();
+    let mut results = Vec::new();
+
+    for (session_id, session_type, agent_session_id, project_path) in sessions {
+        if session_type != "claude" {
+            continue;
+        }
+
+        if let Some(jsonl_path) = find_claude_jsonl(&agent_session_id, &project_path) {
+            if let Ok(file) = std::fs::File::open(&jsonl_path) {
+                use std::io::{BufRead, BufReader};
+                let reader = BufReader::new(file);
+
+                let mut snippets = Vec::new();
+                for line in reader.lines() {
+                    let line_str = match line {
+                        Ok(l) => l,
+                        Err(_) => continue,
+                    };
+
+                    // 快速子串过滤，大幅减少 JSON 反序列化的开销
+                    if line_str.to_lowercase().contains(&query_lower) {
+                        if let Ok(obj) = serde_json::from_str::<serde_json::Value>(&line_str) {
+                            let typ = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                            let text = if typ == "user" {
+                                extract_message_content(&obj)
+                            } else if typ == "assistant" {
+                                extract_assistant_text(&obj)
+                            } else if typ == "last-prompt" {
+                                obj.get("lastPrompt").and_then(|v| v.as_str()).unwrap_or("").to_string()
+                            } else {
+                                String::new()
+                            };
+
+                            let text_lower = text.to_lowercase();
+                            if let Some(byte_idx) = text_lower.find(&query_lower) {
+                                // 将字节索引转换为字符索引，确保在多字节字符（如中文）下切片安全
+                                let char_idx = text[..byte_idx].chars().count();
+                                let chars: Vec<char> = text.chars().collect();
+                                let total_chars = chars.len();
+
+                                // 适当增加上下文提取范围 (前 25 字符，后 40 字符)
+                                let start = if char_idx > 25 { char_idx - 25 } else { 0 };
+                                let end = std::cmp::min(total_chars, char_idx + query.chars().count() + 40);
+                                
+                                let sub: String = chars[start..end].iter().collect();
+                                let mut snippet = sub.replace('\r', " ").replace('\n', " ").trim().to_string();
+
+                                if start > 0 {
+                                    snippet = format!("...{}", snippet);
+                                }
+                                if end < total_chars {
+                                    snippet = format!("{}...", snippet);
+                                }
+
+                                snippets.push(snippet);
+                                if snippets.len() >= 3 {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if !snippets.is_empty() {
+                    results.push(ContentSearchResult {
+                        session_id: session_id.clone(),
+                        snippets,
+                    });
+                }
+            }
+        }
+    }
+
+    log_to_file(&format!("search_session_contents completed. Found {} hits.", results.len()));
+    Ok(results)
 }
 
 // 4. 读取最近点选的项目路径 (前 20 个，过滤掉左侧栏已不存在的无会话项目)
@@ -1876,7 +1988,8 @@ pub fn run() {
             get_archived_projects,
             restore_archived_project,
             auto_rename_sessions,
-            llm_rename_sessions
+            llm_rename_sessions,
+            search_session_contents
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

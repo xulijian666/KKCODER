@@ -78,6 +78,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
     const val = localStorage.getItem("kkcoder_setting_font_size");
     return val === null ? 13.5 : parseFloat(val);
   });
+  const [scrollback, setScrollback] = useState<number>(() => {
+    const val = localStorage.getItem("kkcoder_setting_scrollback");
+    return val === null ? 10000 : parseInt(val, 10);
+  });
   const [sessionCleanupEnabled, setSessionCleanupEnabled] = useState<boolean>(() => {
     return localStorage.getItem(SESSION_CLEANUP_ENABLED_KEY) === "true";
   });
@@ -202,6 +206,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
   useEffect(() => {
     localStorage.setItem(SESSION_CLEANUP_ENABLED_KEY, String(sessionCleanupEnabled));
   }, [sessionCleanupEnabled]);
+
+  useEffect(() => {
+    localStorage.setItem("kkcoder_setting_scrollback", String(scrollback));
+  }, [scrollback]);
 
   useEffect(() => {
     localStorage.setItem(SESSION_CLEANUP_DAYS_KEY, String(normalizeSessionCleanupDays(sessionCleanupDays)));
@@ -437,7 +445,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
             className={`settings-menu-item ${activeMenu === "sessions" ? "active" : ""}`}
             onClick={() => setActiveMenu("sessions")}
           >
-            会话管理
+            终端设置
           </button>
           <button
             className={`settings-menu-item ${activeMenu === "about" ? "active" : ""}`}
@@ -452,7 +460,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
           {/* 头部标题与关闭按钮 */}
           <div className="settings-header">
             <span className="settings-title">
-              {activeMenu === "general" ? "通用" : activeMenu === "sessions" ? "会话管理" : "关于"}
+              {activeMenu === "general" ? "通用" : activeMenu === "sessions" ? "终端设置" : "关于"}
             </span>
             <button className="settings-close" onClick={onClose}>
               ×
@@ -791,6 +799,146 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
 
             ) : activeMenu === "sessions" ? (
               <div className="settings-content">
+                {/* 1. 回滚行数 */}
+                <div className="settings-group">
+                  <div className="settings-group-label" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                    <span>回滚行数</span>
+                    <span style={{ fontSize: "11px", color: "var(--text-secondary)", fontWeight: "normal" }}>
+                      （终端可回看的最大行数，重启会话生效）
+                    </span>
+                  </div>
+                  <div style={{
+                    position: "relative",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    width: "160px",
+                  }}>
+                    <input
+                      type="number"
+                      min="1000"
+                      max="100000"
+                      step="10000"
+                      value={scrollback || ""}
+                      onChange={(e) => {
+                        const val = parseInt(e.target.value, 10);
+                        setScrollback(isNaN(val) ? 0 : val);
+                      }}
+                      onBlur={() => {
+                        let val = scrollback;
+                        if (isNaN(val) || val < 1000) val = 1000;
+                        if (val > 100000) val = 100000;
+                        setScrollback(val);
+                      }}
+                      className="no-native-spinners"
+                      style={{
+                        width: "100%",
+                        padding: "6px 32px 6px 10px",
+                        borderRadius: "6px",
+                        border: "1px solid var(--border-color)",
+                        backgroundColor: "var(--bg-input)",
+                        color: "var(--text-primary)",
+                        fontSize: "13px",
+                        outline: "none",
+                        transition: "border-color var(--transition-smooth)",
+                      }}
+                      onFocus={(e) => {
+                        e.target.style.borderColor = "var(--color-primary)";
+                      }}
+                      onBlurCapture={(e) => {
+                        e.target.style.borderColor = "var(--border-color)";
+                      }}
+                    />
+                    <div style={{
+                      position: "absolute",
+                      right: "1px",
+                      top: "1px",
+                      bottom: "1px",
+                      width: "24px",
+                      display: "flex",
+                      flexDirection: "column",
+                      borderLeft: "1px solid var(--border-color)",
+                      borderTopRightRadius: "5px",
+                      borderBottomRightRadius: "5px",
+                      overflow: "hidden",
+                    }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setScrollback((prev) => {
+                            let next = prev + 10000;
+                            if (next > 100000) next = 100000;
+                            if (next < 1000) next = 1000;
+                            return next;
+                          });
+                        }}
+                        style={{
+                          flex: 1,
+                          border: "none",
+                          background: "none",
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          color: "var(--text-secondary)",
+                          padding: 0,
+                          fontSize: "8px",
+                          outline: "none",
+                          transition: "background-color 0.1s, color 0.1s",
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = "var(--bg-hover-item)";
+                          e.currentTarget.style.color = "var(--text-primary)";
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = "transparent";
+                          e.currentTarget.style.color = "var(--text-secondary)";
+                        }}
+                      >
+                        ▲
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setScrollback((prev) => {
+                            let next = prev - 10000;
+                            if (next < 1000) next = 1000;
+                            if (next > 100000) next = 100000;
+                            return next;
+                          });
+                        }}
+                        style={{
+                          flex: 1,
+                          border: "none",
+                          borderTop: "1px solid var(--border-color)",
+                          background: "none",
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          color: "var(--text-secondary)",
+                          padding: 0,
+                          fontSize: "8px",
+                          outline: "none",
+                          transition: "background-color 0.1s, color 0.1s",
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = "var(--bg-hover-item)";
+                          e.currentTarget.style.color = "var(--text-primary)";
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = "transparent";
+                          e.currentTarget.style.color = "var(--text-secondary)";
+                        }}
+                      >
+                        ▼
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 分割线 */}
+                <div style={{ borderTop: "1px solid var(--border-color)", margin: "8px 0" }} />
+
                 <div className="settings-group">
                   <div className="settings-group-label">定时清理</div>
                   <div className="settings-switch-row">

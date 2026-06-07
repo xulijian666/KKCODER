@@ -36,6 +36,7 @@ export interface Session {
   deleted?: number;   // 0 代表活动，1 代表回收站
   deletedAt?: string; // 保存软删除时间戳
   isTemp?: boolean;
+  matchSnippets?: string[]; // 搜索高亮的聊天记录匹配片段 (最多 3 条)
 }
 
 export interface ArchivedProject {
@@ -147,6 +148,41 @@ export const Sidebar: React.FC<SidebarProps> = ({
       window.removeEventListener("mousedown", handleClickOutside);
     };
   }, [showArchive]);
+
+  // 增加全局内容搜索相关的状态与防抖请求
+  const [isContentSearch, setIsContentSearch] = useState<boolean>(false);
+  const [contentSearchResults, setContentSearchResults] = useState<Record<string, string[]>>({});
+  const [hoveredSession, setHoveredSession] = useState<{
+    session: Session;
+    top: number;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!isContentSearch || !searchQuery.trim()) {
+      setContentSearchResults({});
+      return;
+    }
+
+    const delayDebounceFn = setTimeout(() => {
+      invoke<Array<{ sessionId: string; snippets: string[] }>>("search_session_contents", {
+        query: searchQuery,
+      })
+        .then((results) => {
+          const map: Record<string, string[]> = {};
+          if (results) {
+            results.forEach((r) => {
+              map[r.sessionId] = r.snippets;
+            });
+          }
+          setContentSearchResults(map);
+        })
+        .catch((err) => {
+          console.error("Content search failed:", err);
+        });
+    }, 250); // 250ms 防抖
+
+    return () => clearTimeout(delayDebounceFn);
+  }, [searchQuery, isContentSearch]);
 
   // 加载归档项目列表
   const loadArchivedProjects = async () => {
@@ -339,16 +375,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const filteredSessions = sessions.filter((s) => s.type === selectedAgent && s.deleted !== 1 && !s.isTemp);
 
   filteredSessions.forEach((s) => {
-    const matchesSearch =
+    const matchesTitle = searchQuery ? (
       s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       s.project.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      s.path.toLowerCase().includes(searchQuery.toLowerCase());
+      s.path.toLowerCase().includes(searchQuery.toLowerCase())
+    ) : true;
 
-    if (matchesSearch) {
+    const matchedContentSnippets = isContentSearch ? contentSearchResults[s.id] : undefined;
+    const matchesContent = !!matchedContentSnippets && matchedContentSnippets.length > 0;
+
+    const isMatched = !searchQuery || matchesTitle || matchesContent;
+
+    if (isMatched) {
       if (!projectsMap[s.project]) {
         projectsMap[s.project] = { path: s.path, sessions: [] };
       }
-      projectsMap[s.project].sessions.push(s);
+      const sessionWithSnippet = (matchedContentSnippets && matchedContentSnippets.length > 0)
+        ? { ...s, matchSnippets: matchedContentSnippets } 
+        : s;
+      projectsMap[s.project].sessions.push(sessionWithSnippet);
     }
   });
 
@@ -356,13 +401,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
     project.sessions = sortSessionsByActivityDesc(project.sessions);
   });
 
-  // 提取收藏的会话
+  // 提取收藏的会话并附加匹配片段
   const favoriteSessions = sortSessionsByActivityDesc(
-    filteredSessions.filter((s) => s.favorite === 1 && (
-      s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      s.project.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      s.path.toLowerCase().includes(searchQuery.toLowerCase())
-    ))
+    filteredSessions
+      .filter((s) => s.favorite === 1)
+      .filter((s) => {
+        const matchesTitle = searchQuery ? (
+          s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          s.project.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          s.path.toLowerCase().includes(searchQuery.toLowerCase())
+        ) : true;
+        const matchedContentSnippets = isContentSearch ? contentSearchResults[s.id] : undefined;
+        return !searchQuery || matchesTitle || (!!matchedContentSnippets && matchedContentSnippets.length > 0);
+      })
+      .map((s) => {
+        const matchedContentSnippets = isContentSearch ? contentSearchResults[s.id] : undefined;
+        return (matchedContentSnippets && matchedContentSnippets.length > 0) 
+          ? { ...s, matchSnippets: matchedContentSnippets } 
+          : s;
+      })
   );
 
   // 按照收藏时间置顶项目，后收藏的在前面
@@ -436,6 +493,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
             onHighlightEnd();
           }
         }}
+        onMouseEnter={(e) => {
+          if (isContentSearch && searchQuery && session.matchSnippets && session.matchSnippets.length > 0) {
+            const rect = e.currentTarget.getBoundingClientRect();
+            setHoveredSession({
+              session,
+              top: rect.top,
+            });
+          }
+        }}
+        onMouseLeave={() => {
+          setHoveredSession(null);
+        }}
       >
         <div className="session-content">
           {/* 状态指示器：回答完成且非活动时展示黄色点提醒，否则：加载到右侧点亮(亮绿)，休眠状态(淡灰绿) */}
@@ -461,19 +530,37 @@ export const Sidebar: React.FC<SidebarProps> = ({
               onClick={(e) => e.stopPropagation()}
             />
           ) : (
-            <span 
-              className={`session-name-text ${isGlowing ? "glowing-text" : ""}`}
-              style={{ 
-                textOverflow: "ellipsis", 
-                overflow: "hidden", 
-                whiteSpace: "nowrap",
-                fontSize: "12.5px",
-                flex: 1,
-                minWidth: 0
-              }}
-            >
-              {session.name}
-            </span>
+            <div style={{ display: "flex", flexDirection: "column", overflow: "hidden", flex: 1, minWidth: 0 }}>
+              <span 
+                className={`session-name-text ${isGlowing ? "glowing-text" : ""}`}
+                style={{ 
+                  textOverflow: "ellipsis", 
+                  overflow: "hidden", 
+                  whiteSpace: "nowrap",
+                  fontSize: "12.5px"
+                }}
+              >
+                {session.name}
+              </span>
+              {isContentSearch && searchQuery && session.matchSnippets && session.matchSnippets.length > 0 && (
+                <span 
+                  className="session-match-snippet"
+                  style={{
+                    fontSize: "10.5px",
+                    color: isActive ? "rgba(255,255,255,0.6)" : "var(--text-muted)",
+                    textOverflow: "ellipsis",
+                    overflow: "hidden",
+                    whiteSpace: "nowrap",
+                    marginTop: "2px",
+                    fontFamily: "var(--font-mono)",
+                    letterSpacing: "-0.2px"
+                  }}
+                  title={session.matchSnippets[0]}
+                >
+                  {session.matchSnippets[0]}
+                </span>
+              )}
+            </div>
           )}
         </div>
 
@@ -584,7 +671,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
 
         {/* 快速搜索框 */}
-        <div className="search-container">
+        <div className="search-container" style={{ display: "flex", alignItems: "center", position: "relative" }}>
           <svg
             className="search-icon"
             width="14"
@@ -602,10 +689,50 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <input
             type="text"
             className={`search-input ${selectedAgent === "pi" ? "pi-focus" : ""}`}
-            placeholder="搜索本地会话项目..."
+            style={{ paddingRight: selectedAgent === "claude" ? "34px" : "12px" }}
+            placeholder={isContentSearch ? "✨ 全局搜索聊天记录内容..." : "搜索本地会话项目..."}
             value={searchQuery}
             onChange={(e) => onSearchQueryChange(e.target.value)}
           />
+          {selectedAgent === "claude" && (
+            <button
+              className={`search-enhance-btn ${isContentSearch ? "active" : ""}`}
+              onClick={() => setIsContentSearch(!isContentSearch)}
+              title={isContentSearch ? "切换为普通标题搜索" : "全局聊天内容搜索 (✨)"}
+              style={{
+                position: "absolute",
+                right: "8px",
+                top: "50%",
+                transform: "translateY(-50%)",
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: isContentSearch ? "var(--color-primary)" : "var(--text-secondary)",
+                transition: "var(--transition-smooth)",
+                padding: "4px",
+                borderRadius: "4px"
+              }}
+            >
+              <svg 
+                width="14" 
+                height="14" 
+                viewBox="0 0 24 24" 
+                fill="none" 
+                stroke="currentColor" 
+                strokeWidth="2.5" 
+                strokeLinecap="round" 
+                strokeLinejoin="round"
+              >
+                <circle cx="11" cy="11" r="8"></circle>
+                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                <line x1="8" y1="9" x2="14" y2="9"></line>
+                <line x1="8" y1="13" x2="12" y2="13"></line>
+              </svg>
+            </button>
+          )}
         </div>
       </div>
 
@@ -1140,6 +1267,77 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         );
       })()}
+
+      {/* 全局内容搜索悬浮卡片面板 */}
+      {hoveredSession && (
+        <div 
+          className="search-match-popover"
+          style={{
+            position: "fixed",
+            left: `${(width !== undefined ? width : 300) + 8}px`,
+            top: `${hoveredSession.top}px`,
+            zIndex: 2000,
+            width: "320px",
+            backgroundColor: "var(--bg-sidebar)",
+            backdropFilter: "blur(8px)",
+            border: "1px solid var(--border-color)",
+            borderRadius: "var(--radius-md)",
+            boxShadow: "0 6px 16px rgba(0, 0, 0, 0.4), 0 2px 4px rgba(0, 0, 0, 0.2)",
+            padding: "10px 12px",
+            animation: "fadeInSmooth 0.15s cubic-bezier(0.16, 1, 0.3, 1)",
+            pointerEvents: "none",
+          }}
+        >
+          <div style={{
+            fontSize: "11px",
+            fontWeight: 700,
+            color: "var(--text-secondary)",
+            textTransform: "uppercase",
+            letterSpacing: "0.5px",
+            marginBottom: "8px",
+            borderBottom: "1px solid var(--border-color)",
+            paddingBottom: "6px"
+          }}>
+            ✨ 匹配记录 (最多展示 3 条)
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            {hoveredSession.session.matchSnippets?.slice(0, 3).map((snippet, idx) => (
+              <div 
+                key={idx} 
+                style={{
+                  fontSize: "11.5px",
+                  color: "var(--text-primary)",
+                  lineHeight: "1.5",
+                  fontFamily: "var(--font-mono)",
+                  wordBreak: "break-all",
+                  paddingBottom: idx < 2 && idx < (hoveredSession.session.matchSnippets?.length || 0) - 1 ? "8px" : "0",
+                  borderBottom: idx < 2 && idx < (hoveredSession.session.matchSnippets?.length || 0) - 1 ? "1px dashed var(--border-color)" : "none"
+                }}
+              >
+                {highlightKeyword(snippet, searchQuery)}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </aside>
   );
+};
+
+const escapeRegExp = (str: string) => {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+};
+
+const highlightKeyword = (text: string, keyword: string) => {
+  if (!keyword) return text;
+  try {
+    const parts = text.split(new RegExp(`(${escapeRegExp(keyword)})`, "gi"));
+    return parts.map((part, index) => 
+      part.toLowerCase() === keyword.toLowerCase()
+        ? <strong key={index} style={{ color: "var(--color-primary)", fontWeight: 600 }}>{part}</strong>
+        : part
+    );
+  } catch (e) {
+    return text;
+  }
 };

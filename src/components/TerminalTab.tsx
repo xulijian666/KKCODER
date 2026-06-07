@@ -196,7 +196,16 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
     const savedSize = savedSizeStr ? parseFloat(savedSizeStr) : 13.5;
     const initialColors = getTerminalThemeColors(savedTheme);
 
+    const savedScrollbackStr = localStorage.getItem("kkcoder_setting_scrollback");
+    let savedScrollback = savedScrollbackStr ? parseInt(savedScrollbackStr, 10) : 10000;
+    if (isNaN(savedScrollback) || savedScrollback < 1000) {
+      savedScrollback = 1000;
+    } else if (savedScrollback > 100000) {
+      savedScrollback = 100000;
+    }
+
     const term = new Terminal({
+      scrollback: savedScrollback, // 根据设置读取终端可回看的最大行数
       cursorBlink: true,
       fontSize: savedSize,
       fontFamily: `${savedFont}, Fira Code, Consolas, Monaco, monospace`,

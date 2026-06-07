@@ -1232,7 +1232,7 @@ body {
 .settings-group-label {
   font-size: 13.5px;
   font-weight: 600;
-  color: #334155;
+  color: var(--text-primary);
 }
 
 /* 主题选择网格 */
@@ -2641,4 +2641,14 @@ input:checked + .switch-slider:before {
 
 .context-menu-item.archive-btn:hover {
   background-color: rgba(249, 115, 22, 0.1);
+}
+
+/* 隐藏数字输入框默认的上下箭头按钮 */
+.no-native-spinners::-webkit-inner-spin-button,
+.no-native-spinners::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.no-native-spinners {
+  -moz-appearance: textfield;
 }
