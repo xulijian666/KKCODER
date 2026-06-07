@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use tauri::{State, AppHandle, Emitter};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize, MasterPty};
 use std::io::Write;
+use notify_debouncer_mini::{new_debouncer, Debouncer};
+use notify::RecommendedWatcher;
 
 // 极其可靠的本地调试文件日志输出器，自动写入 kkcoder_debug.log 以便于闪退后追溯
 fn log_to_file(message: &str) {
@@ -30,6 +32,16 @@ struct ActiveSession {
 #[derive(Default)]
 pub struct PtyManager {
     sessions: Arc<Mutex<HashMap<String, ActiveSession>>>,
+}
+
+pub struct FileWatcherManager {
+    watchers: Mutex<HashMap<String, Debouncer<RecommendedWatcher>>>,
+}
+
+impl Default for FileWatcherManager {
+    fn default() -> Self {
+        Self { watchers: Mutex::new(HashMap::new()) }
+    }
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -82,6 +94,15 @@ fn get_db_path() -> std::path::PathBuf {
     path.push("kkcoder.db");
     path
 }
+
+// 获取特定会话的缓存备份目录 (放置于系统临时目录，避免触发 Tauri 开发模式下的热重载)
+fn get_shadows_dir(session_id: &str) -> std::path::PathBuf {
+    let mut path = std::env::temp_dir();
+    path.push("kkcoder_shadows");
+    path.push(session_id);
+    path
+}
+
 
 // 初始化本地 SQLite 数据库表结构
 fn initialize_database() -> Result<(), rusqlite::Error> {
@@ -279,6 +300,12 @@ fn delete_session_permanently(id: String) -> Result<(), String> {
     let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM sessions WHERE id = ?1", [&id])
         .map_err(|e| e.to_string())?;
+    
+    // 清理对应的 shadow 文件夹
+    let shadows_dir = get_shadows_dir(&id);
+    if shadows_dir.exists() {
+        let _ = std::fs::remove_dir_all(&shadows_dir);
+    }
     Ok(())
 }
 
@@ -299,6 +326,21 @@ fn empty_trash() -> Result<(), String> {
     log_to_file("empty_trash command called.");
     let db_path = get_db_path();
     let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    
+    // 获取所有待删除会话的 ID 并清理对应的 shadow 文件夹
+    if let Ok(mut stmt) = conn.prepare("SELECT id FROM sessions WHERE deleted = 1") {
+        if let Ok(deleted_ids) = stmt.query_map([], |row| row.get::<_, String>(0)) {
+            for id_res in deleted_ids {
+                if let Ok(id) = id_res {
+                    let shadows_dir = get_shadows_dir(&id);
+                    if shadows_dir.exists() {
+                        let _ = std::fs::remove_dir_all(&shadows_dir);
+                    }
+                }
+            }
+        }
+    }
+
     conn.execute("DELETE FROM sessions WHERE deleted = 1", [])
         .map_err(|e| e.to_string())?;
     Ok(())
@@ -554,6 +596,52 @@ fn open_project_folder(path: String) -> Result<(), String> {
     }
 }
 
+// 6b. 打开终端中检测到的文件路径 (如果是文件则打开其所在的父目录)
+#[tauri::command]
+fn open_terminal_path(path: String) -> Result<(), String> {
+    use std::path::Path;
+    let p = Path::new(&path);
+    if p.exists() {
+        let dir = if p.is_file() {
+            p.parent().unwrap_or(p)
+        } else {
+            p
+        };
+        #[cfg(target_os = "windows")]
+        {
+            std::process::Command::new("explorer")
+                .arg(dir)
+                .spawn()
+                .map_err(|e| e.to_string())?;
+            return Ok(());
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = dir;
+            return Err("该操作系统暂不支持直接打开文件夹".to_string());
+        }
+    } else {
+        // 路径不存在时，检查其父目录是否存在
+        if let Some(parent) = p.parent() {
+            if parent.exists() {
+                #[cfg(target_os = "windows")]
+                {
+                    std::process::Command::new("explorer")
+                        .arg(parent)
+                        .spawn()
+                        .map_err(|e| e.to_string())?;
+                    return Ok(());
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    return Err("该操作系统暂不支持直接打开文件夹".to_string());
+                }
+            }
+        }
+    }
+    Err("指定路径及其父目录均不存在".to_string())
+}
+
 // 7. 拉起本地虚拟终端并运行 Agent (重连会话自动键入 /resume 恢复上下文)
 #[tauri::command]
 fn spawn_terminal(
@@ -596,6 +684,15 @@ fn spawn_terminal(
         return Err(err_msg);
     }
     log_to_file("spawn_terminal directory exists and is a valid directory.");
+
+    // 在后台线程中初始化会话级代码差分快照，不阻塞终端创建
+    {
+        let sid = session_id.clone();
+        let dir = directory.clone();
+        std::thread::spawn(move || {
+            let _ = init_session_diff(sid, dir);
+        });
+    }
 
     log_to_file("Obtaining native PTY system...");
     let pty_system = native_pty_system();
@@ -1896,13 +1993,754 @@ fn restore_archived_project(id: i32) -> Result<String, String> {
     Ok(sessions_data)
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct FileDiff {
+    path: String,
+    original: String,
+    current: String,
+    status: String, // "added" | "deleted" | "modified"
+}
+
+// 创建用于递归获取非 Git 项目中所有文件的辅助函数
+fn get_non_git_files(
+    dir: &std::path::Path,
+    current_dir: &std::path::Path,
+    files: &mut Vec<std::path::PathBuf>,
+) {
+    if files.len() > 1000 {
+        return;
+    }
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries {
+            if let Ok(entry) = entry {
+                let path = entry.path();
+                let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                if file_name.starts_with('.') && file_name != ".gitignore" {
+                    continue;
+                }
+                if file_name == "node_modules"
+                    || file_name == "venv"
+                    || file_name == "env"
+                    || file_name == "dist"
+                    || file_name == "build"
+                    || file_name == "target"
+                {
+                    continue;
+                }
+                if path.is_dir() {
+                    get_non_git_files(&path, current_dir, files);
+                } else if path.is_file() {
+                    if let Ok(rel) = path.strip_prefix(current_dir) {
+                        files.push(rel.to_path_buf());
+                    }
+                }
+            }
+        }
+    }
+}
+
+// 创建用于运行 git 命令的辅助函数，在 Windows 下隐藏控制台黑框
+fn create_git_command(proj_path: &std::path::Path, args: &[&str]) -> std::process::Command {
+    let mut cmd = std::process::Command::new("git");
+    cmd.arg("-c").arg("core.quotepath=false");
+    cmd.args(args).current_dir(proj_path);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    cmd
+}
+
+// 初始化会话代码对比快照
+#[tauri::command]
+fn init_session_diff(session_id: String, project_path: String) -> Result<(), String> {
+    log_to_file(&format!("init_session_diff called: session_id={}, project_path={}", session_id, project_path));
+    
+    let proj_path = std::path::Path::new(&project_path);
+    if !proj_path.exists() {
+        return Err("Project path does not exist".to_string());
+    }
+
+    // 确定 shadow 备份文件夹路径
+    let shadows_dir = get_shadows_dir(&session_id);
+
+    // 如果快照目录已存在，跳过初始化，保留历史基准
+    if shadows_dir.exists() {
+        log_to_file(&format!("Shadow folder already exists for session {}, skipping init", session_id));
+        return Ok(());
+    }
+
+    std::fs::create_dir_all(&shadows_dir).map_err(|e| e.to_string())?;
+
+    let is_git = create_git_command(&proj_path, &["rev-parse", "--is-inside-work-tree"])
+        .output()
+        .map(|out| out.status.success() && String::from_utf8_lossy(&out.stdout).trim() == "true")
+        .unwrap_or(false);
+
+    // 将 is_git 缓存到 .session_meta.json，后续轮询直接读取，避免每次 spawn 进程
+    let meta_json = format!("{{\"is_git\": {}}}", is_git);
+    let _ = std::fs::write(shadows_dir.join(".session_meta.json"), meta_json);
+
+    let mut pre_existing = Vec::<String>::new();
+
+    if is_git {
+        // 执行 git status --porcelain 获取会话前的脏文件列表
+        let git_status = create_git_command(&proj_path, &["status", "--porcelain"]).output();
+
+        match git_status {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                for line in stdout.lines() {
+                    if line.len() > 3 {
+                        let status_code = &line[..2];
+                        let mut file_path = line[3..].trim().to_string();
+                        if file_path.starts_with('"') && file_path.ends_with('"') {
+                            file_path = file_path[1..file_path.len()-1].to_string();
+                        }
+                        if status_code.contains('R') {
+                            if let Some(pos) = file_path.find(" -> ") {
+                                file_path = file_path[pos + 4..].trim().to_string();
+                                if file_path.starts_with('"') && file_path.ends_with('"') {
+                                    file_path = file_path[1..file_path.len()-1].to_string();
+                                }
+                            }
+                        }
+                        
+                        let full_file_path = proj_path.join(&file_path);
+                        if full_file_path.exists() && full_file_path.is_file() {
+                            if let Ok(content) = std::fs::read_to_string(&full_file_path) {
+                                let dest_path = shadows_dir.join(&file_path);
+                                if let Some(parent) = dest_path.parent() {
+                                    let _ = std::fs::create_dir_all(parent);
+                                }
+                                if std::fs::write(&dest_path, content).is_ok() {
+                                    pre_existing.push(file_path);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                log_to_file(&format!("git status failed during init: {}", e));
+            }
+        }
+    } else {
+        log_to_file("Project is not a git repository, using non-git fallback");
+        let mut files = Vec::new();
+        get_non_git_files(&proj_path, &proj_path, &mut files);
+
+        // 记录每个文件的原始大小，用于 summary_only 模式下的快速变化检测
+        let mut file_sizes: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+
+        for file_path in files {
+            let full_file_path = proj_path.join(&file_path);
+            // 先读取内容（文本文件）
+            if let Ok(content) = std::fs::read_to_string(&full_file_path) {
+                let file_path_str = file_path.to_string_lossy().replace('\\', "/");
+                let dest_path = shadows_dir.join(&file_path_str);
+                if let Some(parent) = dest_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let size = content.len() as u64;
+                if std::fs::write(&dest_path, &content).is_ok() {
+                    pre_existing.push(file_path_str.clone());
+                    file_sizes.insert(file_path_str, size);
+                }
+            }
+        }
+
+        // 持久化文件大小元数据，供后续轮询快速比对
+        if let Ok(sizes_json) = serde_json::to_string(&file_sizes) {
+            let _ = std::fs::write(shadows_dir.join(".file_sizes.json"), sizes_json);
+        }
+    }
+
+    // 保存 pre_existing.json 清单
+    let pre_existing_json = serde_json::to_string(&pre_existing).unwrap_or_else(|_| "[]".to_string());
+    let manifest_path = shadows_dir.join("pre_existing.json");
+    std::fs::write(&manifest_path, pre_existing_json).map_err(|e| e.to_string())?;
+
+    log_to_file(&format!("init_session_diff completed. Backed up {} files.", pre_existing.len()));
+    Ok(())
+}
+
+// 获取会话级增量修改 (summary_only 为 true 时只返回文件状态，不包含庞大的文件内容，大幅提升轮询效率)
+#[tauri::command]
+fn get_session_diff(session_id: String, project_path: String, summary_only: Option<bool>) -> Result<Vec<FileDiff>, String> {
+    log_to_file(&format!("get_session_diff called: session_id={}, project_path={}, summary_only={:?}", session_id, project_path, summary_only));
+    
+    let proj_path = std::path::Path::new(&project_path);
+    if !proj_path.exists() {
+        return Err("Project path does not exist".to_string());
+    }
+
+    let shadows_dir = get_shadows_dir(&session_id);
+
+    // 读取 pre_existing.json 清单
+    let pre_existing_path = shadows_dir.join("pre_existing.json");
+    let pre_existing: Vec<String> = if pre_existing_path.exists() {
+        let content = std::fs::read_to_string(&pre_existing_path).unwrap_or_else(|_| "[]".to_string());
+        serde_json::from_str(&content).unwrap_or_else(|_| Vec::new())
+    } else {
+        Vec::new()
+    };
+
+    // 从缓存的 .session_meta.json 读取 is_git，避免每次轮询 spawn git 进程
+    let meta_path = shadows_dir.join(".session_meta.json");
+    let is_git = if meta_path.exists() {
+        let meta_str = std::fs::read_to_string(&meta_path).unwrap_or_default();
+        meta_str.contains("\"is_git\": true") || meta_str.contains("\"is_git\":true")
+    } else {
+        // 元数据文件不存在（旧会话兼容）：回退到 git rev-parse
+        create_git_command(&proj_path, &["rev-parse", "--is-inside-work-tree"])
+            .output()
+            .map(|out| out.status.success() && String::from_utf8_lossy(&out.stdout).trim() == "true")
+            .unwrap_or(false)
+    };
+
+    if !is_git {
+        log_to_file("get_session_diff: using non-git fallback");
+        let summary = summary_only.unwrap_or(false);
+        let mut diffs = Vec::<FileDiff>::new();
+
+        if summary {
+            // summary_only 模式：读取 .file_sizes.json，用文件大小快速判断是否变化
+            // 避免 shadow mtime 比对的错误（shadow 文件 mtime 总比原始文件新）
+            let sizes_path = shadows_dir.join(".file_sizes.json");
+            let orig_sizes: std::collections::HashMap<String, u64> = if sizes_path.exists() {
+                let s = std::fs::read_to_string(&sizes_path).unwrap_or_default();
+                serde_json::from_str(&s).unwrap_or_default()
+            } else {
+                std::collections::HashMap::new()
+            };
+
+            for file_path_str in &pre_existing {
+                let norm_path = file_path_str.replace('\\', "/");
+                let full_file_path = proj_path.join(file_path_str);
+                if !full_file_path.exists() {
+                    diffs.push(FileDiff {
+                        path: file_path_str.clone(),
+                        original: String::new(),
+                        current: String::new(),
+                        status: "deleted".to_string(),
+                    });
+                    continue;
+                }
+                // 先比大小（O(1)），大小变了直接判定为已修改
+                let current_size = std::fs::metadata(&full_file_path).map(|m| m.len()).unwrap_or(u64::MAX);
+                let orig_size = orig_sizes.get(&norm_path).copied().unwrap_or(u64::MAX - 1);
+                let changed = if current_size != orig_size {
+                    true
+                } else {
+                    // 大小相同则读内容对比（只在这里读，不是每个文件都读）
+                    let shadow_content = std::fs::read_to_string(shadows_dir.join(file_path_str)).unwrap_or_default();
+                    let curr_content = std::fs::read_to_string(&full_file_path).unwrap_or_default();
+                    shadow_content != curr_content
+                };
+                if changed {
+                    diffs.push(FileDiff {
+                        path: file_path_str.clone(),
+                        original: String::new(),
+                        current: String::new(),
+                        status: "modified".to_string(),
+                    });
+                }
+            }
+            // 检查新增文件：只列目录，不读内容
+            let mut current_files = Vec::new();
+            get_non_git_files(&proj_path, &proj_path, &mut current_files);
+            for file in current_files {
+                let file_path_str = file.to_string_lossy().replace('\\', "/").to_string();
+                if !pre_existing.contains(&file_path_str) && !pre_existing.contains(&file.to_string_lossy().to_string()) {
+                    diffs.push(FileDiff {
+                        path: file_path_str,
+                        original: String::new(),
+                        current: String::new(),
+                        status: "added".to_string(),
+                    });
+                }
+            }
+        } else {
+            // 完整内容模式（点击文件时触发）
+            let mut current_files = Vec::new();
+            get_non_git_files(&proj_path, &proj_path, &mut current_files);
+
+            for file in current_files {
+                let file_path_str = file.to_string_lossy().to_string();
+                let full_file_path = proj_path.join(&file);
+                let is_pre_existing = pre_existing.contains(&file_path_str);
+
+                let original_content = if is_pre_existing {
+                    std::fs::read_to_string(shadows_dir.join(&file_path_str)).unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                let current_content = std::fs::read_to_string(&full_file_path).unwrap_or_default();
+
+                if original_content == current_content { continue; }
+
+                let status_str = if original_content.is_empty() { "added" } else { "modified" }.to_string();
+                diffs.push(FileDiff { path: file_path_str, original: original_content, current: current_content, status: status_str });
+            }
+            for file_path_str in &pre_existing {
+                if !proj_path.join(file_path_str).exists() {
+                    let original_content = std::fs::read_to_string(shadows_dir.join(file_path_str)).unwrap_or_default();
+                    if !original_content.is_empty() {
+                        diffs.push(FileDiff { path: file_path_str.clone(), original: original_content, current: String::new(), status: "deleted".to_string() });
+                    }
+                }
+            }
+        }
+
+        return Ok(diffs);
+    }
+
+    let mut diffs = Vec::<FileDiff>::new();
+    let summary = summary_only.unwrap_or(false);
+
+    // 运行 git status --porcelain
+    let git_status = create_git_command(&proj_path, &["status", "--porcelain"])
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    let stdout = String::from_utf8_lossy(&git_status.stdout);
+    for line in stdout.lines() {
+        if line.len() > 3 {
+            let status_code = &line[..2];
+            let mut file_path = line[3..].trim().to_string();
+            if file_path.starts_with('"') && file_path.ends_with('"') {
+                file_path = file_path[1..file_path.len()-1].to_string();
+            }
+            if status_code.contains('R') {
+                if let Some(pos) = file_path.find(" -> ") {
+                    file_path = file_path[pos + 4..].trim().to_string();
+                    if file_path.starts_with('"') && file_path.ends_with('"') {
+                        file_path = file_path[1..file_path.len()-1].to_string();
+                    }
+                }
+            }
+
+            let full_file_path = proj_path.join(&file_path);
+            if full_file_path.is_dir() {
+                continue;
+            }
+
+            let original_content: String;
+            let current_content: String;
+            let status_str: String;
+
+            let is_pre_existing = pre_existing.contains(&file_path);
+
+            if summary {
+                if is_pre_existing {
+                    let shadow_file = shadows_dir.join(&file_path);
+                    let orig = std::fs::read_to_string(&shadow_file).unwrap_or_default();
+                    let curr = if full_file_path.exists() {
+                        std::fs::read_to_string(&full_file_path).unwrap_or_default()
+                    } else {
+                        String::new()
+                    };
+                    if orig == curr {
+                        continue;
+                    }
+                    status_str = if orig.is_empty() && !curr.is_empty() {
+                        "added".to_string()
+                    } else if !orig.is_empty() && curr.is_empty() {
+                        "deleted".to_string()
+                    } else {
+                        "modified".to_string()
+                    };
+                } else {
+                    status_str = if status_code.contains("??") {
+                        "added".to_string()
+                    } else if status_code.contains('D') || status_code.starts_with('D') {
+                        "deleted".to_string()
+                    } else {
+                        "modified".to_string()
+                    };
+                }
+                diffs.push(FileDiff {
+                    path: file_path,
+                    original: String::new(),
+                    current: String::new(),
+                    status: status_str,
+                });
+                continue;
+            }
+
+            if is_pre_existing {
+                // 如果是会话前已改动的文件，原始内容取自 shadow 快照
+                let shadow_file = shadows_dir.join(&file_path);
+                original_content = std::fs::read_to_string(&shadow_file).unwrap_or_default();
+            } else {
+                // 如果是会话前干净的文件：
+                if status_code.contains("??") {
+                    // 本次会话新建的文件
+                    original_content = String::new();
+                } else {
+                    // 本次会话修改的原本干净文件，从 Git index 获取
+                    let git_show = create_git_command(&proj_path, &["show", &format!(":{}", file_path)]).output();
+                    
+                    match git_show {
+                        Ok(out) if out.status.success() => {
+                            original_content = String::from_utf8_lossy(&out.stdout).into_owned();
+                        }
+                        _ => {
+                            let git_show_head = create_git_command(&proj_path, &["show", &format!("HEAD:{}", file_path)]).output();
+                            if let Ok(out) = git_show_head {
+                                original_content = String::from_utf8_lossy(&out.stdout).into_owned();
+                            } else {
+                                original_content = String::new();
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 获取最新磁盘内容
+            if full_file_path.exists() {
+                current_content = std::fs::read_to_string(&full_file_path).unwrap_or_default();
+            } else {
+                current_content = String::new();
+            }
+
+            // 若内容完全一致，代表在本次会话中未产生改动
+            if original_content == current_content {
+                continue;
+            }
+
+            // 判断增删改状态
+            if original_content.is_empty() && !current_content.is_empty() {
+                status_str = "added".to_string();
+            } else if !original_content.is_empty() && current_content.is_empty() {
+                status_str = "deleted".to_string();
+            } else {
+                status_str = "modified".to_string();
+            }
+
+            diffs.push(FileDiff {
+                path: file_path,
+                original: original_content,
+                current: current_content,
+                status: status_str,
+            });
+        }
+    }
+
+    // git status 不会报告"未追踪文件被删除"的情况（因为它本就不在 git 里）
+    // 补充扫描：pre_existing 里存在但磁盘上已消失、且 diffs 里还没有记录的文件
+    if summary {
+        let already_reported: std::collections::HashSet<String> =
+            diffs.iter().map(|d| d.path.clone()).collect();
+        let mut extra: Vec<FileDiff> = Vec::new();
+        for file_path_str in &pre_existing {
+            if already_reported.contains(file_path_str) {
+                continue;
+            }
+            let full_file_path = proj_path.join(file_path_str);
+            if !full_file_path.exists() {
+                extra.push(FileDiff {
+                    path: file_path_str.clone(),
+                    original: String::new(),
+                    current: String::new(),
+                    status: "deleted".to_string(),
+                });
+            }
+        }
+        diffs.extend(extra);
+    }
+
+    Ok(diffs)
+}
+
+// 获取单个文件内容的会话级差分详情 (按需加载，避免在 polling 时读取庞大内容)
+#[tauri::command]
+fn get_session_file_diff(session_id: String, project_path: String, relative_path: String) -> Result<FileDiff, String> {
+    log_to_file(&format!("get_session_file_diff called: session_id={}, project_path={}, relative_path={}", session_id, project_path, relative_path));
+    
+    let proj_path = std::path::Path::new(&project_path);
+    if !proj_path.exists() {
+        return Err("Project path does not exist".to_string());
+    }
+
+    let shadows_dir = get_shadows_dir(&session_id);
+
+    let pre_existing_path = shadows_dir.join("pre_existing.json");
+    let pre_existing: Vec<String> = if pre_existing_path.exists() {
+        let content = std::fs::read_to_string(&pre_existing_path).unwrap_or_else(|_| "[]".to_string());
+        serde_json::from_str(&content).unwrap_or_else(|_| Vec::new())
+    } else {
+        Vec::new()
+    };
+
+    let full_file_path = proj_path.join(&relative_path);
+    let original_content: String;
+    let current_content: String;
+    let status_str: String;
+
+    let is_pre_existing = pre_existing.contains(&relative_path);
+
+    // 从缓存的 .session_meta.json 读取 is_git
+    let meta_path = shadows_dir.join(".session_meta.json");
+    let is_git = if meta_path.exists() {
+        let meta_str = std::fs::read_to_string(&meta_path).unwrap_or_default();
+        meta_str.contains("\"is_git\": true") || meta_str.contains("\"is_git\":true")
+    } else {
+        create_git_command(&proj_path, &["rev-parse", "--is-inside-work-tree"])
+            .output()
+            .map(|out| out.status.success() && String::from_utf8_lossy(&out.stdout).trim() == "true")
+            .unwrap_or(false)
+    };
+
+    if !is_git {
+        original_content = if is_pre_existing {
+            let shadow_file = shadows_dir.join(&relative_path);
+            std::fs::read_to_string(&shadow_file).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        current_content = if full_file_path.exists() {
+            std::fs::read_to_string(&full_file_path).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        if original_content.is_empty() && !current_content.is_empty() {
+            status_str = "added".to_string();
+        } else if !original_content.is_empty() && current_content.is_empty() {
+            status_str = "deleted".to_string();
+        } else {
+            status_str = "modified".to_string();
+        }
+
+        return Ok(FileDiff {
+            path: relative_path,
+            original: original_content,
+            current: current_content,
+            status: status_str,
+        });
+    }
+
+    if is_pre_existing {
+        let shadow_file = shadows_dir.join(&relative_path);
+        original_content = std::fs::read_to_string(&shadow_file).unwrap_or_default();
+    } else {
+        let is_tracked = {
+            let mut cmd = create_git_command(&proj_path, &["ls-files", "--error-unmatch", &relative_path]);
+            let git_ls = cmd.output();
+            match git_ls {
+                Ok(out) => out.status.success(),
+                _ => false,
+            }
+        };
+
+        if !is_tracked {
+            original_content = String::new();
+        } else {
+            let mut cmd = create_git_command(&proj_path, &["show", &format!(":{}", relative_path)]);
+            let git_show = cmd.output();
+            match git_show {
+                Ok(out) if out.status.success() => {
+                    original_content = String::from_utf8_lossy(&out.stdout).into_owned();
+                }
+                _ => {
+                    let mut cmd = create_git_command(&proj_path, &["show", &format!("HEAD:{}", relative_path)]);
+                    if let Ok(out) = cmd.output() {
+                        original_content = String::from_utf8_lossy(&out.stdout).into_owned();
+                    } else {
+                        original_content = String::new();
+                    }
+                }
+            }
+        }
+    }
+
+    if full_file_path.exists() {
+        current_content = std::fs::read_to_string(&full_file_path).unwrap_or_default();
+    } else {
+        current_content = String::new();
+        // 文件已删除但没有 pre_existing shadow 也没有 git 历史（会话中新建又删除），
+        // 直接返回 deleted 状态，original/current 均为空，前端会展示"已删除"标签
+        if original_content.is_empty() {
+            return Ok(FileDiff {
+                path: relative_path,
+                original: String::new(),
+                current: String::new(),
+                status: "deleted".to_string(),
+            });
+        }
+    }
+
+    if original_content.is_empty() && !current_content.is_empty() {
+        status_str = "added".to_string();
+    } else if !original_content.is_empty() && current_content.is_empty() {
+        status_str = "deleted".to_string();
+    } else {
+        status_str = "modified".to_string();
+    }
+
+    Ok(FileDiff {
+        path: relative_path,
+        original: original_content,
+        current: current_content,
+        status: status_str,
+    })
+}
+
+// 撤销特定文件的会话修改
+#[tauri::command]
+fn revert_session_file(session_id: String, project_path: String, relative_path: String) -> Result<(), String> {
+    log_to_file(&format!("revert_session_file called: session_id={}, project_path={}, relative_path={}", session_id, project_path, relative_path));
+    
+    let proj_path = std::path::Path::new(&project_path);
+    if !proj_path.exists() {
+        return Err("Project path does not exist".to_string());
+    }
+
+    let shadows_dir = get_shadows_dir(&session_id);
+
+    let pre_existing_path = shadows_dir.join("pre_existing.json");
+    let pre_existing: Vec<String> = if pre_existing_path.exists() {
+        let content = std::fs::read_to_string(&pre_existing_path).unwrap_or_else(|_| "[]".to_string());
+        serde_json::from_str(&content).unwrap_or_else(|_| Vec::new())
+    } else {
+        Vec::new()
+    };
+
+    let full_file_path = proj_path.join(&relative_path);
+
+    if pre_existing.contains(&relative_path) {
+        // 如果是会话前脏文件，恢复为当时快照
+        let shadow_file = shadows_dir.join(&relative_path);
+        if shadow_file.exists() {
+            let content = std::fs::read(&shadow_file).map_err(|e| e.to_string())?;
+            if let Some(parent) = full_file_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            std::fs::write(&full_file_path, content).map_err(|e| e.to_string())?;
+            log_to_file(&format!("Reverted {} to pre-session shadow backup.", relative_path));
+        } else {
+            // 如果快照文件缺失但记录存在，且文件目前存在，则删除它（对应原本不存在的情况）
+            if full_file_path.exists() {
+                let _ = std::fs::remove_file(&full_file_path);
+            }
+        }
+    } else {
+        // 否则属于会话期间引入的改动，使用 git checkout 恢复或删除新建文件
+        let is_tracked = {
+            let git_ls = create_git_command(&proj_path, &["ls-files", "--error-unmatch", &relative_path]).output();
+            match git_ls {
+                Ok(out) => out.status.success(),
+                _ => false,
+            }
+        };
+
+        if is_tracked {
+            let status = create_git_command(&proj_path, &["checkout", "--", &relative_path])
+                .status()
+                .map_err(|e| e.to_string())?;
+            
+            if !status.success() {
+                return Err("Failed to checkout file from Git".to_string());
+            }
+            log_to_file(&format!("Reverted {} via git checkout.", relative_path));
+        } else {
+            // 新建的未追踪文件，直接删除
+            if full_file_path.exists() {
+                std::fs::remove_file(&full_file_path).map_err(|e| e.to_string())?;
+                log_to_file(&format!("Deleted untracked session file {}.", relative_path));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// 确认当前修改并设为新基准快照
+#[tauri::command]
+fn checkpoint_session_diff(session_id: String, project_path: String) -> Result<(), String> {
+    log_to_file(&format!("checkpoint_session_diff called: session_id={}, project_path={}", session_id, project_path));
+    let shadows_dir = get_shadows_dir(&session_id);
+    if shadows_dir.exists() {
+        let _ = std::fs::remove_dir_all(&shadows_dir);
+    }
+    init_session_diff(session_id, project_path)?;
+    Ok(())
+}
+
+// ── 文件监听：启动项目目录 watcher，实时推送变更事件到前端 ──────────────
+#[tauri::command]
+fn start_diff_watcher(
+    session_id: String,
+    project_path: String,
+    state: State<'_, FileWatcherManager>,
+    app_handle: AppHandle,
+) -> Result<(), String> {
+    let mut watchers = state.watchers.lock().unwrap();
+    watchers.remove(&session_id); // 清理旧 watcher（如有）
+
+    let proj_path_buf = std::path::PathBuf::from(&project_path);
+    if !proj_path_buf.exists() || !proj_path_buf.is_dir() {
+        return Err(format!("Project path does not exist: {}", project_path));
+    }
+
+    let session_id_clone = session_id.clone();
+    let app_handle_clone = app_handle.clone();
+
+    let mut debouncer = new_debouncer(
+        std::time::Duration::from_millis(600),
+        move |result: Result<Vec<notify_debouncer_mini::DebouncedEvent>, notify::Error>| {
+            if let Ok(events) = result {
+                let relevant = events.iter().any(|e| {
+                    let p = e.path.to_string_lossy();
+                    !p.contains(".git")
+                        && !p.contains("node_modules")
+                        && !p.contains("kkcoder_shadows")
+                        && !p.contains("kkcoder_debug.log")
+                        && !p.contains("kkcoder.db")
+                        && !p.contains("\\target\\")
+                        && !p.contains("/target/")
+                        && !p.contains("\\dist\\")
+                        && !p.contains("/dist/")
+                });
+                if relevant {
+                    let _ = app_handle_clone.emit("session-files-changed", &session_id_clone);
+                }
+            }
+        },
+    ).map_err(|e| format!("Failed to create debouncer: {}", e))?;
+
+    debouncer
+        .watcher()
+        .watch(&proj_path_buf, notify::RecursiveMode::Recursive)
+        .map_err(|e| format!("Failed to watch path: {}", e))?;
+
+    watchers.insert(session_id, debouncer);
+    Ok(())
+}
+
+// ── 文件监听：停止指定 session 的 watcher ────────────────────────────────
+#[tauri::command]
+fn stop_diff_watcher(
+    session_id: String,
+    state: State<'_, FileWatcherManager>,
+) -> Result<(), String> {
+    let mut watchers = state.watchers.lock().unwrap();
+    watchers.remove(&session_id);
+    Ok(())
+}
+
+
 pub fn run() {
     // 启动时初始化数据库表
     initialize_database().expect("Failed to initialize SQLite database");
 
     tauri::Builder::default()
         .manage(PtyManager::default())
+        .manage(FileWatcherManager::default())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             use tauri::Manager;
@@ -1969,6 +2807,7 @@ pub fn run() {
             get_recent_projects,
             select_directory,
             open_project_folder,
+            open_terminal_path,
             spawn_terminal,
             write_to_terminal,
             resize_terminal,
@@ -1989,7 +2828,14 @@ pub fn run() {
             restore_archived_project,
             auto_rename_sessions,
             llm_rename_sessions,
-            search_session_contents
+            search_session_contents,
+            init_session_diff,
+            get_session_diff,
+            get_session_file_diff,
+            revert_session_file,
+            checkpoint_session_diff,
+            start_diff_watcher,
+            stop_diff_watcher
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,11 +1,13 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { Sidebar, Session, ClaudeIcon, PiIcon } from "./components/Sidebar";
 import { TerminalTab } from "./components/TerminalTab";
 import { NewSessionModal } from "./components/NewSessionModal";
 import { SettingsModal } from "./components/SettingsModal";
 import { MdEditorModal } from "./components/MdEditorModal";
+import { DiffPanel } from "./components/DiffPanel";
 import {
   addUnreadCompletion,
   getUnreadCompletionCount,
@@ -110,6 +112,41 @@ function App() {
     return localStorage.getItem("kkcoder_setting_theme") || "light-premium";
   });
   const [isInitLoaded, setIsInitLoaded] = useState<boolean>(false);
+
+  // 会话级增量差分相关状态
+  const [enableDiffPanel, setEnableDiffPanel] = useState<boolean>(() => {
+    const val = localStorage.getItem("kkcoder_setting_enable_diff_panel");
+    return val === null ? true : val === "true";
+  });
+  const [modifiedFiles, setModifiedFiles] = useState<any[]>([]);
+  // 每次 refreshDiff 成功后单调递增，传给 DiffPanel 触发文件详情重新 fetch
+  const [diffRefreshTick, setDiffRefreshTick] = useState(0);
+  // "hidden" | "inline"（底部嵌入）| "float"（独立浮动窗口）
+  // 记住上次用户选择的显示模式（inline / float），下次打开时恢复
+  const [diffPanelMode, setDiffPanelMode] = useState<"hidden" | "inline" | "float">("hidden");
+  const lastDiffDisplayMode = useRef<"inline" | "float">(
+    (localStorage.getItem("kkcoder_diff_display_mode") as "inline" | "float") || "inline"
+  );
+
+  const setDiffPanelModeAndPersist = (mode: "hidden" | "inline" | "float") => {
+    if (mode !== "hidden") {
+      lastDiffDisplayMode.current = mode;
+      localStorage.setItem("kkcoder_diff_display_mode", mode);
+    }
+    setDiffPanelMode(mode);
+  };
+
+  // 监听外部配置变动
+  useEffect(() => {
+    const handleDiffSettingChange = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      if (customEvent && typeof customEvent.detail === "boolean") {
+        setEnableDiffPanel(customEvent.detail);
+      }
+    };
+    window.addEventListener("kkcoder-diff-setting-change", handleDiffSettingChange as EventListener);
+    return () => window.removeEventListener("kkcoder-diff-setting-change", handleDiffSettingChange as EventListener);
+  }, []);
   const [claudeVersion, setClaudeVersion] = useState<string>(() => {
     return localStorage.getItem(CLAUDE_VERSION_CACHE_KEY) || "Claude Code";
   });
@@ -399,6 +436,94 @@ function App() {
   }, [queue.length]);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId);
+
+  const refreshDiff = async () => {
+    if (!enableDiffPanel) {
+      setModifiedFiles([]);
+      return;
+    }
+    const active = sessions.find((s) => s.id === activeSessionIdRef.current);
+    if (!active) {
+      setModifiedFiles([]);
+      return;
+    }
+    try {
+      const diffs = await invoke<any[]>("get_session_diff", {
+        sessionId: active.id,
+        projectPath: active.path,
+        summaryOnly: true,
+      });
+      setModifiedFiles(diffs);
+      setDiffRefreshTick((t) => t + 1);
+    } catch (err) {
+      console.error("Failed to get session diff:", err);
+    }
+  };
+
+  // diffPollPending：in-flight 期间收到新事件时置 true，完成后立即补跑一次
+  const diffPollInFlight = useRef(false);
+  const diffPollPending = useRef(false);
+  const safePollDiff = async () => {
+    if (diffPollInFlight.current) {
+      diffPollPending.current = true;
+      return;
+    }
+    diffPollInFlight.current = true;
+    diffPollPending.current = false;
+    try {
+      await refreshDiff();
+    } finally {
+      diffPollInFlight.current = false;
+      if (diffPollPending.current) {
+        diffPollPending.current = false;
+        // 延迟一帧再跑，避免 React state 还未 flush
+        setTimeout(() => safePollDiff(), 50);
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (!enableDiffPanel || !activeSession) {
+      setModifiedFiles([]);
+      return;
+    }
+
+    safePollDiff();
+
+    // 启动文件系统监听，保存文件后 ~600ms 内即时刷新
+    invoke("start_diff_watcher", {
+      sessionId: activeSession.id,
+      projectPath: activeSession.path,
+    }).catch((err) => console.warn("start_diff_watcher failed:", err));
+
+    // 监听 Rust 端 notify 推送的变更事件
+    // 用 ref 保存 unlisten，避免异步 promise 未 resolve 时 cleanup 漏掉
+    const unlistenRef: { fn: (() => void) | null } = { fn: null };
+    let cancelled = false;
+    listen<string>("session-files-changed", (event) => {
+      if (event.payload === activeSession.id) {
+        safePollDiff();
+      }
+    }).then((fn) => {
+      if (cancelled) {
+        fn(); // 已经被 cleanup，立即取消
+      } else {
+        unlistenRef.fn = fn;
+      }
+    });
+
+    // 30s 兜底轮询
+    const timer = setInterval(() => {
+      safePollDiff();
+    }, 30000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+      if (unlistenRef.fn) unlistenRef.fn();
+      invoke("stop_diff_watcher", { sessionId: activeSession.id }).catch(() => {});
+    };
+  }, [activeSessionId, enableDiffPanel]);
 
   // 记住最后的会话和打开的 Tab 标签页
   useEffect(() => {
@@ -841,6 +966,9 @@ function App() {
         isWindowFocusedRef.current
       )
     );
+    if (sid === activeSessionIdRef.current) {
+      refreshDiff();
+    }
   };
 
   // 点击页面任意位置关闭调色盘菜单
@@ -867,6 +995,7 @@ function App() {
     if (themeName === "auto") {
       target = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark-zinc" : "light-premium";
     }
+    root.setAttribute("data-theme", target);
 
     if (target === "dark-blue") {
       root.style.setProperty("--bg-main", "#090d16");
@@ -1496,6 +1625,23 @@ function App() {
             )}
           </div>
 
+          {/* 代码对比面板 */}
+          {enableDiffPanel && activeSession && (
+            <DiffPanel
+              sessionId={activeSession.id}
+              projectPath={activeSession.path}
+              isOpen={diffPanelMode !== "hidden"}
+              isFloat={diffPanelMode === "float"}
+              onClose={() => setDiffPanelModeAndPersist("hidden")}
+              onToggleFloat={() =>
+                setDiffPanelModeAndPersist(diffPanelMode === "float" ? "inline" : "float")
+              }
+              modifiedFiles={modifiedFiles}
+              refreshTick={diffRefreshTick}
+              onRefresh={refreshDiff}
+            />
+          )}
+
           {/* 新增的队列列表面板 */}
           {queue.length > 0 && (
             <div className="queue-list-panel">
@@ -1615,6 +1761,36 @@ function App() {
                     <span className="queue-badge">{queue.length}</span>
                   )}
                 </button>
+
+                {enableDiffPanel && (
+                  <button
+                    className={`diff-status-btn ${modifiedFiles.length > 0 ? "active" : ""} ${diffPanelMode !== "hidden" ? "panel-open" : ""}`}
+                    onClick={() => setDiffPanelModeAndPersist(diffPanelMode === "hidden" ? lastDiffDisplayMode.current : "hidden")}
+                    title={`本次会话有 ${modifiedFiles.length} 个文件变更，点击查看对比/撤销`}
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="12"
+                      height="12"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.5"
+                      style={{ opacity: 0.8, marginRight: "4px" }}
+                    >
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                      <polyline points="14 2 14 8 20 8"></polyline>
+                      <line x1="16" y1="13" x2="8" y2="13"></line>
+                      <line x1="16" y1="17" x2="8" y2="17"></line>
+                    </svg>
+                    <span>变更</span>
+                    {modifiedFiles.length > 0 && (
+                      <span className="queue-badge" style={{ backgroundColor: "#ef4444" }}>
+                        {modifiedFiles.length}
+                      </span>
+                    )}
+                  </button>
+                )}
               </div>
             )}
 
