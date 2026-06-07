@@ -2380,20 +2380,16 @@ fn get_session_diff(session_id: String, project_path: String, summary_only: Opti
                     // 本次会话新建的文件
                     original_content = String::new();
                 } else {
-                    // 本次会话修改的原本干净文件，从 Git index 获取
-                    let git_show = create_git_command(&proj_path, &["show", &format!(":{}", file_path)]).output();
-                    
+                    // 本次会话修改的原本干净文件，从 HEAD 获取原始内容
+                    // 注意：不用 git show :path（读 index），文件 git add 后 index 内容
+                    // 等于当前内容，会导致 diff 为空；HEAD 才是会话开始前的真实基线
+                    let git_show = create_git_command(&proj_path, &["show", &format!("HEAD:{}", file_path)]).output();
                     match git_show {
                         Ok(out) if out.status.success() => {
                             original_content = String::from_utf8_lossy(&out.stdout).into_owned();
                         }
                         _ => {
-                            let git_show_head = create_git_command(&proj_path, &["show", &format!("HEAD:{}", file_path)]).output();
-                            if let Ok(out) = git_show_head {
-                                original_content = String::from_utf8_lossy(&out.stdout).into_owned();
-                            } else {
-                                original_content = String::new();
-                            }
+                            original_content = String::new();
                         }
                     }
                 }
@@ -2540,20 +2536,12 @@ fn get_session_file_diff(session_id: String, project_path: String, relative_path
         if !is_tracked {
             original_content = String::new();
         } else {
-            let mut cmd = create_git_command(&proj_path, &["show", &format!(":{}", relative_path)]);
-            let git_show = cmd.output();
+            let git_show = create_git_command(&proj_path, &["show", &format!("HEAD:{}", relative_path)]).output();
             match git_show {
                 Ok(out) if out.status.success() => {
                     original_content = String::from_utf8_lossy(&out.stdout).into_owned();
                 }
-                _ => {
-                    let mut cmd = create_git_command(&proj_path, &["show", &format!("HEAD:{}", relative_path)]);
-                    if let Ok(out) = cmd.output() {
-                        original_content = String::from_utf8_lossy(&out.stdout).into_owned();
-                    } else {
-                        original_content = String::new();
-                    }
-                }
+                _ => { original_content = String::new(); }
             }
         }
     }
@@ -2639,7 +2627,7 @@ fn revert_session_file(session_id: String, project_path: String, relative_path: 
         };
 
         if is_tracked {
-            let status = create_git_command(&proj_path, &["checkout", "--", &relative_path])
+            let status = create_git_command(&proj_path, &["checkout", "HEAD", "--", &relative_path])
                 .status()
                 .map_err(|e| e.to_string())?;
             

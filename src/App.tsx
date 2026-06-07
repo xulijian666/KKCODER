@@ -523,7 +523,7 @@ function App() {
       if (unlistenRef.fn) unlistenRef.fn();
       invoke("stop_diff_watcher", { sessionId: activeSession.id }).catch(() => {});
     };
-  }, [activeSessionId, enableDiffPanel]);
+  }, [activeSessionId, activeSession?.path, enableDiffPanel]);
 
   // 记住最后的会话和打开的 Tab 标签页
   useEffect(() => {
