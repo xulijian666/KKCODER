@@ -39,7 +39,7 @@ const getTerminalThemeColors = (themeName: string) => {
     background: isDark ? "#000000" : "#ffffff",
     foreground: isDark ? "#f8fafc" : "#334155",
     cursor: isDark ? "#f8fafc" : "#334155", // 使用原生前景色，消除多余亮色闪烁光标
-    selectionBackground: isDark ? "rgba(255, 255, 255, 0.2)" : "rgba(59, 130, 246, 0.3)",
+    selectionBackground: isDark ? "rgba(29, 78, 216, 0.45)" : "rgba(59, 130, 246, 0.3)",
     black: isDark ? "#000000" : "#0f172a",
     red: "#ef4444",
     green: "#10b981",
@@ -211,6 +211,93 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
       fontFamily: `${savedFont}, Fira Code, Consolas, Monaco, monospace`,
       theme: initialColors,
       convertEol: true,
+    });
+
+    // 注册自定义 LinkProvider 支持网页链接和 Windows 本地路径点击打开
+    term.registerLinkProvider({
+      provideLinks(bufferLineNumber: number, callback: (links: any[] | undefined) => void) {
+        const line = term.buffer.active.getLine(bufferLineNumber - 1);
+        if (!line) {
+          callback(undefined);
+          return;
+        }
+
+        // 拼接字符串并映射每一字符在 terminal 中的 1-indexed 起始列 (解决中文字符双宽 cell 偏移问题)
+        let lineStr = "";
+        const colMap: number[] = [];
+        for (let x = 0; x < line.length; x++) {
+          const cell = line.getCell(x);
+          if (!cell) continue;
+          const chars = cell.getChars();
+          const width = cell.getWidth();
+          if (width === 0) continue; // 宽字符占位续格，跳过
+          
+          const startIdx = lineStr.length;
+          lineStr += chars;
+          for (let i = startIdx; i < lineStr.length; i++) {
+            colMap[i] = x + 1;
+          }
+        }
+
+        const links: any[] = [];
+
+        // 1. 匹配 Web 网址 (http:// 或 https://)
+        const urlRegex = /https?:\/\/[a-zA-Z0-9][-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&//=]*)/g;
+        let match;
+        while ((match = urlRegex.exec(lineStr)) !== null) {
+          const matchedText = match[0];
+          const startStrIdx = match.index;
+          const endStrIdx = match.index + matchedText.length - 1;
+          
+          const startCol = colMap[startStrIdx];
+          const endColCellIdx = colMap[endStrIdx] - 1;
+          const endCell = line.getCell(endColCellIdx);
+          const endCellWidth = endCell ? endCell.getWidth() : 1;
+          const endCol = colMap[endStrIdx] + (endCellWidth - 1);
+
+          links.push({
+            text: matchedText,
+            range: {
+              start: { x: startCol, y: bufferLineNumber },
+              end: { x: endCol, y: bufferLineNumber }
+            },
+            activate(_event: any, text: string) {
+              import("@tauri-apps/plugin-opener").then(({ openUrl }) => {
+                openUrl(text).catch((err: any) => console.error("打开网址失败:", err));
+              });
+            }
+          });
+        }
+
+        // 2. 匹配 Windows 路径 (形如 D:\MyCode\KKCODER 或 D:\MyCode\KKCODER\主题样式_spec.md)
+        const pathRegex = /[a-zA-Z]:\\[^:?"*|<> \t\r\n]+/g;
+        while ((match = pathRegex.exec(lineStr)) !== null) {
+          const matchedText = match[0];
+          const startStrIdx = match.index;
+          const endStrIdx = match.index + matchedText.length - 1;
+
+          const startCol = colMap[startStrIdx];
+          const endColCellIdx = colMap[endStrIdx] - 1;
+          const endCell = line.getCell(endColCellIdx);
+          const endCellWidth = endCell ? endCell.getWidth() : 1;
+          const endCol = colMap[endStrIdx] + (endCellWidth - 1);
+
+          links.push({
+            text: matchedText,
+            range: {
+              start: { x: startCol, y: bufferLineNumber },
+              end: { x: endCol, y: bufferLineNumber }
+            },
+            activate(_event: any, text: string) {
+              invoke("open_terminal_path", { path: text }).catch((err: any) => {
+                console.error("打开路径失败:", err);
+              });
+            }
+          });
+        }
+
+        callback(links);
+      }
     });
 
     log("Loading FitAddon and opening terminal in container...");
