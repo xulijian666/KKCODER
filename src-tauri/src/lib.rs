@@ -324,6 +324,71 @@ fn cleanup_stale_sessions(days: i64) -> Result<usize, String> {
     Ok(affected)
 }
 
+/// 启动时清理空白会话：名为"新会话"且无实际对话内容的会话自动移入垃圾桶
+#[tauri::command]
+fn cleanup_empty_sessions() -> Result<usize, String> {
+    log_to_file("cleanup_empty_sessions called.");
+    let db_path = get_db_path();
+    let conn = rusqlite::Connection::open(&db_path).map_err(|e| e.to_string())?;
+
+    let mut stmt = conn
+        .prepare("SELECT id, name, type, agent_session_id, path FROM sessions WHERE deleted = 0 AND name = '新会话'")
+        .map_err(|e| e.to_string())?;
+
+    let candidates: Vec<(String, String, String, String)> = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .map(|(_, id, typ, agent_id, path)| (id, typ, agent_id, path))
+        .collect();
+
+    log_to_file(&format!("cleanup_empty_sessions: found {} candidates named '新会话'", candidates.len()));
+
+    let mut cleaned = 0usize;
+    for (session_id, session_type, agent_session_id, project_path) in &candidates {
+        // 只处理 Claude 类型
+        if session_type != "claude" {
+            // Pi 类型：如果没有 JSONL 也清理
+            continue;
+        }
+
+        let is_empty = match find_claude_jsonl(agent_session_id, project_path) {
+            Some(jsonl_path) => {
+                // JSONL 存在，检查是否有用户消息
+                let transcript = read_claude_transcript(&jsonl_path);
+                transcript.is_empty()
+            }
+            None => {
+                // JSONL 不存在，说明从未有过对话
+                true
+            }
+        };
+
+        if is_empty {
+            if let Err(e) = conn.execute(
+                "UPDATE sessions SET deleted = 1, deleted_at = datetime('now', 'localtime') WHERE id = ?1",
+                [&session_id],
+            ) {
+                log_to_file(&format!("cleanup_empty_sessions: failed to delete {}: {}", session_id, e));
+            } else {
+                log_to_file(&format!("cleanup_empty_sessions: removed empty session {}", session_id));
+                cleaned += 1;
+            }
+        }
+    }
+
+    log_to_file(&format!("cleanup_empty_sessions completed. removed={}", cleaned));
+    Ok(cleaned)
+}
+
 // 4. 读取最近点选的项目路径 (前 20 个，过滤掉左侧栏已不存在的无会话项目)
 #[tauri::command]
 fn get_recent_projects() -> Result<Vec<RecentProject>, String> {
@@ -1788,6 +1853,7 @@ pub fn run() {
             restore_session,
             empty_trash,
             cleanup_stale_sessions,
+            cleanup_empty_sessions,
             get_recent_projects,
             select_directory,
             open_project_folder,

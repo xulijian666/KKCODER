@@ -591,8 +591,15 @@ function App() {
       claudeVersionTimer = window.setTimeout(fetchClaudeVersion, 1500);
     };
 
+    // 启动时清理空白会话（名为"新会话"且无对话内容）
+    const emptyCleanupPromise = invoke<number>("cleanup_empty_sessions")
+      .then((count) => {
+        if (count > 0) log(`Startup empty session cleanup removed ${count} empty sessions.`);
+      })
+      .catch((err) => log(`Startup empty session cleanup failed: ${err}`));
+
     const cleanupSettings = readSessionCleanupSettings();
-    const cleanupPromise = cleanupSettings.enabled
+    const staleCleanupPromise = cleanupSettings.enabled
       ? invoke<number>("cleanup_stale_sessions", { days: cleanupSettings.days })
           .then((count) => {
             log(`Startup session cleanup moved ${count} stale sessions to trash.`);
@@ -603,7 +610,7 @@ function App() {
       : Promise.resolve();
 
     log("App mounted. Fetching sessions from SQLite database...");
-    cleanupPromise.then(() => invoke<Session[]>("get_sessions"))
+    Promise.all([emptyCleanupPromise, staleCleanupPromise]).then(() => invoke<Session[]>("get_sessions"))
       .then((data) => {
         log(`Successfully fetched ${data ? data.length : 0} sessions from database.`);
         setSessions(data || []);
