@@ -82,6 +82,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
     const val = localStorage.getItem("kkcoder_setting_scrollback");
     return val === null ? 10000 : parseInt(val, 10);
   });
+  const [enableDiffPanel, setEnableDiffPanel] = useState<boolean>(() => {
+    const val = localStorage.getItem("kkcoder_setting_enable_diff_panel");
+    return val === null ? true : val === "true";
+  });
   const [sessionCleanupEnabled, setSessionCleanupEnabled] = useState<boolean>(() => {
     return localStorage.getItem(SESSION_CLEANUP_ENABLED_KEY) === "true";
   });
@@ -210,6 +214,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
   useEffect(() => {
     localStorage.setItem("kkcoder_setting_scrollback", String(scrollback));
   }, [scrollback]);
+
+  useEffect(() => {
+    localStorage.setItem("kkcoder_setting_enable_diff_panel", String(enableDiffPanel));
+    window.dispatchEvent(new CustomEvent("kkcoder-diff-setting-change", { detail: enableDiffPanel }));
+  }, [enableDiffPanel]);
 
   useEffect(() => {
     localStorage.setItem(SESSION_CLEANUP_DAYS_KEY, String(normalizeSessionCleanupDays(sessionCleanupDays)));
@@ -945,6 +954,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
                         ▼
                       </button>
                     </div>
+                  </div>
+                </div>
+                {/* 分割线 */}
+                <div style={{ borderTop: "1px solid var(--border-color)", margin: "8px 0" }} />
+
+                {/* 启用会话代码对比 */}
+                <div className="settings-group">
+                  <div className="settings-group-label">会话代码对比</div>
+                  <div className="settings-switch-row">
+                    <label className="switch-container">
+                      <input
+                        type="checkbox"
+                        checked={enableDiffPanel}
+                        onChange={(e) => setEnableDiffPanel(e.target.checked)}
+                      />
+                      <span className="switch-slider"></span>
+                    </label>
+                    <span className="switch-label">开启会话级增量修改对比及一键撤销功能</span>
                   </div>
                 </div>
 

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { ConfirmModal } from "./ConfirmModal";
 import {
   formatRelativeSessionActivityTime,
   sortSessionsByActivityDesc,
@@ -106,6 +107,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [sessionToDelete, setSessionToDelete] = useState<Session | null>(null);
   // 收藏夹折叠状态
   const [favoritesCollapsed, setFavoritesCollapsed] = useState<boolean>(false);
+  const [confirmState, setConfirmState] = useState<{
+    show: boolean;
+    title: string;
+    message: string | React.ReactNode;
+    onConfirm: () => void;
+    isDanger?: boolean;
+  } | null>(null);
 
   // 记住收藏的项目状态
   const [favoriteProjects, setFavoriteProjects] = useState<Array<{ name: string; timestamp: number }>>(() => {
@@ -307,6 +315,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [projectToDelete]);
+
+  // 监听 ESC 键关闭自定义确认弹窗
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setConfirmState(null);
+      }
+    };
+    if (confirmState) {
+      window.addEventListener("keydown", handleKeyDown);
+    }
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [confirmState]);
 
   // 当进入编辑状态时，自动获得焦点并选中文本
   useEffect(() => {
@@ -887,9 +910,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       className="archive-item"
                       style={{ padding: "6px 12px", display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer", transition: "var(--transition-smooth)" }}
                       onClick={() => {
-                        if (confirm(`确定要将「${proj.project_name}」还原到工作区吗？`)) {
-                          handleRestoreArchivedProject(proj.id);
-                        }
+                        setConfirmState({
+                          show: true,
+                          title: "还原项目",
+                          message: (
+                            <>
+                              确定要将项目「<strong style={{ color: "var(--color-orange)" }}>{proj.project_name}</strong>」还原到工作区吗？
+                            </>
+                          ),
+                          onConfirm: () => {
+                            handleRestoreArchivedProject(proj.id);
+                            setConfirmState(null);
+                          }
+                        });
                       }}
                       onContextMenu={(e) => {
                         e.preventDefault();
@@ -1238,9 +1271,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         <button
                           title="彻底删除"
                           onClick={() => {
-                            if (confirm("确定要永久删除该会话吗？此操作不可逆。")) {
-                              onPermanentlyDeleteSession(s.id);
-                            }
+                            setConfirmState({
+                              show: true,
+                              title: "彻底删除会话",
+                              message: "确定要永久删除该会话吗？此操作不可逆。",
+                              isDanger: true,
+                              onConfirm: () => {
+                                onPermanentlyDeleteSession(s.id);
+                                setConfirmState(null);
+                              }
+                            });
                           }}
                           className="trash-action-btn hard-delete"
                         >
@@ -1265,9 +1305,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <button 
                     className="trash-empty-btn"
                     onClick={() => {
-                      if (confirm("确定要清空垃圾桶中的所有已删除会话吗？此操作不可逆。")) {
-                        onEmptyTrash();
-                      }
+                      setConfirmState({
+                        show: true,
+                        title: "清空垃圾桶",
+                        message: "确定要清空垃圾桶中的所有已删除会话吗？此操作不可逆。",
+                        isDanger: true,
+                        onConfirm: () => {
+                          onEmptyTrash();
+                          setConfirmState(null);
+                        }
+                      });
                     }}
                   >
                     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -1334,6 +1381,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
             ))}
           </div>
         </div>
+      )}
+      {confirmState && (
+        <ConfirmModal
+          show={confirmState.show}
+          title={confirmState.title}
+          message={confirmState.message}
+          isDanger={confirmState.isDanger}
+          onConfirm={confirmState.onConfirm}
+          onCancel={() => setConfirmState(null)}
+        />
       )}
     </aside>
   );
