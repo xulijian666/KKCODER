@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useLayoutEffect, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ConfirmModal } from "./ConfirmModal";
 import {
@@ -128,6 +128,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
   useEffect(() => {
     localStorage.setItem("kkcoder_favorite_projects", JSON.stringify(favoriteProjects));
   }, [favoriteProjects]);
+
+  // 拖动排序项目状态
+  const [draggingProject, setDraggingProject] = useState<string | null>(null);
+  const [regularProjectsOrder, setRegularProjectsOrder] = useState<string[]>(() => {
+    try {
+      const stored = localStorage.getItem("kkcoder_regular_projects_order");
+      return stored ? JSON.parse(stored) : [];
+    } catch (e) {
+      return [];
+    }
+  });
 
   // 归档区状态
   const [showArchive, setShowArchive] = useState<boolean>(false);
@@ -309,10 +320,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
       }
     };
     if (projectToDelete) {
-      window.addEventListener("keydown", handleKeyDown);
+      window.addEventListener("keydown", handleKeyDown, true);
     }
     return () => {
-      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keydown", handleKeyDown, true);
     };
   }, [projectToDelete]);
 
@@ -324,12 +335,27 @@ export const Sidebar: React.FC<SidebarProps> = ({
       }
     };
     if (confirmState) {
-      window.addEventListener("keydown", handleKeyDown);
+      window.addEventListener("keydown", handleKeyDown, true);
     }
     return () => {
-      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keydown", handleKeyDown, true);
     };
   }, [confirmState]);
+
+  // 监听 ESC 键关闭回收站垃圾桶弹窗
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setShowTrashModal(false);
+      }
+    };
+    if (showTrashModal) {
+      window.addEventListener("keydown", handleKeyDown, true);
+    }
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, true);
+    };
+  }, [showTrashModal]);
 
   // 当进入编辑状态时，自动获得焦点并选中文本
   useEffect(() => {
@@ -452,13 +478,29 @@ export const Sidebar: React.FC<SidebarProps> = ({
     .map((fp) => fp.name);
   const regularProjNames = projectNames.filter((name) => !favProjNames.includes(name));
 
-  const regularSortedEntries = [...regularProjNames.map((name) => [name, projectsMap[name]] as [string, { path: string; sessions: Session[] }])]
-    .sort((left, right) => {
-      const leftEarliest = Math.min(...left[1].sessions.map((s) => new Date(s.createdAt || 0).getTime()));
-      const rightEarliest = Math.min(...right[1].sessions.map((s) => new Date(s.createdAt || 0).getTime()));
+  // 融合并比对本地保存的普通项目自定义排序，多退少补
+  const regularSortedProjNames = useMemo(() => {
+    const existingSavedOrder = regularProjectsOrder.filter((name) => regularProjNames.includes(name));
+    const newNames = regularProjNames.filter((name) => !existingSavedOrder.includes(name));
+    newNames.sort((left, right) => {
+      const leftSessions = projectsMap[left]?.sessions || [];
+      const rightSessions = projectsMap[right]?.sessions || [];
+      const leftEarliest = leftSessions.length > 0 ? Math.min(...leftSessions.map((s) => new Date(s.createdAt || 0).getTime())) : 0;
+      const rightEarliest = rightSessions.length > 0 ? Math.min(...rightSessions.map((s) => new Date(s.createdAt || 0).getTime())) : 0;
       return leftEarliest - rightEarliest;
     });
-  const sortedProjectNames = [...favProjNames, ...regularSortedEntries.map(([name]) => name)];
+    return [...existingSavedOrder, ...newNames];
+  }, [projectsMap, favoriteProjects, regularProjectsOrder]);
+
+  // 状态与 localStorage 同步
+  useEffect(() => {
+    if (JSON.stringify(regularProjectsOrder) !== JSON.stringify(regularSortedProjNames)) {
+      setRegularProjectsOrder(regularSortedProjNames);
+      localStorage.setItem("kkcoder_regular_projects_order", JSON.stringify(regularSortedProjNames));
+    }
+  }, [regularSortedProjNames]);
+
+  const sortedProjectNames = [...favProjNames, ...regularSortedProjNames];
 
   // 6. 行内编辑操作
   const startEditing = (session: Session) => {
@@ -493,6 +535,115 @@ export const Sidebar: React.FC<SidebarProps> = ({
     });
     // 触发事件关闭标签页右键菜单
     window.dispatchEvent(new CustomEvent("close-tab-context-menu"));
+  };
+
+  // 🖱️ 项目列表拖拽排序与垂直轨道滑动 FLIP 动画
+  const lastProjectPositions = useRef<Record<string, number>>({});
+  useLayoutEffect(() => {
+    const projectElements = document.querySelectorAll(".project-group");
+    const newPositions: Record<string, number> = {};
+
+    projectElements.forEach((el) => {
+      const name = el.getAttribute("data-project-name");
+      const htmlEl = el as HTMLElement;
+      if (name) {
+        newPositions[name] = htmlEl.getBoundingClientRect().top;
+        const oldTop = lastProjectPositions.current[name];
+
+        // 仅对已经存在且位置发生变化的常规或收藏项目组做过渡动画（跳过当前拖拽的项目）
+        if (oldTop !== undefined && oldTop !== newPositions[name] && !htmlEl.classList.contains("dragging")) {
+          const deltaY = oldTop - newPositions[name];
+
+          htmlEl.style.transition = "none";
+          htmlEl.style.transform = `translate3d(0, ${deltaY}px, 0)`;
+
+          htmlEl.offsetHeight; // reflow
+
+          htmlEl.style.transition = "transform 0.25s cubic-bezier(0.16, 1, 0.3, 1)";
+          htmlEl.style.transform = "translate3d(0, 0, 0)";
+
+          const cleanup = (e: TransitionEvent) => {
+            if (e.propertyName === "transform") {
+              htmlEl.style.transition = "";
+              htmlEl.style.transform = "";
+              htmlEl.removeEventListener("transitionend", cleanup);
+            }
+          };
+          htmlEl.addEventListener("transitionend", cleanup);
+        }
+      }
+    });
+
+    lastProjectPositions.current = newPositions;
+  }, [sortedProjectNames]);
+
+  const handleProjDragStart = (e: React.DragEvent, projectName: string) => {
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", projectName);
+    setTimeout(() => {
+      setDraggingProject(projectName);
+    }, 0);
+  };
+
+  const handleProjDragOver = (e: React.DragEvent, targetName: string) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+
+    if (!draggingProject || draggingProject === targetName) return;
+
+    const isSrcFavorite = favoriteProjects.some((p) => p.name === draggingProject);
+    const isTgtFavorite = favoriteProjects.some((p) => p.name === targetName);
+
+    // 只能在同一大组（收藏置顶组内，或常规普通组内）拖拽重排
+    if (isSrcFavorite !== isTgtFavorite) return;
+
+    const rect = e.currentTarget.getBoundingClientRect();
+    const midpoint = rect.top + rect.height / 2;
+    const clientY = e.clientY;
+
+    if (isSrcFavorite) {
+      const list = [...favoriteProjects];
+      const srcIdx = list.findIndex((p) => p.name === draggingProject);
+      const tgtIdx = list.findIndex((p) => p.name === targetName);
+
+      if (srcIdx !== -1 && tgtIdx !== -1) {
+        if (srcIdx > tgtIdx && clientY < midpoint) {
+          const item = list[srcIdx];
+          list.splice(srcIdx, 1);
+          list.splice(tgtIdx, 0, item);
+          setFavoriteProjects(list);
+        } else if (srcIdx < tgtIdx && clientY > midpoint) {
+          const item = list[srcIdx];
+          list.splice(srcIdx, 1);
+          list.splice(tgtIdx, 0, item);
+          setFavoriteProjects(list);
+        }
+      }
+    } else {
+      const list = [...regularProjectsOrder];
+      const srcIdx = list.indexOf(draggingProject);
+      const tgtIdx = list.indexOf(targetName);
+
+      if (srcIdx !== -1 && tgtIdx !== -1) {
+        if (srcIdx > tgtIdx && clientY < midpoint) {
+          const item = list[srcIdx];
+          list.splice(srcIdx, 1);
+          list.splice(tgtIdx, 0, item);
+          setRegularProjectsOrder(list);
+          localStorage.setItem("kkcoder_regular_projects_order", JSON.stringify(list));
+        } else if (srcIdx < tgtIdx && clientY > midpoint) {
+          const item = list[srcIdx];
+          list.splice(srcIdx, 1);
+          list.splice(tgtIdx, 0, item);
+          setRegularProjectsOrder(list);
+          localStorage.setItem("kkcoder_regular_projects_order", JSON.stringify(list));
+        }
+      }
+    }
+  };
+
+  const handleProjDragEnd = () => {
+    setDraggingProject(null);
   };
 
   // 8. 统一会话行渲染函数 (复用在置顶收藏组和常规项目树中)
@@ -803,10 +954,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
             const isCollapsed = collapsedProjects.includes(projName);
             const isProjectFavorited = favoriteProjects.some((fp) => fp.name === projName);
             return (
-              <div key={projName} className="project-group">
+              <div
+                key={projName}
+                data-project-name={projName}
+                className={`project-group ${draggingProject === projName ? "dragging" : ""}`}
+              >
                 {/* 项目层级标题 */}
                 <div 
                   className="project-header"
+                  draggable={true}
+                  onDragStart={(e) => handleProjDragStart(e, projName)}
+                  onDragOver={(e) => handleProjDragOver(e, projName)}
+                  onDragEnd={handleProjDragEnd}
                   onClick={() => toggleProject(projName)}
                   onContextMenu={(e) => handleProjectContextMenu(e, projName, proj.path, proj.sessions, isProjectFavorited)}
                   style={{ cursor: "pointer", userSelect: "none" }}

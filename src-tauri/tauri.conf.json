@@ -18,7 +18,8 @@
         "minWidth": 1000,
         "minHeight": 750,
         "center": true,
-        "decorations": false
+        "decorations": false,
+        "dragDropEnabled": false
       }
     ],
     "security": {

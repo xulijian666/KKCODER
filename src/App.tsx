@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useLayoutEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
@@ -84,6 +84,7 @@ function App() {
   }, [activeSessionId]);
   const isWindowFocusedRef = useRef<boolean>(true);
   const [openTabIds, setOpenTabIds] = useState<string[]>([]);
+  const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
   const [selectedAgent, setSelectedAgent] = useState<"claude" | "pi">("claude");
   const [showModal, setShowModal] = useState<boolean>(false);
   const [prefilledProjectPath, setPrefilledProjectPath] = useState<string | undefined>(undefined);
@@ -538,6 +539,50 @@ function App() {
     }
   }, [openTabIds, isInitLoaded]);
 
+  // 🖱️ 使用 FLIP (First, Last, Invert, Play) 技术为标签页顺序切换提供丝滑动画
+  const lastTabPositions = useRef<Record<string, number>>({});
+  useLayoutEffect(() => {
+    const tabElements = document.querySelectorAll(".tab");
+    const newPositions: Record<string, number> = {};
+
+    tabElements.forEach((el) => {
+      const id = el.getAttribute("data-id");
+      const htmlEl = el as HTMLElement;
+      if (id) {
+        newPositions[id] = htmlEl.getBoundingClientRect().left;
+        const oldLeft = lastTabPositions.current[id];
+
+        // 仅对已经存在且位置发生变化的标签页做过渡动画（跳过当前正在拖拽的标签页）
+        if (oldLeft !== undefined && oldLeft !== newPositions[id] && !htmlEl.classList.contains("dragging")) {
+          const deltaX = oldLeft - newPositions[id];
+
+          // 1. Invert: 瞬间移回老位置，不使用过渡动画
+          htmlEl.style.transition = "none";
+          htmlEl.style.transform = `translate3d(${deltaX}px, 0, 0)`;
+
+          // 触发浏览器重绘以应用位移
+          htmlEl.offsetHeight;
+
+          // 2. Play: 启用过渡效果并让它平滑滑向新位置
+          htmlEl.style.transition = "transform 0.22s cubic-bezier(0.16, 1, 0.3, 1)";
+          htmlEl.style.transform = "translate3d(0, 0, 0)";
+
+          // 3. Cleanup: 动画结束后清理行内样式，以防干扰 CSS 的其它 transition
+          const cleanup = (e: TransitionEvent) => {
+            if (e.propertyName === "transform") {
+              htmlEl.style.transition = "";
+              htmlEl.style.transform = "";
+              htmlEl.removeEventListener("transitionend", cleanup);
+            }
+          };
+          htmlEl.addEventListener("transitionend", cleanup);
+        }
+      }
+    });
+
+    lastTabPositions.current = newPositions;
+  }, [openTabIds]);
+
   useEffect(() => {
     let unlisten: (() => void) | null = null;
 
@@ -971,12 +1016,26 @@ function App() {
     }
   };
 
-  // 点击页面任意位置关闭调色盘菜单
+  // 点击页面任意位置或按 ESC 关闭调色盘菜单
   useEffect(() => {
     const closeThemeMenu = () => setShowThemeDropdown(false);
-    window.addEventListener("click", closeThemeMenu);
-    return () => window.removeEventListener("click", closeThemeMenu);
+    window.addEventListener("mousedown", closeThemeMenu);
+    return () => window.removeEventListener("mousedown", closeThemeMenu);
   }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setShowThemeDropdown(false);
+      }
+    };
+    if (showThemeDropdown) {
+      window.addEventListener("keydown", handleKeyDown, true);
+    }
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, true);
+    };
+  }, [showThemeDropdown]);
 
 
   // 监听主题发生变动的全局广播事件
@@ -1297,22 +1356,89 @@ function App() {
     }
   };
 
+  // 🖱️ 标签页拖拽调整顺序
+  const handleDragStart = (e: React.DragEvent, index: number) => {
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", index.toString());
+    // 使用 setTimeout 异步设置状态，确保浏览器先生成拖拽影像，防止同步 DOM 节点样式修改导致拖拽被取消
+    setTimeout(() => {
+      setDraggingIndex(index);
+    }, 0);
+  };
+
+  const handleDragOver = (e: React.DragEvent, targetIndex: number) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+
+    if (draggingIndex !== null && draggingIndex !== targetIndex) {
+      const rect = e.currentTarget.getBoundingClientRect();
+      const midpoint = rect.left + rect.width / 2;
+      const clientX = e.clientX;
+
+      if (draggingIndex > targetIndex) {
+        // 从右向左拖拽（目标在左侧）
+        if (clientX < midpoint) {
+          const listCopy = [...openTabIds];
+          const draggedItem = listCopy[draggingIndex];
+          listCopy.splice(draggingIndex, 1);
+          listCopy.splice(targetIndex, 0, draggedItem);
+          setDraggingIndex(targetIndex);
+          setOpenTabIds(listCopy);
+        }
+      } else {
+        // 从左向右拖拽（目标在右侧）
+        if (clientX > midpoint) {
+          const listCopy = [...openTabIds];
+          const draggedItem = listCopy[draggingIndex];
+          listCopy.splice(draggingIndex, 1);
+          listCopy.splice(targetIndex, 0, draggedItem);
+          setDraggingIndex(targetIndex);
+          setOpenTabIds(listCopy);
+        }
+      }
+    }
+  };
+
+  const handleDragEnd = () => {
+    setDraggingIndex(null);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+  };
+
+  const handleTitlebarMouseDown = (e: React.MouseEvent) => {
+    if (e.button === 0) {
+      if (e.detail === 2) {
+        appWindow.toggleMaximize().catch((err) => log(`Failed to toggle maximize: ${err}`));
+      } else {
+        appWindow.startDragging().catch((err) => log(`Failed to start window dragging: ${err}`));
+      }
+    }
+  };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
       {/* 极简无边框窗口自定义标题栏 */}
-      <div className="custom-titlebar" data-tauri-drag-region>
-        <div className="titlebar-logo" data-tauri-drag-region>
+      <div
+        className="custom-titlebar"
+        onMouseDown={handleTitlebarMouseDown}
+      >
+        <div className="titlebar-logo">
           {/* 🍊 高档黑橙 KK 矢量徽标 */}
-          <div className="titlebar-logo-icon" data-tauri-drag-region>
+          <div className="titlebar-logo-icon">
             KK
           </div>
-          <span className="logo-title-text" data-tauri-drag-region>KKCoder 极简 AI 终端管理器</span>
+          <span className="logo-title-text">KKCoder 极简 AI 终端管理器</span>
         </div>
 
-        <div className="titlebar-actions">
+        <div className="titlebar-actions" onMouseDown={(e) => e.stopPropagation()}>
           <div className="theme-selector-wrapper">
             <button
               className={`titlebar-btn theme-palette-btn ${showThemeDropdown ? "active" : ""}`}
+              onMouseDown={(e) => {
+                e.stopPropagation();
+              }}
               onClick={(e) => {
                 e.stopPropagation();
                 setShowThemeDropdown(!showThemeDropdown);
@@ -1328,7 +1454,11 @@ function App() {
               </svg>
             </button>
             {showThemeDropdown && (
-              <div className="theme-dropdown" onClick={(e) => e.stopPropagation()}>
+              <div
+                className="theme-dropdown"
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => e.stopPropagation()}
+              >
                 <div className="theme-dropdown-section">
                   <div className="theme-dropdown-section-title">深色</div>
                   <div
@@ -1492,18 +1622,27 @@ function App() {
           {/* 顶部 Tab 标签栏 */}
           <div className="tab-bar">
             <div className="tab-list" onWheel={handleTabWheel}>
-              {openTabIds.map((tid) => {
+              {openTabIds.map((tid, index) => {
                 const s = sessions.find((sess) => sess.id === tid);
                 if (!s) return null;
                 const isActive = activeSessionId === tid;
                 const isRenaming = renamingTabId === s.id;
                 const isGlowing = glowingSessionIds.includes(s.id);
+
                 return (
                   <div
                     key={s.id}
+                    data-id={s.id}
                     className={`tab ${isActive ? "active" : ""} ${
                       isActive && s.type === "pi" ? "pi-tab" : ""
-                    } ${isGlowing ? (s.type === "pi" ? "glowing-pi" : "glowing-claude") : ""}`}
+                    } ${isGlowing ? (s.type === "pi" ? "glowing-pi" : "glowing-claude") : ""} ${
+                      draggingIndex === index ? "dragging" : ""
+                    }`}
+                    draggable={!isRenaming}
+                    onDragStart={(e) => handleDragStart(e, index)}
+                    onDragOver={(e) => handleDragOver(e, index)}
+                    onDragEnd={handleDragEnd}
+                    onDrop={handleDrop}
                     onClick={() => {
                       setActiveSessionId(s.id);
                       setGlowingSessionIds((prev) => prev.filter((id) => id !== s.id));
@@ -1576,10 +1715,10 @@ function App() {
                 </div>
               </div>
             ) : (
-              openTabIds.map((tid) => {
-                const s = sessions.find((sess) => sess.id === tid);
-                if (!s) return null;
-                const isActive = activeSessionId === tid;
+              sessions.map((s) => {
+                const isOpen = openTabIds.includes(s.id);
+                if (!isOpen) return null;
+                const isActive = activeSessionId === s.id;
                 const shouldResume = shouldResumeSession(s.id, newSessionIds);
                 return (
                   <div

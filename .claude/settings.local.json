@@ -3,7 +3,9 @@
     "allow": [
       "Bash(npm run *)",
       "Bash(netstat -ano)",
-      "Bash(netsh interface *)"
+      "Bash(netsh interface *)",
+      "Bash(npx tsc *)",
+      "Bash(cargo check *)"
     ]
   }
 }
