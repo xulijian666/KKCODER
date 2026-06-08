@@ -2722,6 +2722,368 @@ fn stop_diff_watcher(
 }
 
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct ProjectFileEntry {
+    name: String,
+    path: String,
+    is_dir: bool,
+    size: u64,
+}
+
+#[tauri::command]
+fn read_project_files(project_path: String) -> Result<Vec<ProjectFileEntry>, String> {
+    log_to_file(&format!("read_project_files called: project_path={}", project_path));
+    let root = std::path::Path::new(&project_path);
+    if !root.exists() {
+        return Err("Project path does not exist".to_string());
+    }
+
+    let mut files = Vec::new();
+    let mut dirs_to_visit = vec![root.to_path_buf()];
+    let mut count = 0;
+
+    while let Some(dir) = dirs_to_visit.pop() {
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries {
+                if let Ok(entry) = entry {
+                    let path = entry.path();
+                    let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+
+                    if file_name.starts_with('.') && file_name != ".gitignore" && file_name != ".env" {
+                        continue;
+                    }
+                    if file_name == "node_modules"
+                        || file_name == "venv"
+                        || file_name == "env"
+                        || file_name == "dist"
+                        || file_name == "build"
+                        || file_name == "target"
+                        || file_name == "out"
+                    {
+                        continue;
+                    }
+
+                    let is_dir = path.is_dir();
+                    let size = if is_dir { 0 } else { path.metadata().map(|m| m.len()).unwrap_or(0) };
+
+                    let relative_path = match path.strip_prefix(root) {
+                        Ok(p) => p.to_string_lossy().replace('\\', "/"),
+                        Err(_) => continue,
+                    };
+
+                    files.push(ProjectFileEntry {
+                        name: file_name.to_string(),
+                        path: relative_path,
+                        is_dir,
+                        size,
+                    });
+
+                    if is_dir {
+                        dirs_to_visit.push(path);
+                    }
+
+                    count += 1;
+                    if count > 5000 {
+                        break;
+                    }
+                }
+            }
+        }
+        if count > 5000 {
+            break;
+        }
+    }
+
+    // Sort: directories first, then files, alphabetically
+    files.sort_by(|a, b| {
+        if a.is_dir != b.is_dir {
+            b.is_dir.cmp(&a.is_dir)
+        } else {
+            a.path.cmp(&b.path)
+        }
+    });
+
+    Ok(files)
+}
+
+#[tauri::command]
+fn read_project_directory(project_path: String, relative_path: String) -> Result<Vec<ProjectFileEntry>, String> {
+    log_to_file(&format!("read_project_directory called: project_path={}, relative_path={}", project_path, relative_path));
+    let root = std::path::Path::new(&project_path);
+    let dir_path = if relative_path.is_empty() {
+        root.to_path_buf()
+    } else {
+        root.join(&relative_path)
+    };
+
+    let root_canonical = root.canonicalize().map_err(|e| format!("Failed to canonicalize project root: {}", e))?;
+    let dir_canonical = match dir_path.canonicalize() {
+        Ok(p) => p,
+        Err(e) => return Err(format!("Directory not found or inaccessible: {}", e)),
+    };
+
+    if !dir_canonical.starts_with(&root_canonical) {
+        return Err("Access denied: Path outside project root".to_string());
+    }
+
+    if !dir_canonical.is_dir() {
+        return Err("Not a directory".to_string());
+    }
+
+    let mut files = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&dir_canonical) {
+        for entry in entries {
+            if let Ok(entry) = entry {
+                let path = entry.path();
+                let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+
+                if file_name.starts_with('.') && file_name != ".gitignore" && file_name != ".env" {
+                    continue;
+                }
+                if file_name == "node_modules"
+                    || file_name == "venv"
+                    || file_name == "env"
+                    || file_name == "dist"
+                    || file_name == "build"
+                    || file_name == "target"
+                    || file_name == "out"
+                    || file_name == ".git"
+                {
+                    continue;
+                }
+
+                let is_dir = path.is_dir();
+                let size = if is_dir { 0 } else { path.metadata().map(|m| m.len()).unwrap_or(0) };
+
+                let rel_path = match path.strip_prefix(&root_canonical) {
+                    Ok(p) => p.to_string_lossy().replace('\\', "/"),
+                    Err(_) => continue,
+                };
+
+                files.push(ProjectFileEntry {
+                    name: file_name.to_string(),
+                    path: rel_path,
+                    is_dir,
+                    size,
+                });
+            }
+        }
+    }
+
+    // Sort: directories first, then files, alphabetically
+    files.sort_by(|a, b| {
+        if a.is_dir != b.is_dir {
+            b.is_dir.cmp(&a.is_dir)
+        } else {
+            a.path.cmp(&b.path)
+        }
+    });
+
+    Ok(files)
+}
+
+#[tauri::command]
+fn search_project_files(project_path: String, query: String) -> Result<Vec<ProjectFileEntry>, String> {
+    log_to_file(&format!("search_project_files called: project_path={}, query={}", project_path, query));
+    let root = std::path::Path::new(&project_path);
+    if !root.exists() {
+        return Err("Project path does not exist".to_string());
+    }
+
+    let query_lower = query.to_lowercase();
+    let mut files = Vec::new();
+    let mut dirs_to_visit = vec![root.to_path_buf()];
+    let mut count = 0;
+
+    while let Some(dir) = dirs_to_visit.pop() {
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries {
+                if let Ok(entry) = entry {
+                    let path = entry.path();
+                    let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+
+                    if file_name.starts_with('.') && file_name != ".gitignore" && file_name != ".env" {
+                        continue;
+                    }
+                    if file_name == "node_modules"
+                        || file_name == "venv"
+                        || file_name == "env"
+                        || file_name == "dist"
+                        || file_name == "build"
+                        || file_name == "target"
+                        || file_name == "out"
+                        || file_name == ".git"
+                    {
+                        continue;
+                    }
+
+                    let is_dir = path.is_dir();
+                    let matches_query = file_name.to_lowercase().contains(&query_lower);
+
+                    let rel_path = match path.strip_prefix(root) {
+                        Ok(p) => p.to_string_lossy().replace('\\', "/"),
+                        Err(_) => continue,
+                    };
+
+                    if matches_query && !is_dir {
+                        let size = path.metadata().map(|m| m.len()).unwrap_or(0);
+                        files.push(ProjectFileEntry {
+                            name: file_name.to_string(),
+                            path: rel_path,
+                            is_dir,
+                            size,
+                        });
+                        count += 1;
+                        if count >= 300 {
+                            break;
+                        }
+                    }
+
+                    if is_dir {
+                        dirs_to_visit.push(path);
+                    }
+                }
+            }
+        }
+        if count >= 300 {
+            break;
+        }
+    }
+
+    // Sort: directories first, then files, alphabetically
+    files.sort_by(|a, b| {
+        if a.is_dir != b.is_dir {
+            b.is_dir.cmp(&a.is_dir)
+        } else {
+            a.path.cmp(&b.path)
+        }
+    });
+
+    Ok(files)
+}
+
+
+#[tauri::command]
+fn read_project_file_content(project_path: String, relative_path: String) -> Result<String, String> {
+    log_to_file(&format!("read_project_file_content called: project_path={}, relative_path={}", project_path, relative_path));
+    let root = std::path::Path::new(&project_path);
+    let full_path = root.join(&relative_path);
+
+    let root_canonical = root.canonicalize().map_err(|e| format!("Failed to canonicalize project root: {}", e))?;
+    let full_path_canonical = match full_path.canonicalize() {
+        Ok(p) => p,
+        Err(e) => return Err(format!("File not found or inaccessible: {}", e)),
+    };
+
+    if !full_path_canonical.starts_with(&root_canonical) {
+        return Err("Access denied: File outside project root".to_string());
+    }
+
+    if !full_path_canonical.is_file() {
+        return Err("Not a file".to_string());
+    }
+
+    let mut file = std::fs::File::open(&full_path_canonical).map_err(|e| e.to_string())?;
+    use std::io::Read;
+    let mut buffer = vec![0; 1024 * 1024]; // 1MB limit
+    let bytes_read = file.read(&mut buffer).map_err(|e| e.to_string())?;
+    buffer.truncate(bytes_read);
+
+    match String::from_utf8(buffer) {
+        Ok(content) => Ok(content),
+        Err(_) => Err("Binary file or invalid UTF-8 encoding. Preview is disabled.".to_string()),
+    }
+}
+
+#[tauri::command]
+fn open_file_in_system(path: String) -> Result<(), String> {
+    log_to_file(&format!("open_file_in_system called: path={}", path));
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/c", "start", "", &path])
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        #[cfg(target_os = "macos")]
+        let cmd = "open";
+        #[cfg(target_os = "linux")]
+        let cmd = "xdg-open";
+        
+        std::process::Command::new(cmd)
+            .arg(&path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+}
+
+#[tauri::command]
+fn open_in_file_manager(path: String) -> Result<(), String> {
+    log_to_file(&format!("open_in_file_manager called: path={}", path));
+    
+    #[cfg(target_os = "windows")]
+    {
+        let win_path = path.replace('/', "\\");
+        let p = std::path::Path::new(&win_path);
+        if !p.exists() {
+            return Err(format!("指定路径不存在: {}", win_path));
+        }
+        if p.is_file() {
+            use std::os::windows::process::CommandExt;
+            std::process::Command::new("explorer")
+                .raw_arg(format!(r#"/select,"{}""#, win_path))
+                .spawn()
+                .map_err(|e| e.to_string())?;
+        } else {
+            std::process::Command::new("explorer")
+                .arg(&win_path)
+                .spawn()
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let p = std::path::Path::new(&path);
+        if !p.exists() {
+            return Err("指定路径不存在".to_string());
+        }
+        #[cfg(target_os = "macos")]
+        {
+            if p.is_file() {
+                std::process::Command::new("open")
+                    .args(["-R", &path])
+                    .spawn()
+                    .map_err(|e| e.to_string())?;
+            } else {
+                std::process::Command::new("open")
+                    .arg(&path)
+                    .spawn()
+                    .map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let dir = if p.is_file() {
+                p.parent().unwrap_or(p)
+            } else {
+                p
+            };
+            std::process::Command::new("xdg-open")
+                .arg(dir)
+                .spawn()
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        }
+    }
+}
+
+
 pub fn run() {
     // 启动时初始化数据库表
     initialize_database().expect("Failed to initialize SQLite database");
@@ -2823,7 +3185,13 @@ pub fn run() {
             revert_session_file,
             checkpoint_session_diff,
             start_diff_watcher,
-            stop_diff_watcher
+            stop_diff_watcher,
+            read_project_files,
+            read_project_directory,
+            search_project_files,
+            read_project_file_content,
+            open_file_in_system,
+            open_in_file_manager
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

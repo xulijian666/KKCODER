@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useLayoutEffect } from "react";
+import { useState, useEffect, useRef, useMemo, useLayoutEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
@@ -8,6 +8,9 @@ import { NewSessionModal } from "./components/NewSessionModal";
 import { SettingsModal } from "./components/SettingsModal";
 import { MdEditorModal } from "./components/MdEditorModal";
 import { DiffPanel } from "./components/DiffPanel";
+import { ProjectTree } from "./components/ProjectTree";
+import { renderMarkdownToHtml } from "./utils/markdown";
+import { FileText } from "lucide-react";
 import {
   addUnreadCompletion,
   getUnreadCompletionCount,
@@ -196,6 +199,74 @@ function App() {
       document.body.style.cursor = "";
     };
   }, [isResizing]);
+
+  // 右侧项目树拖拽调宽状态与拖拽处理
+  const [projectTreeWidth, setProjectTreeWidth] = useState<number>(() => {
+    const saved = localStorage.getItem("kkcoder_project_tree_width");
+    return saved ? parseInt(saved, 10) : 260;
+  });
+  const [isResizingProjectTree, setIsResizingProjectTree] = useState<boolean>(false);
+  const [showProjectTree, setShowProjectTree] = useState<boolean>(() => {
+    return localStorage.getItem("kkcoder_show_project_tree") === "true";
+  });
+  const [previewFile, setPreviewFile] = useState<{ 
+    path: string; 
+    content: string; 
+    cannotPreview?: boolean;
+    errorMsg?: string;
+  } | null>(null);
+  const [mdMode, setMdMode] = useState<"preview" | "source">("source");
+  // 预览区内部快捷查找与行号跳转状态
+  const [fileSearchQuery, setFileSearchQuery] = useState<string>("");
+  const [showFileSearchBar, setShowFileSearchBar] = useState<boolean>(false);
+  const [showGoToLineBar, setShowGoToLineBar] = useState<boolean>(false);
+  const [goToLineNumber, setGoToLineNumber] = useState<string>("");
+  const [activeMatchIndex, setActiveMatchIndex] = useState<number>(0);
+  const [matchedLines, setMatchedLines] = useState<number[]>([]);
+  const [previewContextMenu, setPreviewContextMenu] = useState<{
+    x: number;
+    y: number;
+    startLine: number;
+    endLine: number;
+  } | null>(null);
+
+  const startProjectTreeResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizingProjectTree(true);
+  };
+
+  useEffect(() => {
+    if (!isResizingProjectTree) return;
+
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const newWidth = Math.max(200, Math.min(500, window.innerWidth - e.clientX));
+      setProjectTreeWidth(newWidth);
+      localStorage.setItem("kkcoder_project_tree_width", newWidth.toString());
+      window.dispatchEvent(new Event("resize"));
+    };
+
+    const handleMouseUp = () => {
+      setIsResizingProjectTree(false);
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+      setTimeout(() => {
+        window.dispatchEvent(new Event("resize"));
+      }, 50);
+    };
+
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+
+    return () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+    };
+  }, [isResizingProjectTree]);
 
   // 快捷短语状态
   const [shortcutsEnabled, setShortcutsEnabled] = useState<boolean>(() => {
@@ -437,6 +508,338 @@ function App() {
   }, [queue.length]);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId);
+
+  // 切换会话项目路径时自动清空文件预览
+  useEffect(() => {
+    setPreviewFile(null);
+  }, [activeSession?.path]);
+
+  // 监听点击外部关闭预览右键菜单
+  useEffect(() => {
+    const closeMenu = () => setPreviewContextMenu(null);
+    window.addEventListener("click", closeMenu);
+    return () => window.removeEventListener("click", closeMenu);
+  }, []);
+
+  const handlePreviewContextMenu = useCallback((e: React.MouseEvent) => {
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || !previewFile) return;
+
+    // 检查选中的文本是否在预览面板内
+    const range = selection.getRangeAt(0);
+    const container = range.commonAncestorContainer as HTMLElement;
+    
+    let isInsidePreview = false;
+    let curr: HTMLElement | null = container;
+    while (curr && curr !== document.body) {
+      if (curr.classList && (curr.classList.contains("preview-body") || curr.classList.contains("file-preview-panel"))) {
+        isInsidePreview = true;
+        break;
+      }
+      curr = curr.parentElement;
+    }
+    
+    if (!isInsidePreview) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    let startLine = Infinity;
+    let endLine = -Infinity;
+
+    const getLineNumberFromNode = (node: Node | null): number | null => {
+      let temp: HTMLElement | null = node as HTMLElement;
+      while (temp && temp !== document.body) {
+        if (temp.classList && temp.classList.contains("preview-code-line")) {
+          const attr = temp.getAttribute("data-line");
+          return attr ? parseInt(attr, 10) : null;
+        }
+        temp = temp.parentElement;
+      }
+      return null;
+    };
+
+    const anchorLine = getLineNumberFromNode(selection.anchorNode);
+    const focusLine = getLineNumberFromNode(selection.focusNode);
+
+    if (anchorLine !== null) {
+      startLine = Math.min(startLine, anchorLine);
+      endLine = Math.max(endLine, anchorLine);
+    }
+    if (focusLine !== null) {
+      startLine = Math.min(startLine, focusLine);
+      endLine = Math.max(endLine, focusLine);
+    }
+
+    try {
+      const allLines = document.querySelectorAll(".preview-code-line");
+      allLines.forEach((lineEl) => {
+        if (selection.containsNode(lineEl, true)) {
+          const attr = lineEl.getAttribute("data-line");
+          if (attr) {
+            const l = parseInt(attr, 10);
+            startLine = Math.min(startLine, l);
+            endLine = Math.max(endLine, l);
+          }
+        }
+      });
+    } catch (err) {}
+
+    if (startLine === Infinity || endLine === -Infinity) return;
+
+    let x = e.clientX;
+    let y = e.clientY;
+    if (x + 160 > window.innerWidth) {
+      x = Math.max(0, x - 160);
+    }
+
+    setPreviewContextMenu({
+      x,
+      y,
+      startLine,
+      endLine
+    });
+  }, [previewFile]);
+
+  // 监听预览内匹配项列表和当前索引，自动滚动定位到当前匹配行
+  useEffect(() => {
+    if (matchedLines.length > 0 && activeMatchIndex >= 0 && activeMatchIndex < matchedLines.length) {
+      const lineNum = matchedLines[activeMatchIndex];
+      const el = document.querySelector(`.preview-code-line[data-line="${lineNum}"]`);
+      if (el) {
+        el.scrollIntoView({ block: "center", behavior: "smooth" });
+      }
+    }
+  }, [activeMatchIndex, matchedLines]);
+
+  // 从 Selection 提取起始行号 and 结束行号的通用工具函数
+  const getSelectionLineRange = useCallback((selection: Selection) => {
+    let startLine = Infinity;
+    let endLine = -Infinity;
+
+    const getLineNumberFromNode = (node: Node | null): number | null => {
+      let temp: HTMLElement | null = node as HTMLElement;
+      while (temp && temp !== document.body) {
+        if (temp.classList && temp.classList.contains("preview-code-line")) {
+          const attr = temp.getAttribute("data-line");
+          return attr ? parseInt(attr, 10) : null;
+        }
+        temp = temp.parentElement;
+      }
+      return null;
+    };
+
+    const anchorLine = getLineNumberFromNode(selection.anchorNode);
+    const focusLine = getLineNumberFromNode(selection.focusNode);
+
+    if (anchorLine !== null) {
+      startLine = Math.min(startLine, anchorLine);
+      endLine = Math.max(endLine, anchorLine);
+    }
+    if (focusLine !== null) {
+      startLine = Math.min(startLine, focusLine);
+      endLine = Math.max(endLine, focusLine);
+    }
+
+    try {
+      const allLines = document.querySelectorAll(".preview-code-line");
+      allLines.forEach((lineEl) => {
+        if (selection.containsNode(lineEl, true)) {
+          const attr = lineEl.getAttribute("data-line");
+          if (attr) {
+            const l = parseInt(attr, 10);
+            startLine = Math.min(startLine, l);
+            endLine = Math.max(endLine, l);
+          }
+        }
+      });
+    } catch (err) {}
+
+    if (startLine === Infinity || endLine === -Infinity) return null;
+    return { startLine, endLine };
+  }, []);
+
+  // 将框选的部分代码添加到对话（末尾带空格，且自动聚焦终端）
+  const handleAddToConversationFromSelection = useCallback((selection: Selection) => {
+    if (!previewFile || !activeSessionId) return;
+    const range = getSelectionLineRange(selection);
+    if (!range) return;
+
+    const { startLine, endLine } = range;
+    const isSingleLine = startLine === endLine;
+    const rangeStr = isSingleLine ? `L${startLine}` : `L${startLine}-L${endLine}`;
+    
+    // 路径用双引号，且行号后面要自带一个空格
+    const data = `"${previewFile.path}":${rangeStr} `;
+
+    invoke("write_to_terminal", { sessionId: activeSessionId, data })
+      .then(() => {
+        window.dispatchEvent(new CustomEvent("kkcoder-focus-active-terminal"));
+      })
+      .catch(err => console.error("发送框选范围至终端失败:", err));
+  }, [previewFile, activeSessionId, getSelectionLineRange]);
+
+  // 全局键盘快捷键绑定（Escape关闭, Ctrl+F查找, Ctrl+G跳转行, Ctrl+U选中添加到对话）
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        if (showFileSearchBar) {
+          setShowFileSearchBar(false);
+          setFileSearchQuery("");
+          e.preventDefault();
+        } else if (showGoToLineBar) {
+          setShowGoToLineBar(false);
+          setGoToLineNumber("");
+          e.preventDefault();
+        } else if (previewFile) {
+          setPreviewFile(null);
+          setMdMode("source");
+          e.preventDefault();
+        }
+        return;
+      }
+
+      if (previewFile) {
+        // Ctrl + F 文件内查找
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+          e.preventDefault();
+          setShowFileSearchBar(true);
+          setShowGoToLineBar(false);
+          setTimeout(() => {
+            const input = document.getElementById("file-search-input");
+            if (input) input.focus();
+          }, 50);
+        }
+        // Ctrl + G 跳转到指定行号
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "g") {
+          e.preventDefault();
+          setShowGoToLineBar(true);
+          setShowFileSearchBar(false);
+          setTimeout(() => {
+            const input = document.getElementById("go-to-line-input");
+            if (input) input.focus();
+          }, 50);
+        }
+        // Ctrl + U 选中内容添加到对话
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "u") {
+          const selection = window.getSelection();
+          if (selection && !selection.isCollapsed) {
+            e.preventDefault();
+            handleAddToConversationFromSelection(selection);
+          }
+        }
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => window.removeEventListener("keydown", handleKeyDown, true);
+  }, [previewFile, showFileSearchBar, showGoToLineBar, goToLineNumber, fileSearchQuery, matchedLines, activeMatchIndex, handleAddToConversationFromSelection]);
+
+  const handleFileClick = useCallback(async (relativePath: string) => {
+    if (!activeSession?.path) return;
+    setMdMode("source");
+    
+    if (relativePath.toLowerCase().endsWith(".svg")) {
+      setPreviewFile({
+        path: relativePath,
+        content: "",
+        cannotPreview: true,
+        errorMsg: "SVG 文件预览已禁用。"
+      });
+      return;
+    }
+
+    try {
+      const content = await invoke<string>("read_project_file_content", {
+        projectPath: activeSession.path,
+        relativePath
+      });
+      setPreviewFile({ path: relativePath, content, cannotPreview: false });
+    } catch (err: any) {
+      setPreviewFile({
+        path: relativePath,
+        content: "",
+        cannotPreview: true,
+        errorMsg: err ? String(err) : "无法读取此文件，可能是二进制文件或非UTF-8编码。"
+      });
+    }
+  }, [activeSession?.path]);
+
+
+  const handleInsertPathToTerminal = useCallback((relativePath: string) => {
+    if (!activeSessionId) return;
+    const formatted = `"${relativePath}" `;
+    invoke("write_to_terminal", { sessionId: activeSessionId, data: formatted })
+      .then(() => {
+        window.dispatchEvent(new CustomEvent("kkcoder-focus-active-terminal"));
+      })
+      .catch(err => console.error("发送相对路径至终端失败:", err));
+  }, [activeSessionId]);
+
+
+
+  // 处理文件内查找内容改变（更新匹配的行号列表和当前匹配项索引）
+  const handleFileSearchChange = (query: string) => {
+    setFileSearchQuery(query);
+    if (!query.trim() || !previewFile) {
+      setMatchedLines([]);
+      setActiveMatchIndex(0);
+      return;
+    }
+    const lines = previewFile.content.split("\n");
+    const matched: number[] = [];
+    const lowerQuery = query.toLowerCase();
+    lines.forEach((line, idx) => {
+      if (line.toLowerCase().includes(lowerQuery)) {
+        matched.push(idx + 1);
+      }
+    });
+    setMatchedLines(matched);
+    setActiveMatchIndex(matched.length > 0 ? 0 : -1);
+  };
+
+  // 处理跳转到行号逻辑（闪烁并滚动定位到该行）
+  const handleGoToLine = () => {
+    const lineNum = parseInt(goToLineNumber, 10);
+    if (isNaN(lineNum) || !previewFile) return;
+    
+    const totalLines = previewFile.content.split("\n").length;
+    const target = Math.max(1, Math.min(totalLines, lineNum));
+    
+    const el = document.querySelector(`.preview-code-line[data-line="${target}"]`);
+    if (el) {
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+      el.classList.add("line-highlight-pulse");
+      setTimeout(() => {
+        el.classList.remove("line-highlight-pulse");
+      }, 1500);
+    }
+    setShowGoToLineBar(false);
+    setGoToLineNumber("");
+  };
+
+  // 辅助防正则注入函数
+  const escapeRegExp = (str: string) => {
+    return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  };
+
+  // 渲染高亮的匹配行文本
+  const renderHighlightedLineText = (lineText: string) => {
+    if (!fileSearchQuery.trim()) return lineText || " ";
+    const parts = lineText.split(new RegExp(`(${escapeRegExp(fileSearchQuery)})`, "gi"));
+    return (
+      <>
+        {parts.map((part, index) => 
+          part.toLowerCase() === fileSearchQuery.toLowerCase() ? (
+            <mark key={index} className="search-highlight-mark">
+              {part}
+            </mark>
+          ) : (
+            part
+          )
+        )}
+      </>
+    );
+  };
 
   const refreshDiff = async () => {
     if (!enableDiffPanel) {
@@ -1543,6 +1946,21 @@ function App() {
           </div>
 
           <button
+            className={`titlebar-btn toggle-project-tree-btn ${showProjectTree ? "active" : ""}`}
+            onClick={() => {
+              const newVal = !showProjectTree;
+              setShowProjectTree(newVal);
+              localStorage.setItem("kkcoder_show_project_tree", String(newVal));
+            }}
+            title={showProjectTree ? "关闭工作区文件树" : "打开工作区文件树"}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+              <line x1="16" y1="3" x2="16" y2="21"></line>
+            </svg>
+          </button>
+
+          <button
             className="titlebar-btn settings-gear-btn"
             onClick={() => setShowSettings(true)}
             title="打开设置"
@@ -1704,63 +2122,253 @@ function App() {
           </div>
 
           {/* 终端区 / 空白提示状态 (采用 Keep-Alive 常驻 DOM 设计，防止切换 Tab 时重新初始化) */}
-          <div style={{ flex: 1, display: "flex", flexDirection: "column", position: "relative", overflow: "hidden" }}>
-            {openTabIds.length === 0 ? (
-              <div className="empty-state">
-                <span className="empty-state-icon">🖥️</span>
-                <div className="empty-state-title">KKCoder AI 终端管理器</div>
-                <div className="empty-state-desc">
-                  当前没有处于活动状态的会话标签。
-                  请选择左上角的 Agent 类型并点击“**新建 AI 终端**”按钮来开启一个托管终端。
-                </div>
-              </div>
-            ) : (
-              sessions.map((s) => {
-                const isOpen = openTabIds.includes(s.id);
-                if (!isOpen) return null;
-                const isActive = activeSessionId === s.id;
-                const shouldResume = shouldResumeSession(s.id, newSessionIds);
-                return (
-                  <div
-                    key={s.id}
-                    style={{
-                      display: isActive ? "flex" : "none",
-                      flexDirection: "column",
-                      flex: 1,
-                      width: "100%",
-                      height: "100%",
-                      position: "relative",
-                    }}
-                  >
-                    <TerminalTab
-                      sessionId={s.id}
-                      directory={s.path}
-                      agentType={s.type}
-                      agentSessionId={s.agentSessionId}
-                      isReopen={shouldResume}
-                      onSpawned={() => {
-                        log(`TerminalTab spawn resolved for session: ${s.id}. Removing from newSessionIds...`);
-                        setNewSessionIds((prev) => prev.filter((nid) => nid !== s.id));
-                      }}
-                      onCaptureSessionId={handleCaptureSessionId}
-                      busy={sessionBusy[s.id] || false}
-                      onStateChange={(busy) => {
-                        setSessionBusy(prev => ({ ...prev, [s.id]: busy }));
-                      }}
-                      isActive={isActive}
-                      onCommandComplete={() => handleCommandComplete(s.id)}
-                      onUserSubmittedInput={handleUserSubmittedInputWithRenameReset}
-                      onRenameSession={handleRenameSession}
-                    />
-                    {sessionBusy[s.id] && (
-                      <div className="terminal-thinking-badge">
-                        <span className="thinking-dot-pulse"></span>
-                        <span className="thinking-text">AI 正在思考...</span>
-                      </div>
-                    )}
+          <div style={{ flex: 1, display: "flex", flexDirection: "row", position: "relative", overflow: "hidden" }}>
+            <div style={{ flex: 1, display: "flex", flexDirection: "column", position: "relative", overflow: "hidden", height: "100%" }}>
+              {openTabIds.length === 0 ? (
+                <div className="empty-state">
+                  <span className="empty-state-icon">🖥️</span>
+                  <div className="empty-state-title">KKCoder AI 终端管理器</div>
+                  <div className="empty-state-desc">
+                    当前没有处于活动状态的会话标签。
+                    请选择左上角的 Agent 类型并点击“**新建 AI 终端**”按钮来开启一个托管终端。
                   </div>
-                );
-              })
+                </div>
+              ) : (
+                sessions.map((s) => {
+                  const isOpen = openTabIds.includes(s.id);
+                  if (!isOpen) return null;
+                  const isActive = activeSessionId === s.id;
+                  const shouldResume = shouldResumeSession(s.id, newSessionIds);
+                  return (
+                    <div
+                      key={s.id}
+                      style={{
+                        display: isActive ? "flex" : "none",
+                        flexDirection: "column",
+                        flex: 1,
+                        width: "100%",
+                        height: "100%",
+                        position: "relative",
+                      }}
+                    >
+                      <TerminalTab
+                        sessionId={s.id}
+                        directory={s.path}
+                        agentType={s.type}
+                        agentSessionId={s.agentSessionId}
+                        isReopen={shouldResume}
+                        onSpawned={() => {
+                          log(`TerminalTab spawn resolved for session: ${s.id}. Removing from newSessionIds...`);
+                          setNewSessionIds((prev) => prev.filter((nid) => nid !== s.id));
+                        }}
+                        onCaptureSessionId={handleCaptureSessionId}
+                        busy={sessionBusy[s.id] || false}
+                        onStateChange={(busy) => {
+                          setSessionBusy(prev => ({ ...prev, [s.id]: busy }));
+                        }}
+                        isActive={isActive}
+                        onCommandComplete={() => handleCommandComplete(s.id)}
+                        onUserSubmittedInput={handleUserSubmittedInputWithRenameReset}
+                        onRenameSession={handleRenameSession}
+                      />
+                      {sessionBusy[s.id] && (
+                        <div className="terminal-thinking-badge">
+                          <span className="thinking-dot-pulse"></span>
+                          <span className="thinking-text">AI 正在思考...</span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* 右侧文件/Markdown 预览面板 */}
+            {previewFile && (
+              <div 
+                className="file-preview-panel"
+                onContextMenu={handlePreviewContextMenu}
+              >
+                <div className="preview-header">
+                  <div className="preview-title-area">
+                    <FileText size={14} className="preview-file-icon" />
+                    <span className="preview-file-name" title={previewFile.path.split("/").pop()}>
+                      {previewFile.path.split("/").pop()}
+                    </span>
+                    <span className="preview-file-path" title={previewFile.path}>
+                      {previewFile.path}
+                    </span>
+                  </div>
+                  {previewFile.path.endsWith(".md") && !previewFile.cannotPreview && (
+                    <div className="preview-md-tabs">
+                      <button 
+                        className={`preview-md-tab ${mdMode === "preview" ? "active" : ""}`}
+                        onClick={() => setMdMode("preview")}
+                      >
+                        预览
+                      </button>
+                      <button 
+                        className={`preview-md-tab ${mdMode === "source" ? "active" : ""}`}
+                        onClick={() => setMdMode("source")}
+                      >
+                        源码
+                      </button>
+                    </div>
+                  )}
+                  <button 
+                    className="preview-close-btn" 
+                    onClick={() => {
+                      setPreviewFile(null);
+                      setMdMode("source");
+                    }}
+                    title="关闭文件预览"
+                  >
+                    ×
+                  </button>
+                </div>
+                <div className="preview-body">
+                  {previewFile.cannotPreview ? (
+                    <div className="preview-error-container">
+                      <div className="preview-error-icon">⚠️</div>
+                      <div className="preview-error-title">该文件不支持直接预览</div>
+                      <div className="preview-error-detail">
+                        {previewFile.errorMsg || "可能该文件是二进制文件，或者其编码不支持。"}
+                      </div>
+                      <button 
+                        className="preview-open-system-btn"
+                        onClick={() => {
+                          const separator = activeSession?.path.endsWith("/") || activeSession?.path.endsWith("\\") ? "" : "/";
+                          const absolutePath = `${activeSession?.path}${separator}${previewFile.path}`;
+                          invoke("open_file_in_system", { path: absolutePath })
+                            .catch(err => alert(`打开文件失败: ${err}`));
+                        }}
+                      >
+                        直接打开文件
+                      </button>
+                    </div>
+                  ) : (previewFile.path.endsWith(".md") && mdMode === "preview") ? (
+                    <div 
+                      className="preview-markdown-content"
+                      dangerouslySetInnerHTML={{ __html: renderMarkdownToHtml(previewFile.content) }}
+                    />
+                  ) : (
+                    <div className="preview-text-content">
+                      {previewFile.content.split("\n").map((line, idx) => {
+                        const lineNum = idx + 1;
+                        const isActiveMatchLine = matchedLines.length > 0 && 
+                          activeMatchIndex >= 0 && 
+                          activeMatchIndex < matchedLines.length && 
+                          matchedLines[activeMatchIndex] === lineNum;
+                        return (
+                          <div 
+                            key={idx} 
+                            className={`preview-code-line ${isActiveMatchLine ? "active-match-line" : ""}`} 
+                            data-line={lineNum}
+                          >
+                            <span className="line-number">{lineNum}</span>
+                            <span className="line-text">{renderHighlightedLineText(line)}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* 悬浮文件内查找输入栏 */}
+                {showFileSearchBar && (
+                  <div className="file-search-bar-floating">
+                    <input 
+                      id="file-search-input"
+                      type="text" 
+                      placeholder="查找内容..." 
+                      className="file-search-bar-input"
+                      value={fileSearchQuery}
+                      onChange={(e) => handleFileSearchChange(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          if (e.shiftKey) {
+                            if (matchedLines.length > 0) {
+                              setActiveMatchIndex(prev => (prev - 1 + matchedLines.length) % matchedLines.length);
+                            }
+                          } else {
+                            if (matchedLines.length > 0) {
+                              setActiveMatchIndex(prev => (prev + 1) % matchedLines.length);
+                            }
+                          }
+                        }
+                      }}
+                    />
+                    <span className="file-search-bar-count">
+                      {matchedLines.length > 0 ? `${activeMatchIndex + 1}/${matchedLines.length}` : "0/0"}
+                    </span>
+                    <button 
+                      className="file-search-bar-nav-btn"
+                      onClick={() => {
+                        if (matchedLines.length > 0) {
+                          setActiveMatchIndex(prev => (prev - 1 + matchedLines.length) % matchedLines.length);
+                        }
+                      }}
+                      title="上一个"
+                    >
+                      ▲
+                    </button>
+                    <button 
+                      className="file-search-bar-nav-btn"
+                      onClick={() => {
+                        if (matchedLines.length > 0) {
+                          setActiveMatchIndex(prev => (prev + 1) % matchedLines.length);
+                        }
+                      }}
+                      title="下一个"
+                    >
+                      ▼
+                    </button>
+                    <button 
+                      className="file-search-bar-close-btn"
+                      onClick={() => {
+                        setShowFileSearchBar(false);
+                        setFileSearchQuery("");
+                      }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                )}
+
+                {/* 悬浮跳转行号输入栏 */}
+                {showGoToLineBar && (
+                  <div className="file-search-bar-floating go-to-line-bar">
+                    <input 
+                      id="go-to-line-input"
+                      type="text" 
+                      placeholder="输入行号并回车..." 
+                      className="file-search-bar-input"
+                      value={goToLineNumber}
+                      onChange={(e) => setGoToLineNumber(e.target.value.replace(/\D/g, ""))}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          handleGoToLine();
+                        }
+                      }}
+                    />
+                    <button 
+                      className="file-search-bar-go-btn"
+                      onClick={handleGoToLine}
+                    >
+                      跳转
+                    </button>
+                    <button 
+                      className="file-search-bar-close-btn"
+                      onClick={() => {
+                        setShowGoToLineBar(false);
+                        setGoToLineNumber("");
+                      }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                )}
+              </div>
             )}
           </div>
 
@@ -1949,6 +2557,77 @@ function App() {
             </div>
           </div>
         </main>
+
+        {showProjectTree && (
+          <>
+            <div 
+              className={`project-tree-resizer ${isResizingProjectTree ? "dragging" : ""}`} 
+              onMouseDown={startProjectTreeResize} 
+              data-agent-type={activeSession?.type || "claude"}
+            />
+            <aside 
+              className="project-tree-aside"
+              style={{ width: `${projectTreeWidth}px` }}
+            >
+              <div className="project-tree-aside-header">
+                <span className="aside-header-title">项目文件</span>
+                {activeSession && activeSession.path && (
+                  <span className="aside-header-path" title={activeSession.path}>
+                    {activeSession.path.split(/[/\\]/).pop()}
+                  </span>
+                )}
+              </div>
+              {activeSession && activeSession.path ? (
+                <ProjectTree
+                  projectPath={activeSession.path}
+                  onFileClick={handleFileClick}
+                  onInsertPathToTerminal={handleInsertPathToTerminal}
+                />
+              ) : (
+                <div className="tree-placeholder-container">
+                  <div className="tree-placeholder-icon">📂</div>
+                  <div className="tree-placeholder-title">未关联项目文件夹</div>
+                  <div className="tree-placeholder-desc">
+                    请在左侧新建或选择一个关联了本地路径的会话，以在此处浏览项目文件树。
+                  </div>
+                </div>
+              )}
+            </aside>
+          </>
+        )}
+
+        {previewContextMenu && previewFile && (
+          <div 
+            className="tree-context-menu"
+            style={{
+              position: "fixed",
+              left: `${previewContextMenu.x}px`,
+              top: `${previewContextMenu.y}px`,
+              zIndex: 9999,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button 
+              onClick={() => {
+                const isSingleLine = previewContextMenu.startLine === previewContextMenu.endLine;
+                const rangeStr = isSingleLine 
+                  ? `L${previewContextMenu.startLine}` 
+                  : `L${previewContextMenu.startLine}-L${previewContextMenu.endLine}`;
+                const data = `"${previewFile.path}":${rangeStr} `;
+                
+                invoke("write_to_terminal", { sessionId: activeSessionId, data })
+                  .then(() => {
+                    window.dispatchEvent(new CustomEvent("kkcoder-focus-active-terminal"));
+                  })
+                  .catch(err => console.error("发送框选范围至终端失败:", err));
+                
+                setPreviewContextMenu(null);
+              }}
+            >
+              添加到对话
+            </button>
+          </div>
+        )}
       </div>
 
       {/* 新建会话终端弹窗组件 */}

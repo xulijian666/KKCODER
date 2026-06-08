@@ -910,6 +910,19 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
     }
   }, [isActive, sessionId]);
 
+  // 监听来自全局的自动聚焦指令，使得在文件/行号添加到对话等操作后，终端能够瞬间自动重新获得焦点
+  useEffect(() => {
+    const handleFocusRequest = () => {
+      if (isActive && xtermRef.current) {
+        xtermRef.current.focus();
+      }
+    };
+    window.addEventListener("kkcoder-focus-active-terminal", handleFocusRequest);
+    return () => {
+      window.removeEventListener("kkcoder-focus-active-terminal", handleFocusRequest);
+    };
+  }, [isActive]);
+
   return (
     <div className={`terminal-container agent-type-${agentType}`}>
       <div className="terminal-ref" ref={terminalRef} />

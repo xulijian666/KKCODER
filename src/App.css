@@ -3454,3 +3454,652 @@ input:checked + .switch-slider:before {
   box-shadow: inset 4px 0 0 var(--color-orange) !important;
 }
 
+/* ==========================================================================
+   右侧项目树与分屏文件/Markdown 预览专属样式系统
+   ========================================================================== */
+
+.project-tree-aside {
+  background-color: var(--bg-sidebar);
+  border-left: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.project-tree-aside-header {
+  height: 38px;
+  min-height: 38px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background-color: rgba(0, 0, 0, 0.1);
+  user-select: none;
+}
+
+[data-theme^="light-"] .project-tree-aside-header {
+  background-color: rgba(0, 0, 0, 0.03);
+}
+
+.aside-header-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.aside-header-path {
+  font-size: 11px;
+  color: var(--text-secondary);
+  opacity: 0.7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 150px;
+  font-family: var(--font-mono);
+}
+
+.project-tree-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+}
+
+.project-tree-header {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background-color: rgba(0, 0, 0, 0.05);
+}
+
+[data-theme^="light-"] .project-tree-header {
+  background-color: rgba(0, 0, 0, 0.015);
+}
+
+.tree-search-container {
+  position: relative;
+  flex: 1;
+}
+
+.tree-search-icon {
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-secondary);
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+.tree-search-input {
+  width: 100%;
+  padding: 4px 8px 4px 26px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  background-color: var(--bg-main);
+  color: var(--text-primary);
+  font-size: 11.5px;
+  outline: none;
+  transition: var(--transition-smooth);
+}
+
+.tree-search-input:focus {
+  border-color: var(--color-orange);
+}
+
+.tree-refresh-btn {
+  border: 1px solid var(--border-color);
+  background-color: var(--bg-main);
+  color: var(--text-secondary);
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: var(--transition-smooth);
+  padding: 0;
+}
+
+.tree-refresh-btn:hover {
+  background-color: var(--bg-hover-item);
+  color: var(--text-primary);
+}
+
+.tree-refresh-btn:active {
+  transform: scale(0.95);
+}
+
+.tree-refresh-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.spinning {
+  animation: spin 0.8s linear infinite;
+}
+
+.project-tree-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+
+.tree-placeholder {
+  padding: 20px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: center;
+  font-style: italic;
+}
+
+.tree-node-wrapper {
+  display: flex;
+  flex-direction: column;
+}
+
+.tree-node {
+  display: flex;
+  align-items: center;
+  height: 24px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-primary);
+  transition: background-color 0.12s ease;
+  user-select: none;
+}
+
+.tree-node:hover {
+  background-color: var(--bg-hover-item);
+}
+
+.tree-node-arrow {
+  width: 14px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  opacity: 0.8;
+  margin-right: 2px;
+}
+
+.tree-node-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 6px;
+  color: var(--text-secondary);
+}
+
+.folder-icon {
+  color: var(--color-orange);
+  opacity: 0.85;
+}
+
+.file-icon {
+  color: var(--text-secondary);
+  opacity: 0.75;
+}
+
+.tree-node-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  padding-right: 8px;
+}
+
+.project-tree-resizer {
+  width: 4px;
+  min-width: 4px;
+  cursor: col-resize;
+  background-color: transparent;
+  transition: background-color 0.15s ease;
+  z-index: 10;
+}
+
+.project-tree-resizer:hover,
+.project-tree-resizer.dragging {
+  background-color: var(--color-orange);
+}
+
+.project-tree-resizer[data-agent-type="pi"]:hover,
+.project-tree-resizer[data-agent-type="pi"].dragging {
+  background-color: var(--color-green);
+}
+
+/* 右键上下文菜单 */
+.tree-context-menu {
+  background-color: var(--bg-sidebar);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  padding: 4px 0;
+  min-width: 140px;
+  animation: fadeInMenu 0.12s ease-out;
+}
+
+@keyframes fadeInMenu {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.tree-context-menu button {
+  width: 100%;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--text-primary);
+  background: transparent;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.tree-context-menu button:hover {
+  background-color: var(--bg-hover-item);
+}
+
+.tree-context-menu .menu-divider {
+  height: 1px;
+  background-color: var(--border-color);
+  margin: 4px 0;
+}
+
+/* 文件预览并排分屏面板 */
+.file-preview-panel {
+  width: 50%;
+  border-left: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background-color: var(--bg-main);
+  animation: slideInRightPreview 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes slideInRightPreview {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+.preview-header {
+  height: 38px;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border-color);
+  background-color: var(--bg-sidebar);
+  user-select: none;
+}
+
+.preview-title-area {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  flex: 1;
+  margin-right: 12px;
+}
+
+.preview-file-icon {
+  color: var(--color-orange);
+  flex-shrink: 0;
+}
+
+.preview-file-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+}
+
+.preview-file-path {
+  font-size: 11px;
+  color: var(--text-secondary);
+  opacity: 0.7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono);
+}
+
+.preview-close-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 18px;
+  cursor: pointer;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  transition: var(--transition-smooth);
+  padding: 0;
+}
+
+.preview-close-btn:hover {
+  background-color: var(--bg-hover-item);
+  color: var(--text-primary);
+}
+
+.preview-body {
+  flex: 1;
+  overflow: auto;
+  padding: 16px;
+  user-select: text;
+}
+
+.preview-text-content {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre;
+  color: var(--text-primary);
+}
+
+.preview-code-line {
+  display: flex;
+  min-height: 20px;
+}
+
+.preview-code-line:hover {
+  background-color: rgba(255, 255, 255, 0.03);
+}
+
+[data-theme^="light-"] .preview-code-line:hover {
+  background-color: rgba(0, 0, 0, 0.025);
+}
+
+.line-number {
+  width: 40px;
+  min-width: 40px;
+  color: var(--text-secondary);
+  opacity: 0.6;
+  text-align: right;
+  padding-right: 12px;
+  user-select: none;
+  border-right: 1px solid var(--border-color);
+  margin-right: 12px;
+}
+
+.line-text {
+  flex: 1;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.preview-markdown-content {
+  color: var(--text-primary);
+  font-size: 13.5px;
+  line-height: 1.6;
+  padding: 4px;
+}
+
+/* 项目树未打开文件夹时的占位提示 */
+.tree-placeholder-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 30px 20px;
+  height: 100%;
+  text-align: center;
+  color: var(--text-secondary);
+  background-color: var(--bg-sidebar);
+}
+
+.tree-placeholder-icon {
+  font-size: 36px;
+  margin-bottom: 12px;
+  opacity: 0.65;
+}
+
+.tree-placeholder-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+
+.tree-placeholder-desc {
+  font-size: 11.5px;
+  line-height: 1.5;
+  opacity: 0.75;
+}
+
+/* Markdown 预览/源码 切换 Tabs */
+.preview-md-tabs {
+  display: flex;
+  background-color: var(--bg-main);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 2px;
+  margin-right: 12px;
+  gap: 2px;
+}
+
+.preview-md-tab {
+  border: none;
+  background: transparent;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 3px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.preview-md-tab:hover {
+  color: var(--text-primary);
+  background-color: var(--bg-hover-item);
+}
+
+.preview-md-tab.active {
+  color: var(--text-primary);
+  background-color: var(--bg-sidebar);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+/* 无法预览的文件界面 */
+.preview-error-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 250px;
+  padding: 32px;
+  text-align: center;
+  color: var(--text-primary);
+}
+
+.preview-error-icon {
+  font-size: 40px;
+  margin-bottom: 16px;
+}
+
+.preview-error-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.preview-error-detail {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 24px;
+  max-width: 400px;
+  line-height: 1.6;
+  opacity: 0.8;
+}
+
+.preview-open-system-btn {
+  background-color: var(--color-orange);
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+}
+
+.preview-open-system-btn:hover {
+  opacity: 0.9;
+}
+
+/* 悬浮文件内检索/跳转行号工具栏 */
+.file-search-bar-floating {
+  position: absolute;
+  top: 10px;
+  right: 20px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background-color: var(--bg-sidebar);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 6px 12px;
+  box-shadow: var(--shadow-lg);
+  z-index: 1000;
+  animation: fadeInDown 0.15s ease-out;
+}
+
+@keyframes fadeInDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.file-search-bar-floating.go-to-line-bar {
+  right: 20px;
+}
+
+.file-search-bar-input {
+  background-color: var(--bg-main);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  outline: none;
+  width: 160px;
+  transition: border-color 0.15s ease;
+}
+
+.file-search-bar-input:focus {
+  border-color: var(--color-orange);
+}
+
+.file-search-bar-count {
+  font-size: 11px;
+  color: var(--text-secondary);
+  min-width: 40px;
+  text-align: center;
+}
+
+.file-search-bar-nav-btn,
+.file-search-bar-go-btn,
+.file-search-bar-close-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  transition: all 0.15s ease;
+}
+
+.file-search-bar-nav-btn:hover,
+.file-search-bar-close-btn:hover {
+  background-color: var(--bg-hover-item);
+  color: var(--text-primary);
+}
+
+.file-search-bar-go-btn {
+  background-color: var(--color-orange);
+  color: white;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.file-search-bar-go-btn:hover {
+  opacity: 0.9;
+}
+
+.file-search-bar-close-btn {
+  font-size: 14px;
+  width: 20px;
+  height: 20px;
+}
+
+/* 文本高亮标记 */
+.search-highlight-mark {
+  background-color: rgba(249, 115, 22, 0.25);
+  color: inherit;
+  border-bottom: 2px solid rgba(249, 115, 22, 0.5);
+  border-radius: 1px;
+}
+
+/* 当前选中的匹配行或匹配项 */
+.preview-code-line.active-match-line {
+  background-color: rgba(249, 115, 22, 0.08);
+}
+
+.active-match-line .search-highlight-mark {
+  background-color: var(--color-orange) !important;
+  color: white !important;
+  border-bottom: 2px solid transparent;
+}
+
+/* 闪烁定位动画 */
+.line-highlight-pulse {
+  animation: lineHighlightPulseAnim 1.5s ease-out;
+}
+
+@keyframes lineHighlightPulseAnim {
+  0% {
+    background-color: rgba(249, 115, 22, 0.4);
+  }
+  50% {
+    background-color: rgba(249, 115, 22, 0.4);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
