@@ -28,6 +28,13 @@
   padding: 0;
 }
 
+button:focus,
+button:focus-visible,
+[role="button"]:focus,
+[role="button"]:focus-visible {
+  outline: none !important;
+}
+
 body {
   font-family: var(--font-main);
   background-color: var(--bg-main);
