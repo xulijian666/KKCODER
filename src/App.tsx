@@ -10,6 +10,7 @@ import { MdEditorModal } from "./components/MdEditorModal";
 import { DiffPanel } from "./components/DiffPanel";
 import { ProjectTree } from "./components/ProjectTree";
 import { renderMarkdownToHtml } from "./utils/markdown";
+import { getHighlightedLines } from "./utils/highlighter";
 import { FileText } from "lucide-react";
 import {
   addUnreadCompletion,
@@ -216,6 +217,13 @@ function App() {
     errorMsg?: string;
   } | null>(null);
   const [mdMode, setMdMode] = useState<"preview" | "source">("source");
+  const [previewFontFamily, setPreviewFontFamily] = useState<string>(() => {
+    return localStorage.getItem("kkcoder_setting_preview_font_family") || "monospace";
+  });
+  const [previewFontSize, setPreviewFontSize] = useState<number>(() => {
+    const val = localStorage.getItem("kkcoder_setting_preview_font_size");
+    return val ? parseFloat(val) : 12.5;
+  });
   // 预览区内部快捷查找与行号跳转状态
   const [fileSearchQuery, setFileSearchQuery] = useState<string>("");
   const [showFileSearchBar, setShowFileSearchBar] = useState<boolean>(false);
@@ -267,6 +275,25 @@ function App() {
       document.body.style.cursor = "";
     };
   }, [isResizingProjectTree]);
+
+  useEffect(() => {
+    const handleFontChange = (e: Event) => {
+      const customEvent = e as CustomEvent<string>;
+      setPreviewFontFamily(customEvent.detail || "monospace");
+    };
+    const handleFontSizeChange = (e: Event) => {
+      const customEvent = e as CustomEvent<number>;
+      setPreviewFontSize(customEvent.detail || 12.5);
+    };
+
+    window.addEventListener("kkcoder-preview-font-change", handleFontChange);
+    window.addEventListener("kkcoder-preview-font-size-change", handleFontSizeChange);
+
+    return () => {
+      window.removeEventListener("kkcoder-preview-font-change", handleFontChange);
+      window.removeEventListener("kkcoder-preview-font-size-change", handleFontSizeChange);
+    };
+  }, []);
 
   // 快捷短语状态
   const [shortcutsEnabled, setShortcutsEnabled] = useState<boolean>(() => {
@@ -687,19 +714,42 @@ function App() {
           setShowFileSearchBar(false);
           setFileSearchQuery("");
           e.preventDefault();
+          e.stopPropagation();
         } else if (showGoToLineBar) {
           setShowGoToLineBar(false);
           setGoToLineNumber("");
           e.preventDefault();
+          e.stopPropagation();
         } else if (previewFile) {
           setPreviewFile(null);
           setMdMode("source");
           e.preventDefault();
+          e.stopPropagation();
         }
         return;
       }
 
       if (previewFile) {
+        // Ctrl + A 全选限制在预览框中
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") {
+          const selection = window.getSelection();
+          const previewPanel = document.querySelector(".file-preview-panel");
+          if (previewPanel && selection && selection.anchorNode && previewPanel.contains(selection.anchorNode)) {
+            e.preventDefault();
+            e.stopPropagation();
+            const targetEl = document.querySelector(".preview-markdown-content") || 
+                             document.querySelector(".preview-text-content") ||
+                             document.querySelector(".preview-body");
+            if (targetEl) {
+              const range = document.createRange();
+              range.selectNodeContents(targetEl);
+              selection.removeAllRanges();
+              selection.addRange(range);
+            }
+            return;
+          }
+        }
+
         // Ctrl + F 文件内查找
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
           e.preventDefault();
@@ -838,6 +888,27 @@ function App() {
           )
         )}
       </>
+    );
+  };
+
+  const highlightedData = useMemo(() => {
+    if (!previewFile || previewFile.cannotPreview) return { tokens: [], isPlain: true };
+    return getHighlightedLines(previewFile.content, previewFile.path);
+  }, [previewFile]);
+
+  const renderToken = (token: any, key: string | number): React.ReactNode => {
+    if (!token.type) {
+      return renderHighlightedLineText(token.content);
+    }
+
+    const content = Array.isArray(token.content)
+      ? token.content.map((child: any, i: number) => renderToken(child, i))
+      : renderHighlightedLineText(token.content);
+
+    return (
+      <span key={key} className={`token ${token.type}`}>
+        {content}
+      </span>
     );
   };
 
@@ -2106,7 +2177,7 @@ function App() {
                         ) : (
                           s.type === "claude" ? <ClaudeIcon size={14} color="#D97757" /> : <PiIcon size={14} color="var(--color-green)" />
                         )}
-                        <span className="tab-title-text">{s.isTemp ? s.name : `${s.name} (${s.project})`}</span>
+                        <span className="tab-title-text" title={s.isTemp ? s.name : `${s.name} (${s.project})`}>{s.isTemp ? s.name : `${s.name} (${s.project})`}</span>
                       </span>
                     )}
                     <span
@@ -2252,8 +2323,14 @@ function App() {
                       dangerouslySetInnerHTML={{ __html: renderMarkdownToHtml(previewFile.content) }}
                     />
                   ) : (
-                    <div className="preview-text-content">
-                      {previewFile.content.split("\n").map((line, idx) => {
+                    <div 
+                      className="preview-text-content"
+                      style={{
+                        fontFamily: previewFontFamily,
+                        fontSize: `${previewFontSize}px`
+                      }}
+                    >
+                      {highlightedData.tokens.map((lineTokens, idx) => {
                         const lineNum = idx + 1;
                         const isActiveMatchLine = matchedLines.length > 0 && 
                           activeMatchIndex >= 0 && 
@@ -2266,7 +2343,9 @@ function App() {
                             data-line={lineNum}
                           >
                             <span className="line-number">{lineNum}</span>
-                            <span className="line-text">{renderHighlightedLineText(line)}</span>
+                            <span className="line-text">
+                              {lineTokens.length === 0 ? " " : lineTokens.map((t, tIdx) => renderToken(t, tIdx))}
+                            </span>
                           </div>
                         );
                       })}

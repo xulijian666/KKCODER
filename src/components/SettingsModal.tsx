@@ -78,6 +78,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
     const val = localStorage.getItem("kkcoder_setting_font_size");
     return val === null ? 13.5 : parseFloat(val);
   });
+  const [previewFontFamily, setPreviewFontFamily] = useState<string>(() => {
+    return localStorage.getItem("kkcoder_setting_preview_font_family") || "monospace";
+  });
+  const [previewFontSize, setPreviewFontSize] = useState<number>(() => {
+    const val = localStorage.getItem("kkcoder_setting_preview_font_size");
+    return val === null ? 12.5 : parseFloat(val);
+  });
   const [scrollback, setScrollback] = useState<number>(() => {
     const val = localStorage.getItem("kkcoder_setting_scrollback");
     return val === null ? 10000 : parseInt(val, 10);
@@ -206,6 +213,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
     localStorage.setItem("kkcoder_setting_font_size", String(fontSize));
     window.dispatchEvent(new CustomEvent("kkcoder-font-size-change", { detail: fontSize }));
   }, [fontSize]);
+
+  useEffect(() => {
+    localStorage.setItem("kkcoder_setting_preview_font_family", previewFontFamily);
+    window.dispatchEvent(new CustomEvent("kkcoder-preview-font-change", { detail: previewFontFamily }));
+  }, [previewFontFamily]);
+
+  useEffect(() => {
+    localStorage.setItem("kkcoder_setting_preview_font_size", String(previewFontSize));
+    window.dispatchEvent(new CustomEvent("kkcoder-preview-font-size-change", { detail: previewFontSize }));
+  }, [previewFontSize]);
 
   useEffect(() => {
     localStorage.setItem(SESSION_CLEANUP_ENABLED_KEY, String(sessionCleanupEnabled));
@@ -956,6 +973,57 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
                     </div>
                   </div>
                 </div>
+                {/* 分割线 */}
+                <div style={{ borderTop: "1px solid var(--border-color)", margin: "8px 0" }} />
+
+                {/* 预览界面字体 */}
+                <div className="settings-group">
+                  <div className="settings-group-label">预览界面字体</div>
+                  <div className="settings-btn-group">
+                    <button
+                      className={`settings-toggle-btn ${previewFontFamily === "Cascadia Mono" ? "active" : ""}`}
+                      onClick={() => setPreviewFontFamily("Cascadia Mono")}
+                    >
+                      Cascadia Mono
+                    </button>
+                    <button
+                      className={`settings-toggle-btn ${previewFontFamily === "Fira Code" ? "active" : ""}`}
+                      onClick={() => setPreviewFontFamily("Fira Code")}
+                    >
+                      Fira Code
+                    </button>
+                    <button
+                      className={`settings-toggle-btn ${previewFontFamily === "Consolas" ? "active" : ""}`}
+                      onClick={() => setPreviewFontFamily("Consolas")}
+                    >
+                      Consolas
+                    </button>
+                    <button
+                      className={`settings-toggle-btn ${previewFontFamily === "monospace" ? "active" : ""}`}
+                      onClick={() => setPreviewFontFamily("monospace")}
+                    >
+                      System Monospace
+                    </button>
+                  </div>
+                </div>
+
+                {/* 预览界面字号 */}
+                <div className="settings-group">
+                  <div className="settings-group-label">预览界面字号</div>
+                  <div className="slider-row">
+                    <input
+                      type="range"
+                      min="10.0"
+                      max="24.0"
+                      step="0.5"
+                      className="settings-slider"
+                      value={previewFontSize}
+                      onChange={(e) => setPreviewFontSize(parseFloat(e.target.value))}
+                    />
+                    <span className="slider-value">{previewFontSize.toFixed(1)}px</span>
+                  </div>
+                </div>
+
                 {/* 分割线 */}
                 <div style={{ borderTop: "1px solid var(--border-color)", margin: "8px 0" }} />
 

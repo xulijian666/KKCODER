@@ -91,6 +91,7 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
   const commandStartTimeRef = useRef<number>(0);
   const lastOutputTimeRef = useRef<number>(0);
   const debounceTimeoutRef = useRef<any>(null);
+  const lastEscapeTimeRef = useRef<number>(0);
 
 
   // 0. 用于自动命名的用户输入累积 buffer
@@ -318,6 +319,20 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
 
     // 绑定自定义键盘按键处理器：支持 Ctrl+C 进行快捷复制且禁用退出命令，支持 Ctrl+V 完美粘贴且阻断重复
     term.attachCustomKeyEventHandler((arg) => {
+      if (arg.code === "Escape" || arg.key === "Escape") {
+        if (arg.type === "keydown") {
+          const now = Date.now();
+          if (now - lastEscapeTimeRef.current < 500) {
+            lastEscapeTimeRef.current = 0;
+            return true;
+          } else {
+            lastEscapeTimeRef.current = now;
+            return false;
+          }
+        }
+        return false;
+      }
+
       if (arg.ctrlKey && arg.code === "KeyC") {
         if (arg.type === "keydown") {
           if (term.hasSelection()) {

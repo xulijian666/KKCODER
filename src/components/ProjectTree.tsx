@@ -52,6 +52,10 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
   const [searchResults, setSearchResults] = useState<FileEntry[]>([]);
   const [searching, setSearching] = useState(false);
   const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({});
+  const expandedFoldersRef = useRef<Record<string, boolean>>({});
+  useEffect(() => {
+    expandedFoldersRef.current = expandedFolders;
+  }, [expandedFolders]);
   
   // 右键菜单状态
   const [contextMenu, setContextMenu] = useState<{
@@ -63,25 +67,39 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
 
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // 1. 惰性加载：初始仅获取项目根目录的一级直接子节点
-  const loadFiles = useCallback(async () => {
+  // 1. 加载目录树（如果 keepExpanded 为 true，则保留已展开的文件夹状态并递归加载它们）
+  const loadFiles = useCallback(async (keepExpanded = false) => {
     if (!projectPath) return;
     setLoading(true);
     try {
-      const rootData = await invoke<FileEntry[]>("read_project_directory", { 
-        projectPath, 
-        relativePath: "" 
-      });
-      const rootChildren = (rootData || []).map(f => ({
-        name: f.name,
-        path: f.path,
-        isDir: f.is_dir,
-        size: f.size,
-        children: f.is_dir ? [] : undefined,
-        isLoaded: false
-      }));
+      const loadDirectoryRecursive = async (relPath: string): Promise<FileNode[]> => {
+        const subData = await invoke<FileEntry[]>("read_project_directory", {
+          projectPath,
+          relativePath: relPath
+        });
+        const childrenNodes: FileNode[] = [];
+        for (const f of subData || []) {
+          const isDir = f.is_dir;
+          const nodePath = f.path;
+          const shouldLoadSub = isDir && keepExpanded && expandedFoldersRef.current[nodePath];
+          childrenNodes.push({
+            name: f.name,
+            path: nodePath,
+            isDir,
+            size: f.size,
+            children: isDir ? (shouldLoadSub ? await loadDirectoryRecursive(nodePath) : []) : undefined,
+            isLoaded: isDir ? !!shouldLoadSub : false
+          });
+        }
+        return childrenNodes;
+      };
+
+      const rootChildren = await loadDirectoryRecursive("");
       setTreeData({ name: "root", path: "", isDir: true, size: 0, children: rootChildren });
-      setExpandedFolders({}); // 重置所有展开状态，初始全部默认折叠，防止大项目渲染卡顿
+      
+      if (!keepExpanded) {
+        setExpandedFolders({}); // 重置所有展开状态，初始全部默认折叠
+      }
     } catch (err) {
       console.error("加载项目目录树失败:", err);
       setTreeData({ name: "root", path: "", isDir: true, size: 0, children: [] });
@@ -91,7 +109,7 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
   }, [projectPath]);
 
   useEffect(() => {
-    loadFiles();
+    loadFiles(false);
     setSearchQuery("");
   }, [projectPath, loadFiles]);
 
@@ -313,7 +331,7 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
         </div>
         <button 
           className="tree-refresh-btn" 
-          onClick={loadFiles} 
+          onClick={() => loadFiles(true)} 
           title="刷新目录树"
           disabled={loading || searching}
         >
