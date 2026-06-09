@@ -1172,6 +1172,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <button
             className="context-menu-item"
             onClick={() => {
+              navigator.clipboard.writeText(contextMenu.session.agentSessionId).catch(() => {});
+              setContextMenu(null);
+            }}
+          >
+            复制 Session ID
+          </button>
+          <button
+            className="context-menu-item"
+            onClick={() => {
               navigator.clipboard.writeText(contextMenu.session.path).catch(() => {});
               setContextMenu(null);
             }}
@@ -1188,7 +1197,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             在文件管理器中打开
           </button>
 
-          <button 
+          <button
             className="context-menu-item"
             style={{ color: "#ef4444" }}
             onClick={() => {
