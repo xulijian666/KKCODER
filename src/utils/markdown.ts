@@ -111,6 +111,10 @@ export function renderMarkdownToHtml(mdText: string): string {
   // 3. 单行行内代码 `code` 替换
   escaped = escaped.replace(/`([^`]+)`/g, '<code style="background: rgba(0,0,0,0.15); padding: 2px 5px; border-radius: 4px; font-family: monospace; font-size: 12.5px; color: var(--color-orange);">$1</code>');
 
+  // 3.5. 加粗 **text** 或 __text__ 替换
+  escaped = escaped.replace(/\*\*([^\*]+)\*\*/g, '<strong style="font-weight: 700; color: var(--text-primary);">$1</strong>');
+  escaped = escaped.replace(/__([^_]+)__/g, '<strong style="font-weight: 700; color: var(--text-primary);">$1</strong>');
+
   // 4. 标题 (#, ##, ###)
   escaped = escaped.replace(/^### (.*$)/gim, '<h3 style="font-size: 15px; font-weight: 700; margin: 16px 0 8px 0; color: var(--text-primary); border-left: 3px solid var(--color-primary); padding-left: 8px;">$1</h3>');
   escaped = escaped.replace(/^## (.*$)/gim, '<h2 style="font-size: 17px; font-weight: 700; margin: 20px 0 10px 0; color: var(--text-primary); border-bottom: 1px solid var(--border-color); padding-bottom: 4px;">$1</h2>');
