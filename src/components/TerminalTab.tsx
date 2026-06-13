@@ -91,7 +91,6 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
   const commandStartTimeRef = useRef<number>(0);
   const lastOutputTimeRef = useRef<number>(0);
   const debounceTimeoutRef = useRef<any>(null);
-  const lastEscapeTimeRef = useRef<number>(0);
 
 
   // 0. 用于自动命名的用户输入累积 buffer
@@ -212,6 +211,7 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
       fontFamily: `${savedFont}, Fira Code, Consolas, Monaco, monospace`,
       theme: initialColors,
       convertEol: true,
+      minimumContrastRatio: 4.5,
     });
 
     // 注册自定义 LinkProvider 支持网页链接和 Windows 本地路径点击打开
@@ -321,13 +321,20 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
     term.attachCustomKeyEventHandler((arg) => {
       if (arg.code === "Escape" || arg.key === "Escape") {
         if (arg.type === "keydown") {
-          const now = Date.now();
-          if (now - lastEscapeTimeRef.current < 500) {
-            lastEscapeTimeRef.current = 0;
-            return true;
-          } else {
-            lastEscapeTimeRef.current = now;
+          // 检查是否有任何弹窗、主题下拉菜单、搜索栏、预览面板或 Diff 面板处于打开状态
+          const hasOpenPanel = !!(
+            document.querySelector(".modal-overlay.show") ||
+            document.querySelector(".theme-dropdown") ||
+            document.querySelector(".file-search-bar-floating") ||
+            document.querySelector(".file-preview-panel") ||
+            document.querySelector(".diff-panel-container")
+          );
+          if (hasOpenPanel) {
+            // 允许事件冒泡至 window，以便全局按键监听器可以关闭面板/弹窗
             return false;
+          } else {
+            // 无任何面板打开，直接将 Escape 发送给 PTY 终端进行处理（如清空命令行输入）
+            return true;
           }
         }
         return false;
@@ -792,8 +799,18 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
     };
     const handleScrollCapture = (e: Event) => {
       const target = e.target as HTMLElement;
-      if (target && target.scrollLeft !== 0) {
-        target.scrollLeft = 0;
+      if (!target) return;
+      if (target.classList && target.classList.contains("xterm-viewport")) {
+        if (target.scrollLeft !== 0) {
+          target.scrollLeft = 0;
+        }
+      } else {
+        if (target.scrollLeft !== 0) {
+          target.scrollLeft = 0;
+        }
+        if (target.scrollTop !== 0) {
+          target.scrollTop = 0;
+        }
       }
     };
 
