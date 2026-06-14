@@ -29,7 +29,7 @@ interface FileNode {
 interface ProjectTreeProps {
   projectPath: string;
   onFileClick: (relativePath: string) => void;
-  onInsertPathToTerminal: (absolutePath: string) => void;
+  onInsertPathToTerminal: (relativePath: string) => void;
 }
 
 // 极其简单快速的剪贴板复制辅助函数

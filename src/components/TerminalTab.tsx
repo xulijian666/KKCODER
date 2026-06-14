@@ -62,6 +62,24 @@ const getTerminalThemeColors = (themeName: string) => {
   };
 };
 
+interface ConversationTagInsertDetail {
+  sessionId: string;
+  text: string;
+}
+
+interface AtomicInputTag {
+  id: number;
+  start: number;
+  end: number;
+  text: string;
+}
+
+const getTextCharLength = (text: string) => Array.from(text).length;
+
+const sliceTextByChars = (text: string, start: number, end?: number) => {
+  return Array.from(text).slice(start, end).join("");
+};
+
 export const TerminalTab: React.FC<TerminalTabProps> = ({
   sessionId,
   directory,
@@ -95,6 +113,8 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
 
   // 0. 用于自动命名的用户输入累积 buffer
   const userInputBufferRef = useRef<string>("");
+  const atomicInputTagsRef = useRef<AtomicInputTag[]>([]);
+  const atomicInputTagCounterRef = useRef<number>(0);
   const autoTitleDoneStorageKey = `kkcoder_session_auto_title_done_${sessionId}`;
   const isPastingRef = useRef(false);
 
@@ -318,6 +338,64 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
     }
 
     // 绑定自定义键盘按键处理器：支持 Ctrl+C 进行快捷复制且禁用退出命令，支持 Ctrl+V 完美粘贴且阻断重复
+    const pruneAtomicInputTags = () => {
+      const buffer = userInputBufferRef.current;
+      const bufferLength = getTextCharLength(buffer);
+      atomicInputTagsRef.current = atomicInputTagsRef.current.filter((tag) => {
+        if (tag.end > bufferLength) return false;
+        return sliceTextByChars(buffer, tag.start, tag.end) === tag.text;
+      });
+    };
+
+    const registerAtomicInputTag = (text: string) => {
+      const start = getTextCharLength(userInputBufferRef.current);
+      const end = start + getTextCharLength(text);
+      atomicInputTagCounterRef.current += 1;
+      atomicInputTagsRef.current.push({
+        id: atomicInputTagCounterRef.current,
+        start,
+        end,
+        text,
+      });
+      userInputBufferRef.current += text;
+    };
+
+    const tryDeleteTrailingAtomicInputTag = () => {
+      pruneAtomicInputTags();
+      const buffer = userInputBufferRef.current;
+      const bufferLength = getTextCharLength(buffer);
+      const tag = [...atomicInputTagsRef.current].reverse().find((candidate) => {
+        return candidate.end === bufferLength && sliceTextByChars(buffer, candidate.start, candidate.end) === candidate.text;
+      });
+
+      if (!tag) return false;
+
+      const deleteSequence = "\x7f".repeat(getTextCharLength(tag.text));
+      userInputBufferRef.current = sliceTextByChars(buffer, 0, tag.start);
+      atomicInputTagsRef.current = atomicInputTagsRef.current.filter((candidate) => candidate.id !== tag.id);
+
+      invoke("write_to_terminal", { sessionId, data: deleteSequence }).catch((err) => {
+        log(`write_to_terminal atomic tag delete error: ${err}`);
+      });
+      return true;
+    };
+
+    const handleInsertConversationTag = (event: Event) => {
+      const { detail } = event as CustomEvent<ConversationTagInsertDetail>;
+      if (!detail || detail.sessionId !== sessionId || !detail.text) return;
+
+      registerAtomicInputTag(detail.text);
+      invoke("write_to_terminal", { sessionId, data: detail.text })
+        .then(() => {
+          term.focus();
+        })
+        .catch((err) => {
+          log(`write_to_terminal atomic tag insert error: ${err}`);
+        });
+    };
+
+    window.addEventListener("kkcoder-insert-conversation-tag", handleInsertConversationTag);
+
     term.attachCustomKeyEventHandler((arg) => {
       if (arg.code === "Escape" || arg.key === "Escape") {
         if (arg.type === "keydown") {
@@ -338,6 +416,12 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
           }
         }
         return false;
+      }
+
+      if ((arg.code === "Backspace" || arg.key === "Backspace") && arg.type === "keydown" && !arg.ctrlKey && !arg.altKey && !arg.metaKey) {
+        if (tryDeleteTrailingAtomicInputTag()) {
+          return false;
+        }
       }
 
       if (arg.ctrlKey && arg.code === "KeyC") {
@@ -627,6 +711,7 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
       // 累积用户的实际输入到 buffer：兼容中文 IME、粘贴、多字符批量提交，并过滤控制序列。
       const capturedInput = captureUserInputData(userInputBufferRef.current, data);
       userInputBufferRef.current = capturedInput.buffer;
+      pruneAtomicInputTags();
 
       // 当输入流中含有回车键或换行符时，标志着用户发送了命令，启动回答计时器
       let submittedAt: string | null = null;
@@ -658,6 +743,7 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
 
         // 回车后清空输入 buffer，为下一次输入做准备
         userInputBufferRef.current = "";
+        atomicInputTagsRef.current = [];
 
         isAnsweringRef.current = true;
         commandStartTimeRef.current = Date.now();
@@ -894,6 +980,7 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
       window.removeEventListener("kkcoder-theme-change", handleThemeChange);
       window.removeEventListener("kkcoder-font-change", handleFontChange);
       window.removeEventListener("kkcoder-font-size-change", handleFontSizeChange);
+      window.removeEventListener("kkcoder-insert-conversation-tag", handleInsertConversationTag);
       onDataDisposable.dispose();
       onResizeDisposable.dispose();
       if (unlistenFn) {

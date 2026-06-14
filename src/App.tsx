@@ -536,6 +536,16 @@ function App() {
 
   const activeSession = sessions.find((s) => s.id === activeSessionId);
 
+  const insertConversationTagToActiveTerminal = useCallback((text: string) => {
+    if (!activeSessionId || !text) return;
+    window.dispatchEvent(new CustomEvent("kkcoder-insert-conversation-tag", {
+      detail: {
+        sessionId: activeSessionId,
+        text,
+      },
+    }));
+  }, [activeSessionId]);
+
   // 切换会话项目路径时自动清空文件预览
   useEffect(() => {
     setPreviewFile(null);
@@ -699,12 +709,8 @@ function App() {
     // 路径用双引号，且行号后面要自带一个空格
     const data = `"${previewFile.path}":${rangeStr} `;
 
-    invoke("write_to_terminal", { sessionId: activeSessionId, data })
-      .then(() => {
-        window.dispatchEvent(new CustomEvent("kkcoder-focus-active-terminal"));
-      })
-      .catch(err => console.error("发送框选范围至终端失败:", err));
-  }, [previewFile, activeSessionId, getSelectionLineRange]);
+    insertConversationTagToActiveTerminal(data);
+  }, [previewFile, activeSessionId, getSelectionLineRange, insertConversationTagToActiveTerminal]);
 
   // 全局键盘快捷键绑定（Escape关闭, Ctrl+F查找, Ctrl+G跳转行, Ctrl+U选中添加到对话）
   useEffect(() => {
@@ -816,14 +822,9 @@ function App() {
 
 
   const handleInsertPathToTerminal = useCallback((relativePath: string) => {
-    if (!activeSessionId) return;
     const formatted = `"${relativePath}" `;
-    invoke("write_to_terminal", { sessionId: activeSessionId, data: formatted })
-      .then(() => {
-        window.dispatchEvent(new CustomEvent("kkcoder-focus-active-terminal"));
-      })
-      .catch(err => console.error("发送相对路径至终端失败:", err));
-  }, [activeSessionId]);
+    insertConversationTagToActiveTerminal(formatted);
+  }, [insertConversationTagToActiveTerminal]);
 
 
 
@@ -2694,11 +2695,7 @@ function App() {
                   : `L${previewContextMenu.startLine}-L${previewContextMenu.endLine}`;
                 const data = `"${previewFile.path}":${rangeStr} `;
                 
-                invoke("write_to_terminal", { sessionId: activeSessionId, data })
-                  .then(() => {
-                    window.dispatchEvent(new CustomEvent("kkcoder-focus-active-terminal"));
-                  })
-                  .catch(err => console.error("发送框选范围至终端失败:", err));
+                insertConversationTagToActiveTerminal(data);
                 
                 setPreviewContextMenu(null);
               }}
