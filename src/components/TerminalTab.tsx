@@ -399,13 +399,12 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
     term.attachCustomKeyEventHandler((arg) => {
       if (arg.code === "Escape" || arg.key === "Escape") {
         if (arg.type === "keydown") {
-          // 检查是否有任何弹窗、主题下拉菜单、搜索栏、预览面板或 Diff 面板处于打开状态
+          // 检查是否有任何弹窗、主题下拉菜单、搜索栏或预览面板处于打开状态
           const hasOpenPanel = !!(
             document.querySelector(".modal-overlay.show") ||
             document.querySelector(".theme-dropdown") ||
             document.querySelector(".file-search-bar-floating") ||
-            document.querySelector(".file-preview-panel") ||
-            document.querySelector(".diff-panel-container")
+            document.querySelector(".file-preview-panel")
           );
           if (hasOpenPanel) {
             // 允许事件冒泡至 window，以便全局按键监听器可以关闭面板/弹窗
