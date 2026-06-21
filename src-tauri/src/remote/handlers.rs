@@ -21,6 +21,8 @@ pub struct SessionDTO {
     pub created_at: Option<String>,
     #[serde(rename = "lastUserMessageAt", skip_serializing_if = "Option::is_none")]
     pub last_user_message_at: Option<String>,
+    /// 是否在桌面端运行中
+    pub active: bool,
 }
 
 /// 服务器状态 DTO
@@ -63,12 +65,13 @@ pub struct PairVerifyResponse {
     pub device_id: String,
 }
 
-/// GET /api/sessions - 获取会话列表（从 SQLite 读取非删除会话）
+/// GET /api/sessions - 获取会话列表（从 SQLite 读取非删除会话，标记是否运行中）
 pub async fn list_sessions(
     State(state): State<Arc<RemoteServerState>>,
     AuthToken(_): AuthToken,
 ) -> Result<Json<Vec<SessionDTO>>, (StatusCode, String)> {
     let db_path = state.db_path.clone();
+    let registry = state.session_registry.clone();
     let sessions = tokio::task::spawn_blocking(move || -> Result<Vec<SessionDTO>, String> {
         let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
         let mut stmt = conn
@@ -80,14 +83,17 @@ pub async fn list_sessions(
 
         let rows = stmt
             .query_map([], |row| {
+                let id: String = row.get(0)?;
+                let active = registry.get(&id).is_some();
                 Ok(SessionDTO {
-                    id: row.get(0)?,
+                    id,
                     name: row.get(1)?,
                     project: row.get(2)?,
                     session_type: row.get(3)?,
                     agent_session_id: row.get(4)?,
                     created_at: row.get(5)?,
                     last_user_message_at: row.get(6)?,
+                    active,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -138,8 +144,14 @@ pub async fn revoke_device(
     axum::extract::Path(device_id): axum::extract::Path<String>,
     AuthToken(_): AuthToken,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    // 从内存缓存中移除
-    let removed = state.paired_devices.remove(&device_id);
+    // 从内存缓存中移除（key 是 token，需要按 device_id 查找）
+    let token_to_remove: Option<String> = state
+        .paired_devices
+        .iter()
+        .find(|r| r.device_id == device_id)
+        .map(|r| r.key().clone());
+    let removed = token_to_remove
+        .and_then(|token| state.paired_devices.remove(&token));
     if removed.is_some() {
         // 同步删除数据库记录
         let db_path = state.db_path.clone();
@@ -256,4 +268,108 @@ pub async fn verify_pairing(
         token,
         device_id,
     }))
+}
+
+/// 创建会话请求
+#[derive(serde::Deserialize)]
+pub struct CreateSessionRequest {
+    pub id: String,
+    pub name: Option<String>,
+    pub project: String,
+    pub path: String,
+    #[serde(rename = "type", alias = "sessionType")]
+    pub session_type: Option<String>,
+    #[serde(rename = "agentSessionId", alias = "agent_session_id")]
+    pub agent_session_id: Option<String>,
+}
+
+/// POST /api/sessions - 创建新会话
+pub async fn create_session(
+    State(state): State<Arc<RemoteServerState>>,
+    AuthToken(_): AuthToken,
+    Json(req): Json<CreateSessionRequest>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let db_path = state.db_path.clone();
+    let session_id = req.id.clone();
+    let name = req.name.unwrap_or_else(|| "新会话".to_string());
+    let session_type = req.session_type.unwrap_or_else(|| "claude".to_string());
+    let agent_session_id = req.agent_session_id.unwrap_or_default();
+
+    tokio::task::spawn_blocking(move || {
+        let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+        conn.execute(
+            "INSERT OR REPLACE INTO sessions (id, name, project, path, type, agent_session_id, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, CURRENT_TIMESTAMP)",
+            rusqlite::params![session_id, name, req.project, req.path, session_type, agent_session_id],
+        )
+        .map_err(|e| e.to_string())?;
+        conn.execute(
+            "INSERT OR REPLACE INTO recent_projects (path, name, last_used_at) VALUES (?1, ?2, CURRENT_TIMESTAMP)",
+            rusqlite::params![req.path, req.project],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok::<(), String>(())
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    Ok(StatusCode::CREATED)
+}
+
+/// POST /api/sessions/:id/spawn - 请求桌面端启动会话
+pub async fn spawn_session(
+    State(state): State<Arc<RemoteServerState>>,
+    axum::extract::Path(session_id): axum::extract::Path<String>,
+    AuthToken(_): AuthToken,
+    Json(req): Json<serde_json::Value>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    // 如果会话已在运行，直接返回
+    if state.session_registry.get(&session_id).is_some() {
+        return Ok(StatusCode::OK);
+    }
+
+    // 从数据库读取会话信息
+    let db_path = state.db_path.clone();
+    let session_id_clone = session_id.clone();
+    let session_info = tokio::task::spawn_blocking(move || {
+        let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+        conn.query_row(
+            "SELECT path, type, agent_session_id FROM sessions WHERE id = ?1 AND deleted = 0",
+            [&session_id_clone],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?, // path
+                    row.get::<_, String>(1)?, // type
+                    row.get::<_, String>(2)?, // agent_session_id
+                ))
+            },
+        )
+        .map_err(|e| format!("Session not found: {}", e))
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(|e| (StatusCode::NOT_FOUND, e))?;
+
+    // 加入 spawn 队列
+    let spawn_req = super::state::SpawnRequest {
+        session_id: session_id.clone(),
+        directory: session_info.0,
+        agent_type: session_info.1,
+        agent_session_id: session_info.2,
+        is_reopen: req.get("is_reopen").and_then(|v| v.as_bool()).unwrap_or(true),
+    };
+
+    state.spawn_requests.lock().await.push(spawn_req);
+    Ok(StatusCode::ACCEPTED)
+}
+
+/// GET /api/spawn-requests - 桌面端轮询获取待执行的 spawn 请求
+pub async fn poll_spawn_requests(
+    State(state): State<Arc<RemoteServerState>>,
+) -> Json<Vec<super::state::SpawnRequest>> {
+    let mut requests = state.spawn_requests.lock().await;
+    let result = requests.clone();
+    requests.clear();
+    Json(result)
 }

@@ -16,6 +16,18 @@ pub struct RemoteServerState {
     pub paired_devices: Arc<DashMap<String, DeviceInfo>>,
     /// 数据库路径
     pub db_path: PathBuf,
+    /// 待桌面端执行的 spawn 请求队列
+    pub spawn_requests: Arc<tokio::sync::Mutex<Vec<SpawnRequest>>>,
+}
+
+/// 远程 spawn 请求（手机端发起，桌面端执行）
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct SpawnRequest {
+    pub session_id: String,
+    pub directory: String,
+    pub agent_type: String,
+    pub agent_session_id: String,
+    pub is_reopen: bool,
 }
 
 impl Clone for RemoteServerState {
@@ -25,6 +37,7 @@ impl Clone for RemoteServerState {
             config: self.config.clone(),
             paired_devices: self.paired_devices.clone(),
             db_path: self.db_path.clone(),
+            spawn_requests: self.spawn_requests.clone(),
         }
     }
 }

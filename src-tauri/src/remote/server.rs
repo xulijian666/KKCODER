@@ -20,9 +20,12 @@ pub fn build_router(state: Arc<RemoteServerState>) -> Router {
         .route("/api/pair/init", post(handlers::init_pairing))
         .route("/api/pair/verify", post(handlers::verify_pairing))
         // 会话管理（需要认证）
-        .route("/api/sessions", get(handlers::list_sessions))
+        .route("/api/sessions", get(handlers::list_sessions).post(handlers::create_session))
+        .route("/api/sessions/{id}/spawn", post(handlers::spawn_session))
         // WebSocket 会话连接（需要认证）
         .route("/api/sessions/{id}/ws", get(ws::ws_connect))
+        // 桌面端轮询 spawn 请求（无需认证，仅本机访问）
+        .route("/api/spawn-requests", get(handlers::poll_spawn_requests))
         // 服务器状态
         .route("/api/status", get(handlers::server_status))
         // 设备管理（需要认证）

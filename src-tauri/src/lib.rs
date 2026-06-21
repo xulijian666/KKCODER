@@ -23,14 +23,14 @@ fn log_to_file(message: &str) {
     }
 }
 
-struct ActiveSession {
+pub struct ActiveSession {
     master: Box<dyn MasterPty + Send>,
     writer: Arc<Mutex<Box<dyn std::io::Write + Send>>>,
     spawn_token: u64,
 }
 
 pub struct PtyManager {
-    sessions: Arc<Mutex<HashMap<String, ActiveSession>>>,
+    pub sessions: Arc<Mutex<HashMap<String, ActiveSession>>>,
     pub session_registry: Option<Arc<remote::state::SessionRegistry>>,
 }
 
@@ -2995,20 +2995,19 @@ pub fn run() {
         let devices = dashmap::DashMap::new();
         if let Ok(conn) = rusqlite::Connection::open(&db_path) {
             if let Ok(mut stmt) = conn.prepare(
-                "SELECT device_id, device_name, paired_at, last_seen FROM paired_devices",
+                "SELECT device_id, device_name, token, paired_at, last_seen FROM paired_devices",
             ) {
                 if let Ok(rows) = stmt.query_map([], |row| {
-                    Ok(remote::state::DeviceInfo {
+                    let token: String = row.get(2)?;
+                    Ok((token, remote::state::DeviceInfo {
                         device_id: row.get(0)?,
                         device_name: row.get(1)?,
-                        paired_at: row.get(2)?,
-                        last_seen: row.get(3)?,
-                    })
+                        paired_at: row.get(3)?,
+                        last_seen: row.get(4)?,
+                    }))
                 }) {
                     for row in rows.flatten() {
-                        // 使用 token 作为 key（需要从 device_id 查询 token）
-                        // 简化：直接用 device_id 作为 key
-                        devices.insert(row.device_id.clone(), row);
+                        devices.insert(row.0, row.1);
                     }
                 }
             }
@@ -3046,6 +3045,7 @@ pub fn run() {
         config: Arc::new(tokio::sync::Mutex::new(remote_config)),
         paired_devices: Arc::new(paired_devices),
         db_path: db_path.clone(),
+        spawn_requests: Arc::new(tokio::sync::Mutex::new(Vec::new())),
     });
 
     // 启动远程访问服务器（在独立线程中）
@@ -3058,8 +3058,12 @@ pub fn run() {
         let _ = rt.block_on(remote::server::start_remote_server(remote_state_for_server));
     });
 
+    // 创建 PtyManager 并注入 session_registry
+    let mut pty_manager = PtyManager::default();
+    pty_manager.session_registry = Some(session_registry.clone());
+
     tauri::Builder::default()
-        .manage(PtyManager::default())
+        .manage(pty_manager)
         .manage(remote::frp::FrpManager::new())
         .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
@@ -3113,6 +3117,61 @@ pub fn run() {
                     })
                     .build(app)?;
             }
+
+            // 启动远程 spawn 请求轮询任务
+            let remote_state_poll = remote_state.clone();
+            let pty_mgr_ref = app.state::<PtyManager>();
+            let pty_sessions_for_spawn = pty_mgr_ref.sessions.clone();
+            let _registry_for_spawn = pty_mgr_ref.session_registry.clone();
+            let app_handle_for_spawn = app.handle().clone();
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                rt.block_on(async {
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                        let mut requests = remote_state_poll.spawn_requests.lock().await;
+                        if requests.is_empty() {
+                            continue;
+                        }
+                        let pending: Vec<_> = requests.drain(..).collect();
+                        drop(requests);
+
+                        for req in pending {
+                            // 检查是否已在运行
+                            let already_running = pty_sessions_for_spawn
+                                .lock()
+                                .unwrap()
+                                .contains_key(&req.session_id);
+                            if already_running {
+                                continue;
+                            }
+
+                            // 调用 spawn_terminal 逻辑
+                            // 由于 spawn_terminal 是 Tauri command，这里直接执行 PTY 逻辑
+                            log_to_file(&format!(
+                                "Remote spawn request: session={}, dir={}, type={}",
+                                req.session_id, req.directory, req.agent_type
+                            ));
+                            // 实际启动需要调用 spawn_terminal，但这里无法直接调用
+                            // 改为通知前端执行
+                            let _ = app_handle_for_spawn.emit(
+                                "remote-spawn-request",
+                                serde_json::json!({
+                                    "session_id": req.session_id,
+                                    "directory": req.directory,
+                                    "agent_type": req.agent_type,
+                                    "agent_session_id": req.agent_session_id,
+                                    "is_reopen": req.is_reopen,
+                                }),
+                            );
+                        }
+                    }
+                });
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
