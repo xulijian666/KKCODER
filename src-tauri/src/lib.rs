@@ -24,7 +24,7 @@ fn log_to_file(message: &str) {
 }
 
 pub struct ActiveSession {
-    master: Box<dyn MasterPty + Send>,
+    master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     writer: Arc<Mutex<Box<dyn std::io::Write + Send>>>,
     spawn_token: u64,
 }
@@ -999,6 +999,7 @@ fn spawn_terminal(
         err_msg
     })?;
     log_to_file("Master reader cloned.");
+    let master_shared = Arc::new(Mutex::new(master));
 
     // 自动运行 Agent CLI 脚本
     // 自动运行 Agent CLI 脚本
@@ -1131,6 +1132,22 @@ fn spawn_terminal(
             remote::state::SessionStatus::Idle,
         ));
 
+        // 创建 resize 通道，后台线程接收 resize 命令并执行
+        let (resize_tx, mut resize_rx) = tokio::sync::mpsc::channel::<(u16, u16)>(8);
+        let master_for_resize = master_shared.clone();
+        std::thread::spawn(move || {
+            while let Some((cols, rows)) = resize_rx.blocking_recv() {
+                if let Ok(m) = master_for_resize.lock() {
+                    let _ = m.resize(portable_pty::PtySize {
+                        rows,
+                        cols,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    });
+                }
+            }
+        });
+
         let handle = Arc::new(remote::state::SessionHandle {
             input_tx: {
                 // 创建一个虚拟通道（实际输入通过 pty_writer 直接写入）
@@ -1142,6 +1159,7 @@ fn spawn_terminal(
             replay: replay.clone(),
             session_name: String::new(),
             pty_writer: Some(writer.clone()),
+            resize_tx: Some(resize_tx),
         });
 
         registry.insert(session_id.clone(), handle);
@@ -1210,7 +1228,7 @@ fn spawn_terminal(
     sessions.insert(
         session_id.clone(),
         ActiveSession {
-            master,
+            master: master_shared.clone(),
             writer: writer.clone(),
             spawn_token,
         },
@@ -1255,7 +1273,8 @@ fn resize_terminal(
 ) -> Result<(), String> {
     let sessions = state.sessions.lock().unwrap();
     if let Some(session) = sessions.get(&session_id) {
-        session.master.resize(PtySize {
+        let master = session.master.lock().map_err(|e| e.to_string())?;
+        master.resize(PtySize {
             rows,
             cols,
             pixel_width: 0,

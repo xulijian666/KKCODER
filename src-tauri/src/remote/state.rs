@@ -98,6 +98,8 @@ pub struct SessionHandle {
     pub session_name: String,
     /// PTY 写入器的引用（用于远程输入写入）
     pub pty_writer: Option<Arc<std::sync::Mutex<Box<dyn std::io::Write + Send>>>>,
+    /// PTY resize 通道（cols, rows）
+    pub resize_tx: Option<mpsc::Sender<(u16, u16)>>,
 }
 
 /// 输入命令

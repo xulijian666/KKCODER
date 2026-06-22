@@ -134,8 +134,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [regularProjectsOrder, setRegularProjectsOrder] = useState<string[]>(() => {
     try {
       const stored = localStorage.getItem("kkcoder_regular_projects_order");
-      return stored ? JSON.parse(stored) : [];
+      const parsed = stored ? JSON.parse(stored) : [];
+      console.log("[ORDER-INIT] Loaded from localStorage:", JSON.stringify(parsed));
+      return parsed;
     } catch (e) {
+      console.log("[ORDER-INIT] Failed to parse, returning []");
       return [];
     }
   });
@@ -482,6 +485,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const regularSortedProjNames = useMemo(() => {
     const existingSavedOrder = regularProjectsOrder.filter((name) => regularProjNames.includes(name));
     const newNames = regularProjNames.filter((name) => !existingSavedOrder.includes(name));
+    if (newNames.length > 0) {
+      console.log("[ORDER-MEMO] New projects found:", newNames, "existingSavedOrder:", existingSavedOrder);
+    }
     newNames.sort((left, right) => {
       const leftSessions = projectsMap[left]?.sessions || [];
       const rightSessions = projectsMap[right]?.sessions || [];
@@ -494,7 +500,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   // 状态与 localStorage 同步
   useEffect(() => {
-    if (JSON.stringify(regularProjectsOrder) !== JSON.stringify(regularSortedProjNames)) {
+    // TODO: 临时调试 - 设为 true 可跳过同步，验证是否是此 effect 覆盖了拖拽排序
+    const SKIP_SYNC = false;
+    if (SKIP_SYNC) {
+      console.log("[ORDER-SYNC] SKIPPED (debug mode)");
+      return;
+    }
+    const orderStr = JSON.stringify(regularProjectsOrder);
+    const sortedStr = JSON.stringify(regularSortedProjNames);
+    if (orderStr !== sortedStr) {
+      console.log("[ORDER-SYNC] MISMATCH! regularProjectsOrder:", orderStr, "regularSortedProjNames:", sortedStr);
+      console.log("[ORDER-SYNC] OVERWRITING localStorage with regularSortedProjNames");
       setRegularProjectsOrder(regularSortedProjNames);
       localStorage.setItem("kkcoder_regular_projects_order", JSON.stringify(regularSortedProjNames));
     }
@@ -578,10 +594,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
   }, [sortedProjectNames]);
 
   const handleProjDragStart = (e: React.DragEvent, projectName: string) => {
+    console.log("[DRAG] Start:", projectName);
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/plain", projectName);
     setTimeout(() => {
       setDraggingProject(projectName);
+      console.log("[DRAG] setDraggingProject:", projectName);
     }, 0);
   };
 
@@ -589,30 +607,39 @@ export const Sidebar: React.FC<SidebarProps> = ({
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
 
+    console.log("[DRAG] Over - draggingProject:", draggingProject, "target:", targetName);
     if (!draggingProject || draggingProject === targetName) return;
 
     const isSrcFavorite = favoriteProjects.some((p) => p.name === draggingProject);
     const isTgtFavorite = favoriteProjects.some((p) => p.name === targetName);
+    console.log("[DRAG] isSrcFav:", isSrcFavorite, "isTgtFav:", isTgtFavorite);
 
     // 只能在同一大组（收藏置顶组内，或常规普通组内）拖拽重排
-    if (isSrcFavorite !== isTgtFavorite) return;
+    if (isSrcFavorite !== isTgtFavorite) {
+      console.log("[DRAG] Blocked: different groups");
+      return;
+    }
 
     const rect = e.currentTarget.getBoundingClientRect();
     const midpoint = rect.top + rect.height / 2;
     const clientY = e.clientY;
+    console.log("[DRAG] clientY:", clientY, "midpoint:", midpoint);
 
     if (isSrcFavorite) {
       const list = [...favoriteProjects];
       const srcIdx = list.findIndex((p) => p.name === draggingProject);
       const tgtIdx = list.findIndex((p) => p.name === targetName);
+      console.log("[DRAG] Fav - srcIdx:", srcIdx, "tgtIdx:", tgtIdx);
 
       if (srcIdx !== -1 && tgtIdx !== -1) {
         if (srcIdx > tgtIdx && clientY < midpoint) {
+          console.log("[DRAG] Fav SWAP UP");
           const item = list[srcIdx];
           list.splice(srcIdx, 1);
           list.splice(tgtIdx, 0, item);
           setFavoriteProjects(list);
         } else if (srcIdx < tgtIdx && clientY > midpoint) {
+          console.log("[DRAG] Fav SWAP DOWN");
           const item = list[srcIdx];
           list.splice(srcIdx, 1);
           list.splice(tgtIdx, 0, item);
@@ -620,18 +647,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
         }
       }
     } else {
-      const list = [...regularProjectsOrder];
+      const list = [...regularSortedProjNames];
       const srcIdx = list.indexOf(draggingProject);
       const tgtIdx = list.indexOf(targetName);
+      console.log("[DRAG] Regular - srcIdx:", srcIdx, "tgtIdx:", tgtIdx, "list:", list);
 
       if (srcIdx !== -1 && tgtIdx !== -1) {
         if (srcIdx > tgtIdx && clientY < midpoint) {
+          console.log("[DRAG] Regular SWAP UP");
           const item = list[srcIdx];
           list.splice(srcIdx, 1);
           list.splice(tgtIdx, 0, item);
           setRegularProjectsOrder(list);
           localStorage.setItem("kkcoder_regular_projects_order", JSON.stringify(list));
         } else if (srcIdx < tgtIdx && clientY > midpoint) {
+          console.log("[DRAG] Regular SWAP DOWN");
           const item = list[srcIdx];
           list.splice(srcIdx, 1);
           list.splice(tgtIdx, 0, item);
