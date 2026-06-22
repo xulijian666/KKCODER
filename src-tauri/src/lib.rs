@@ -32,6 +32,7 @@ pub struct ActiveSession {
 pub struct PtyManager {
     pub sessions: Arc<Mutex<HashMap<String, ActiveSession>>>,
     pub session_registry: Option<Arc<remote::state::SessionRegistry>>,
+    pub conversation: Option<Arc<remote::conversation::ConversationState>>,
 }
 
 impl Default for PtyManager {
@@ -39,6 +40,7 @@ impl Default for PtyManager {
         Self {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             session_registry: None,
+            conversation: None,
         }
     }
 }
@@ -1160,15 +1162,24 @@ fn spawn_terminal(
             session_name: String::new(),
             pty_writer: Some(writer.clone()),
             resize_tx: Some(resize_tx),
+            agent_session_id: agent_session_id.clone(),
+            project_path: directory.clone(),
         });
 
         registry.insert(session_id.clone(), handle);
+
+        // 注册到 ConversationState（用于 JSONL 对话模式）
+        if let Some(ref conv) = state.conversation {
+            conv.register_session(&session_id, &agent_session_id, &directory);
+        }
+
         Some(output_tx)
     } else {
         None
     };
 
     log_to_file("Spawning PTY reader listener thread...");
+    let conversation_for_cleanup = state.conversation.clone();
     std::thread::spawn(move || {
         log_to_file("PTY reader listener thread spawned.");
         let mut reader = reader;
@@ -1217,6 +1228,10 @@ fn spawn_terminal(
         // 当进程退出时，自动从 sessions map 中清理，以防下一次无法重新拉起
         let mut sessions = sessions_map_clone.lock().unwrap();
         sessions.remove(&session_id_clone);
+        // 注销 ConversationState 中的会话
+        if let Some(ref conv) = conversation_for_cleanup {
+            conv.unregister_session(&session_id_clone);
+        }
         log_to_file(&format!(
             "Session {} cleaned up from sessions map after PTY EOF.",
             session_id_clone
@@ -1542,7 +1557,7 @@ fn encode_claude_project_path(path: &str) -> String {
 }
 
 /// 在 ~/.claude/projects/ 下查找指定 session 的 JSONL 文件
-fn find_claude_jsonl(agent_session_id: &str, project_path: &str) -> Option<std::path::PathBuf> {
+pub(crate) fn find_claude_jsonl(agent_session_id: &str, project_path: &str) -> Option<std::path::PathBuf> {
     let home = dirs::home_dir()?;
     let projects_root = home.join(".claude").join("projects");
     if !projects_root.is_dir() {
@@ -1572,7 +1587,7 @@ fn find_claude_jsonl(agent_session_id: &str, project_path: &str) -> Option<std::
 }
 
 /// 从 JSONL 文件中读取用户消息（移植自 rename 的 claude_code adapter）
-fn read_claude_transcript(jsonl_path: &std::path::Path) -> Vec<(String, String)> {
+pub(crate) fn read_claude_transcript(jsonl_path: &std::path::Path) -> Vec<(String, String)> {
     let file = match std::fs::File::open(jsonl_path) {
         Ok(f) => f,
         Err(_) => return vec![],
@@ -1624,7 +1639,7 @@ fn read_claude_transcript(jsonl_path: &std::path::Path) -> Vec<(String, String)>
 }
 
 /// 从 user 消息 JSON 中提取 content
-fn extract_message_content(obj: &serde_json::Value) -> String {
+pub(crate) fn extract_message_content(obj: &serde_json::Value) -> String {
     let message = match obj.get("message") {
         Some(m) => m,
         None => return String::new(),
@@ -1652,7 +1667,7 @@ fn extract_message_content(obj: &serde_json::Value) -> String {
 }
 
 /// 从 assistant 消息 JSON 中提取纯文本
-fn extract_assistant_text(obj: &serde_json::Value) -> String {
+pub(crate) fn extract_assistant_text(obj: &serde_json::Value) -> String {
     let message = match obj.get("message") {
         Some(m) => m,
         None => return String::new(),
@@ -3059,27 +3074,39 @@ pub fn run() {
         }
     };
 
+    // 初始化对话状态管理（JSONL 监听 + chat 事件推送）
+    let conversation_state = Arc::new(remote::conversation::ConversationState::new());
+
     let remote_state = Arc::new(remote::state::RemoteServerState {
         session_registry: session_registry.clone(),
         config: Arc::new(tokio::sync::Mutex::new(remote_config)),
         paired_devices: Arc::new(paired_devices),
         db_path: db_path.clone(),
         spawn_requests: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+        conversation: Some(conversation_state.clone()),
     });
 
     // 启动远程访问服务器（在独立线程中）
     let remote_state_for_server = remote_state.clone();
+    let conversation_for_watcher = conversation_state.clone();
+    let registry_for_watcher = session_registry.clone();
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
             .unwrap();
+        // 启动 JSONL 文件监听器
+        rt.spawn(remote::conversation::run_jsonl_watcher(
+            conversation_for_watcher,
+            registry_for_watcher,
+        ));
         let _ = rt.block_on(remote::server::start_remote_server(remote_state_for_server));
     });
 
-    // 创建 PtyManager 并注入 session_registry
+    // 创建 PtyManager 并注入 session_registry 和 conversation
     let mut pty_manager = PtyManager::default();
     pty_manager.session_registry = Some(session_registry.clone());
+    pty_manager.conversation = Some(conversation_state.clone());
 
     tauri::Builder::default()
         .manage(pty_manager)
