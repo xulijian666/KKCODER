@@ -37,7 +37,7 @@ struct ConversationSession {
 pub struct ConversationState {
     sessions: DashMap<String, ConversationSession>,
     /// 用于向 chat WebSocket 客户端广播对话事件
-    event_txs: DashMap<String, broadcast::Sender<String>>,
+    pub event_txs: DashMap<String, broadcast::Sender<String>>,
 }
 
 impl ConversationState {
@@ -98,10 +98,16 @@ impl ConversationState {
 
     /// 加载完整对话快照（首次连接时调用）
     pub fn load_snapshot(&self, session_id: &str) -> Vec<ConversationMessageDTO> {
+        log_to_file(&format!("load_snapshot: called for session {}, registered sessions: {:?}", session_id, self.sessions.iter().map(|r| r.key().clone()).collect::<Vec<_>>()));
         let mut session = match self.sessions.get_mut(session_id) {
             Some(s) => s,
-            None => return vec![],
+            None => {
+                log_to_file(&format!("load_snapshot: session {} not found in ConversationState", session_id));
+                return vec![];
+            }
         };
+
+        log_to_file(&format!("load_snapshot: reading JSONL from {}", session.jsonl_path.display()));
 
         // 读取完整 JSONL
         let raw_messages = crate::read_claude_transcript(&session.jsonl_path);
@@ -312,10 +318,13 @@ async fn handle_chat_session(
     state: Arc<RemoteServerState>,
     token: String,
 ) {
+    log_to_file(&format!("chat_ws: new connection for session {}", session_id));
+
     // 获取 session handle（用于 submit_prompt 写入 PTY）
     let handle = match state.session_registry.get(&session_id) {
         Some(h) => h,
         None => {
+            log_to_file(&format!("chat_ws: session {} not found in registry", session_id));
             let (mut sender, _) = socket.split();
             let err = serde_json::json!({"type": "error", "message": "Session not found"});
             let _ = sender.send(Message::Text(err.to_string().into())).await;
@@ -326,12 +335,23 @@ async fn handle_chat_session(
     let conversation = match &state.conversation {
         Some(c) => c.clone(),
         None => {
+            log_to_file("chat_ws: ConversationState not available");
             let (mut sender, _) = socket.split();
             let err = serde_json::json!({"type": "error", "message": "Conversation not available"});
             let _ = sender.send(Message::Text(err.to_string().into())).await;
             return;
         }
     };
+
+    // 如果会话未注册，尝试动态注册（兼容启动前就存在的会话）
+    if !conversation.sessions.contains_key(&session_id) {
+        log_to_file(&format!("chat_ws: session {} not registered, attempting dynamic registration", session_id));
+        let agent_session_id = handle.agent_session_id.clone();
+        let project_path = handle.project_path.clone();
+        conversation.register_session(&session_id, &agent_session_id, &project_path);
+    }
+
+    log_to_file(&format!("chat_ws: session {} found, registered sessions count: {}", session_id, conversation.sessions.len()));
 
     // 更新设备最后活跃时间
     if let Some(mut device) = state.paired_devices.get_mut(&token) {
@@ -352,11 +372,17 @@ async fn handle_chat_session(
         let snapshot = {
             let conv = conversation_for_send.clone();
             let sid = session_id_for_send.clone();
-            tokio::task::spawn_blocking(move || conv.load_snapshot(&sid))
+            tokio::task::spawn_blocking(move || {
+                log_to_file(&format!("chat_ws: loading snapshot for session {}", sid));
+                let snap = conv.load_snapshot(&sid);
+                log_to_file(&format!("chat_ws: snapshot loaded, {} messages", snap.len()));
+                snap
+            })
                 .await
                 .unwrap_or_default()
         };
         let last_seq = snapshot.last().map(|m| m.seq).unwrap_or(0);
+        log_to_file(&format!("chat_ws: sending snapshot with {} messages, last_seq={}", snapshot.len(), last_seq));
         let snap_msg = serde_json::json!({
             "type": "conversation_snapshot",
             "messages": snapshot,
@@ -367,8 +393,10 @@ async fn handle_chat_session(
             .await
             .is_err()
         {
+            log_to_file("chat_ws: failed to send snapshot");
             return;
         }
+        log_to_file("chat_ws: snapshot sent successfully");
 
         // 然后监听对话事件和 relay 消息
         loop {
@@ -409,6 +437,12 @@ async fn handle_chat_session(
                                 if let Some(prompt_text) =
                                     msg.get("text").and_then(|v| v.as_str())
                                 {
+                                    // 广播 thinking 状态
+                                    if let Some(tx) = conversation_for_recv.event_txs.get(&session_id_for_recv) {
+                                        let status_msg = serde_json::json!({"type": "run_status", "status": "thinking"});
+                                        let _ = tx.send(status_msg.to_string());
+                                    }
+
                                     if let Some(ref writer) = pty_writer {
                                         if let Ok(mut w) = writer.lock() {
                                             use std::io::Write;
