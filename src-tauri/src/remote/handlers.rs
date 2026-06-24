@@ -30,6 +30,7 @@ pub struct SessionDTO {
     pub id: String,
     pub name: String,
     pub project: String,
+    pub path: String,
     #[serde(rename = "type")]
     pub session_type: String,
     #[serde(rename = "agentSessionId")]
@@ -93,7 +94,7 @@ pub async fn list_sessions(
         let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, name, project, type, agent_session_id, created_at, last_user_message_at \
+                "SELECT id, name, project, path, type, agent_session_id, created_at, last_user_message_at \
                  FROM sessions WHERE deleted = 0 ORDER BY created_at ASC",
             )
             .map_err(|e| e.to_string())?;
@@ -106,10 +107,11 @@ pub async fn list_sessions(
                     id,
                     name: row.get(1)?,
                     project: row.get(2)?,
-                    session_type: row.get(3)?,
-                    agent_session_id: row.get(4)?,
-                    created_at: row.get(5)?,
-                    last_user_message_at: row.get(6)?,
+                    path: row.get(3)?,
+                    session_type: row.get(4)?,
+                    agent_session_id: row.get(5)?,
+                    created_at: row.get(6)?,
+                    last_user_message_at: row.get(7)?,
                     active,
                 })
             })

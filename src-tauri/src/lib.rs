@@ -1048,9 +1048,9 @@ fn spawn_terminal(
         let session_id_clone = session_id.clone();
         let agent_session_id_clone = agent_session_id.clone();
         std::thread::spawn(move || {
-            log_to_file(&format!("Background `/resume` thread spawned. spawn_token={}. Sleeping 2500ms...", spawn_token));
-            // 等待 2.5 秒让 Claude 客户端完全拉起并输出提示符
-            std::thread::sleep(std::time::Duration::from_millis(2500));
+            log_to_file(&format!("Background `/resume` thread spawned. spawn_token={}. Sleeping 3000ms...", spawn_token));
+            // 等待 3 秒让 Claude 客户端完全拉起并输出提示符
+            std::thread::sleep(std::time::Duration::from_millis(3000));
             log_to_file("Background `/resume` thread sleep finished. Locking sessions map...");
             let mut sessions = sessions_clone.lock().unwrap();
             if let Some(session) = sessions.get_mut(&session_id_clone) {
@@ -1060,6 +1060,7 @@ fn spawn_terminal(
                     return;
                 }
 
+                // 分两步发送：先发命令，再发回车
                 let resume_cmd = format!("/resume {}", agent_session_id_clone);
                 log_to_file(&format!("Background thread: writing resume cmd: {:?}", resume_cmd));
                 {
@@ -1067,27 +1068,19 @@ fn spawn_terminal(
                     w.write_all(resume_cmd.as_bytes()).ok();
                     w.flush().ok();
                 }
-                log_to_file("Background thread: resume cmd written. Dropping lock and sleeping 500ms...");
+                log_to_file("Background thread: resume cmd written, sleeping 200ms before Enter...");
 
-                // 释放锁，防止阻塞其他线程
-                drop(sessions);
-                std::thread::sleep(std::time::Duration::from_millis(500));
+                // 等待 200ms 确保命令被处理
+                std::thread::sleep(std::time::Duration::from_millis(200));
 
-                // 重新获取锁并触发一次回车
-                log_to_file("Background thread: re-acquiring lock to trigger Enter...");
-                let mut sessions = sessions_clone.lock().unwrap();
-                if let Some(session) = sessions.get_mut(&session_id_clone) {
-                    if session.spawn_token != spawn_token {
-                        log_to_file("Stale spawn token during Enter key trigger. Safely skipping Enter.");
-                        return;
-                    }
+                // 发送回车
+                log_to_file("Background thread: sending Enter key...");
+                {
                     let mut w = session.writer.lock().unwrap();
-                    w.write_all(b"\r\n").ok();
+                    w.write_all(b"\r").ok();
                     w.flush().ok();
-                    log_to_file("Background thread: Enter key sent!");
-                } else {
-                    log_to_file("Background thread error during Enter send: session lost!");
                 }
+                log_to_file("Background thread: Enter key sent successfully!");
             } else {
                 log_to_file("Background thread error: active session not found inside sessions map!");
             }
@@ -1371,6 +1364,11 @@ fn close_terminal(
     let mut sessions = state.sessions.lock().unwrap();
     if sessions.remove(&session_id).is_some() {
         log_to_file(&format!("Session {} successfully removed and dropped.", session_id));
+        // 从远程 session_registry 中移除（同步更新手机端状态）
+        if let Some(ref registry) = state.session_registry {
+            registry.remove(&session_id);
+            log_to_file(&format!("Session {} removed from remote registry.", session_id));
+        }
         Ok(())
     } else {
         log_to_file(&format!("Session {} not found in active sessions map.", session_id));

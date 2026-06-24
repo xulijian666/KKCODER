@@ -488,8 +488,9 @@ async fn handle_chat_session(
 /// 后台任务：定期检查 JSONL 文件变更，广播新消息
 pub async fn run_jsonl_watcher(
     conversation: Arc<ConversationState>,
-    _session_registry: Arc<super::state::SessionRegistry>,
+    session_registry: Arc<super::state::SessionRegistry>,
 ) {
+    log_to_file("[JSONL Watcher] Started");
     loop {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
@@ -502,17 +503,29 @@ pub async fn run_jsonl_watcher(
                 .collect()
         };
 
+        // 动态注册：检查 session_registry 中是否有未注册的会话
+        for handle_entry in session_registry.sessions_iter() {
+            let (sid, handle) = handle_entry;
+            if !conversation.sessions.contains_key(&sid) {
+                log_to_file(&format!("[JSONL Watcher] Auto-registering session {}", sid));
+                conversation.register_session(&sid, &handle.agent_session_id, &handle.project_path);
+            }
+        }
+
         for session_id in session_ids {
             let added = conversation.tail_new_messages(&session_id);
             if added.is_empty() {
                 continue;
             }
 
+            log_to_file(&format!("[JSONL Watcher] Session {} has {} new messages", session_id, added.len()));
+
             // 广播新消息
             if let Some(tx) = conversation.event_txs.get(&session_id) {
                 // 先发送 run_status: idle（因为有新 assistant 消息说明 Claude 已回复）
                 let has_assistant = added.iter().any(|m| m.role == "assistant");
                 if has_assistant {
+                    log_to_file(&format!("[JSONL Watcher] Sending run_status: idle for session {}", session_id));
                     let status_msg = serde_json::json!({"type": "run_status", "status": "idle"});
                     let _ = tx.send(status_msg.to_string());
                 }
