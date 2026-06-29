@@ -129,19 +129,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     localStorage.setItem("kkcoder_favorite_projects", JSON.stringify(favoriteProjects));
   }, [favoriteProjects]);
 
-  // 拖动排序项目状态
-  const [draggingProject, setDraggingProject] = useState<string | null>(null);
-  const [regularProjectsOrder, setRegularProjectsOrder] = useState<string[]>(() => {
-    try {
-      const stored = localStorage.getItem("kkcoder_regular_projects_order");
-      const parsed = stored ? JSON.parse(stored) : [];
-      console.log("[ORDER-INIT] Loaded from localStorage:", JSON.stringify(parsed));
-      return parsed;
-    } catch (e) {
-      console.log("[ORDER-INIT] Failed to parse, returning []");
-      return [];
-    }
-  });
+  // 项目按最近聊天时间自动排序（无需手动拖拽）
 
   // 归档区状态
   const [showArchive, setShowArchive] = useState<boolean>(false);
@@ -278,6 +266,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     y: number;
     session: Session;
   } | null>(null);
+  const contextMenuRef = useRef<HTMLDivElement>(null);
 
   // 3b. 项目右键上下文菜单状态
   const [projectContextMenu, setProjectContextMenu] = useState<{
@@ -288,6 +277,50 @@ export const Sidebar: React.FC<SidebarProps> = ({
     sessionCount: number;
     isFavorited: boolean;
   } | null>(null);
+  const projectContextMenuRef = useRef<HTMLDivElement>(null);
+
+  // 3x. 右键菜单智能定位：超出视口时向上展开
+  useLayoutEffect(() => {
+    if (contextMenu && contextMenuRef.current) {
+      const menu = contextMenuRef.current;
+      const rect = menu.getBoundingClientRect();
+      const padding = 8;
+      let { x, y } = contextMenu;
+      // 水平方向：超出右边界则左移
+      if (x + rect.width > window.innerWidth - padding) {
+        x = window.innerWidth - rect.width - padding;
+      }
+      // 垂直方向：超出底部则向上展开
+      if (y + rect.height > window.innerHeight - padding) {
+        y = y - rect.height;
+        if (y < padding) y = padding;
+      }
+      if (x !== contextMenu.x || y !== contextMenu.y) {
+        menu.style.left = `${x}px`;
+        menu.style.top = `${y}px`;
+      }
+    }
+  }, [contextMenu]);
+
+  useLayoutEffect(() => {
+    if (projectContextMenu && projectContextMenuRef.current) {
+      const menu = projectContextMenuRef.current;
+      const rect = menu.getBoundingClientRect();
+      const padding = 8;
+      let { x, y } = projectContextMenu;
+      if (x + rect.width > window.innerWidth - padding) {
+        x = window.innerWidth - rect.width - padding;
+      }
+      if (y + rect.height > window.innerHeight - padding) {
+        y = y - rect.height;
+        if (y < padding) y = padding;
+      }
+      if (x !== projectContextMenu.x || y !== projectContextMenu.y) {
+        menu.style.left = `${x}px`;
+        menu.style.top = `${y}px`;
+      }
+    }
+  }, [projectContextMenu]);
 
   // 3c. 项目删除确认弹窗状态
   const [projectToDelete, setProjectToDelete] = useState<{
@@ -481,40 +514,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
     .map((fp) => fp.name);
   const regularProjNames = projectNames.filter((name) => !favProjNames.includes(name));
 
-  // 融合并比对本地保存的普通项目自定义排序，多退少补
+  // 按项目内最近一条会话的聊天时间降序排序（最新的排最上面）
   const regularSortedProjNames = useMemo(() => {
-    const existingSavedOrder = regularProjectsOrder.filter((name) => regularProjNames.includes(name));
-    const newNames = regularProjNames.filter((name) => !existingSavedOrder.includes(name));
-    if (newNames.length > 0) {
-      console.log("[ORDER-MEMO] New projects found:", newNames, "existingSavedOrder:", existingSavedOrder);
-    }
-    newNames.sort((left, right) => {
+    return [...regularProjNames].sort((left, right) => {
       const leftSessions = projectsMap[left]?.sessions || [];
       const rightSessions = projectsMap[right]?.sessions || [];
-      const leftEarliest = leftSessions.length > 0 ? Math.min(...leftSessions.map((s) => new Date(s.createdAt || 0).getTime())) : 0;
-      const rightEarliest = rightSessions.length > 0 ? Math.min(...rightSessions.map((s) => new Date(s.createdAt || 0).getTime())) : 0;
-      return leftEarliest - rightEarliest;
+      // 取每个项目中 lastUserMessageAt 的最大值（最新活动时间）
+      const leftLatest = leftSessions.length > 0
+        ? Math.max(...leftSessions.map((s) => new Date(s.lastUserMessageAt || s.createdAt || 0).getTime()))
+        : 0;
+      const rightLatest = rightSessions.length > 0
+        ? Math.max(...rightSessions.map((s) => new Date(s.lastUserMessageAt || s.createdAt || 0).getTime()))
+        : 0;
+      return rightLatest - leftLatest; // 降序：最新的在前
     });
-    return [...existingSavedOrder, ...newNames];
-  }, [projectsMap, favoriteProjects, regularProjectsOrder]);
-
-  // 状态与 localStorage 同步
-  useEffect(() => {
-    // TODO: 临时调试 - 设为 true 可跳过同步，验证是否是此 effect 覆盖了拖拽排序
-    const SKIP_SYNC = false;
-    if (SKIP_SYNC) {
-      console.log("[ORDER-SYNC] SKIPPED (debug mode)");
-      return;
-    }
-    const orderStr = JSON.stringify(regularProjectsOrder);
-    const sortedStr = JSON.stringify(regularSortedProjNames);
-    if (orderStr !== sortedStr) {
-      console.log("[ORDER-SYNC] MISMATCH! regularProjectsOrder:", orderStr, "regularSortedProjNames:", sortedStr);
-      console.log("[ORDER-SYNC] OVERWRITING localStorage with regularSortedProjNames");
-      setRegularProjectsOrder(regularSortedProjNames);
-      localStorage.setItem("kkcoder_regular_projects_order", JSON.stringify(regularSortedProjNames));
-    }
-  }, [regularSortedProjNames]);
+  }, [projectsMap, regularProjNames]);
 
   const sortedProjectNames = [...favProjNames, ...regularSortedProjNames];
 
@@ -551,129 +565,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
     });
     // 触发事件关闭标签页右键菜单
     window.dispatchEvent(new CustomEvent("close-tab-context-menu"));
-  };
-
-  // 🖱️ 项目列表拖拽排序与垂直轨道滑动 FLIP 动画
-  const lastProjectPositions = useRef<Record<string, number>>({});
-  useLayoutEffect(() => {
-    const projectElements = document.querySelectorAll(".project-group");
-    const newPositions: Record<string, number> = {};
-
-    projectElements.forEach((el) => {
-      const name = el.getAttribute("data-project-name");
-      const htmlEl = el as HTMLElement;
-      if (name) {
-        newPositions[name] = htmlEl.getBoundingClientRect().top;
-        const oldTop = lastProjectPositions.current[name];
-
-        // 仅对已经存在且位置发生变化的常规或收藏项目组做过渡动画（跳过当前拖拽的项目）
-        if (oldTop !== undefined && oldTop !== newPositions[name] && !htmlEl.classList.contains("dragging")) {
-          const deltaY = oldTop - newPositions[name];
-
-          htmlEl.style.transition = "none";
-          htmlEl.style.transform = `translate3d(0, ${deltaY}px, 0)`;
-
-          htmlEl.offsetHeight; // reflow
-
-          htmlEl.style.transition = "transform 0.25s cubic-bezier(0.16, 1, 0.3, 1)";
-          htmlEl.style.transform = "translate3d(0, 0, 0)";
-
-          const cleanup = (e: TransitionEvent) => {
-            if (e.propertyName === "transform") {
-              htmlEl.style.transition = "";
-              htmlEl.style.transform = "";
-              htmlEl.removeEventListener("transitionend", cleanup);
-            }
-          };
-          htmlEl.addEventListener("transitionend", cleanup);
-        }
-      }
-    });
-
-    lastProjectPositions.current = newPositions;
-  }, [sortedProjectNames]);
-
-  const handleProjDragStart = (e: React.DragEvent, projectName: string) => {
-    console.log("[DRAG] Start:", projectName);
-    e.dataTransfer.effectAllowed = "move";
-    e.dataTransfer.setData("text/plain", projectName);
-    setTimeout(() => {
-      setDraggingProject(projectName);
-      console.log("[DRAG] setDraggingProject:", projectName);
-    }, 0);
-  };
-
-  const handleProjDragOver = (e: React.DragEvent, targetName: string) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-
-    console.log("[DRAG] Over - draggingProject:", draggingProject, "target:", targetName);
-    if (!draggingProject || draggingProject === targetName) return;
-
-    const isSrcFavorite = favoriteProjects.some((p) => p.name === draggingProject);
-    const isTgtFavorite = favoriteProjects.some((p) => p.name === targetName);
-    console.log("[DRAG] isSrcFav:", isSrcFavorite, "isTgtFav:", isTgtFavorite);
-
-    // 只能在同一大组（收藏置顶组内，或常规普通组内）拖拽重排
-    if (isSrcFavorite !== isTgtFavorite) {
-      console.log("[DRAG] Blocked: different groups");
-      return;
-    }
-
-    const rect = e.currentTarget.getBoundingClientRect();
-    const midpoint = rect.top + rect.height / 2;
-    const clientY = e.clientY;
-    console.log("[DRAG] clientY:", clientY, "midpoint:", midpoint);
-
-    if (isSrcFavorite) {
-      const list = [...favoriteProjects];
-      const srcIdx = list.findIndex((p) => p.name === draggingProject);
-      const tgtIdx = list.findIndex((p) => p.name === targetName);
-      console.log("[DRAG] Fav - srcIdx:", srcIdx, "tgtIdx:", tgtIdx);
-
-      if (srcIdx !== -1 && tgtIdx !== -1) {
-        if (srcIdx > tgtIdx && clientY < midpoint) {
-          console.log("[DRAG] Fav SWAP UP");
-          const item = list[srcIdx];
-          list.splice(srcIdx, 1);
-          list.splice(tgtIdx, 0, item);
-          setFavoriteProjects(list);
-        } else if (srcIdx < tgtIdx && clientY > midpoint) {
-          console.log("[DRAG] Fav SWAP DOWN");
-          const item = list[srcIdx];
-          list.splice(srcIdx, 1);
-          list.splice(tgtIdx, 0, item);
-          setFavoriteProjects(list);
-        }
-      }
-    } else {
-      const list = [...regularSortedProjNames];
-      const srcIdx = list.indexOf(draggingProject);
-      const tgtIdx = list.indexOf(targetName);
-      console.log("[DRAG] Regular - srcIdx:", srcIdx, "tgtIdx:", tgtIdx, "list:", list);
-
-      if (srcIdx !== -1 && tgtIdx !== -1) {
-        if (srcIdx > tgtIdx && clientY < midpoint) {
-          console.log("[DRAG] Regular SWAP UP");
-          const item = list[srcIdx];
-          list.splice(srcIdx, 1);
-          list.splice(tgtIdx, 0, item);
-          setRegularProjectsOrder(list);
-          localStorage.setItem("kkcoder_regular_projects_order", JSON.stringify(list));
-        } else if (srcIdx < tgtIdx && clientY > midpoint) {
-          console.log("[DRAG] Regular SWAP DOWN");
-          const item = list[srcIdx];
-          list.splice(srcIdx, 1);
-          list.splice(tgtIdx, 0, item);
-          setRegularProjectsOrder(list);
-          localStorage.setItem("kkcoder_regular_projects_order", JSON.stringify(list));
-        }
-      }
-    }
-  };
-
-  const handleProjDragEnd = () => {
-    setDraggingProject(null);
   };
 
   // 8. 统一会话行渲染函数 (复用在置顶收藏组和常规项目树中)
@@ -1053,15 +944,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <div
                 key={projName}
                 data-project-name={projName}
-                className={`project-group ${draggingProject === projName ? "dragging" : ""}`}
+                className="project-group"
               >
                 {/* 项目层级标题 */}
-                <div 
+                <div
                   className="project-header"
-                  draggable={true}
-                  onDragStart={(e) => handleProjDragStart(e, projName)}
-                  onDragOver={(e) => handleProjDragOver(e, projName)}
-                  onDragEnd={handleProjDragEnd}
                   onClick={() => toggleProject(projName)}
                   onContextMenu={(e) => handleProjectContextMenu(e, projName, proj.path, proj.sessions, isProjectFavorited)}
                   style={{ cursor: "pointer", userSelect: "none" }}
@@ -1231,11 +1118,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* 9. 自定义高档白天右键上下文悬浮菜单 */}
       {contextMenu && (
-        <div 
+        <div
+          ref={contextMenuRef}
           className="context-menu"
-          style={{ 
-            top: contextMenu.y, 
-            left: contextMenu.x 
+          style={{
+            top: contextMenu.y,
+            left: contextMenu.x,
           }}
           onClick={(e) => e.stopPropagation()}
         >
@@ -1308,11 +1196,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* 项目右键上下文悬浮菜单 */}
       {projectContextMenu && (
-        <div 
+        <div
+          ref={projectContextMenuRef}
           className="context-menu"
-          style={{ 
-            top: projectContextMenu.y, 
-            left: projectContextMenu.x 
+          style={{
+            top: projectContextMenu.y,
+            left: projectContextMenu.x,
           }}
           onClick={(e) => e.stopPropagation()}
         >
