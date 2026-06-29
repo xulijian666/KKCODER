@@ -137,6 +137,7 @@ function App() {
     return saved ? parseInt(saved, 10) : 300;
   });
   const [isResizing, setIsResizing] = useState<boolean>(false);
+  const [isDragOverWorkspace, setIsDragOverWorkspace] = useState<boolean>(false);
 
   const startResize = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -520,6 +521,14 @@ function App() {
       },
     }));
   }, [activeSessionId]);
+
+  // 文件拖拽到指定会话：将路径插入到目标会话的终端
+  const handleInsertPathToSession = useCallback((sessionId: string, text: string) => {
+    if (!sessionId || !text) return;
+    window.dispatchEvent(new CustomEvent("kkcoder-insert-conversation-tag", {
+      detail: { sessionId, text },
+    }));
+  }, []);
 
   // 切换会话项目路径时自动清空文件预览
   useEffect(() => {
@@ -2084,7 +2093,28 @@ function App() {
         <div className={`sidebar-resizer ${isResizing ? "dragging" : ""}`} onMouseDown={startResize} />
 
         {/* 右侧主工作区 */}
-        <main className="main-workspace">
+        <main
+          className={`main-workspace ${isDragOverWorkspace ? "drag-over" : ""}`}
+          onDragOver={(e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "copy";
+            if (!isDragOverWorkspace) setIsDragOverWorkspace(true);
+          }}
+          onDragLeave={(e) => {
+            // 只在真正离开 main 区域时清除（忽略子元素冒泡）
+            if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) {
+              setIsDragOverWorkspace(false);
+            }
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            setIsDragOverWorkspace(false);
+            const text = e.dataTransfer.getData("text/plain");
+            if (text) {
+              handleInsertPathToSession(activeSessionId, text);
+            }
+          }}
+        >
           {/* 顶部 Tab 标签栏 */}
           <div className="tab-bar">
             <div className="tab-list" onWheel={handleTabWheel}>

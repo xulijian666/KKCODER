@@ -598,6 +598,13 @@ body {
   background-color: var(--bg-main);
 }
 
+/* 文件拖拽到终端区域时的高亮效果 */
+.main-workspace.drag-over {
+  outline: 2px dashed var(--color-primary, #3b82f6);
+  outline-offset: -2px;
+  background-color: color-mix(in srgb, var(--bg-main) 92%, var(--color-primary, #3b82f6) 8%);
+}
+
 /* 顶部 Tab 栏 */
 .tab-bar {
   height: 40px;
@@ -2840,6 +2847,11 @@ input:checked + .switch-slider:before {
 
 .tree-node:hover {
   background-color: var(--bg-hover-item);
+}
+
+/* 文件拖拽时的半透明效果 */
+.tree-node.dragging {
+  opacity: 0.5;
 }
 
 .tree-node-arrow {
