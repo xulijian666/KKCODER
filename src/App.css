@@ -2688,7 +2688,8 @@ input:checked + .switch-slider:before {
   flex-direction: column;
   flex-shrink: 0;
   height: 100%;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .project-tree-aside-header {
@@ -2834,6 +2835,11 @@ input:checked + .switch-slider:before {
   flex-direction: column;
 }
 
+.project-tree-root {
+  width: max-content;
+  min-width: 100%;
+}
+
 .tree-node {
   display: flex;
   align-items: center;
@@ -2885,10 +2891,8 @@ input:checked + .switch-slider:before {
 
 .tree-node-name {
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex: 1;
-  padding-right: 8px;
+  flex-shrink: 0;
+  padding-right: 16px;
 }
 
 .project-tree-resizer {

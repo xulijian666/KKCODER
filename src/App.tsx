@@ -183,6 +183,7 @@ function App() {
     return saved ? parseInt(saved, 10) : 260;
   });
   const [isResizingProjectTree, setIsResizingProjectTree] = useState<boolean>(false);
+  const projectTreeAsideRef = useRef<HTMLElement>(null);
   const [showProjectTree, setShowProjectTree] = useState<boolean>(() => {
     return localStorage.getItem("kkcoder_show_project_tree") === "true";
   });
@@ -511,6 +512,36 @@ function App() {
   }, [queue.length]);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId);
+
+  // 文件树自适应宽度：监听树内容变化，自动调整面板宽度
+  useEffect(() => {
+    const aside = projectTreeAsideRef.current;
+    if (!aside) return;
+
+    const adjustWidth = () => {
+      const root = aside.querySelector(".project-tree-root");
+      if (!root) return;
+      const contentWidth = (root as HTMLElement).scrollWidth;
+      const maxW = Math.floor(window.innerWidth * 0.4);
+      const newW = Math.max(200, Math.min(maxW, contentWidth + 4));
+      setProjectTreeWidth(newW);
+      localStorage.setItem("kkcoder_project_tree_width", newW.toString());
+    };
+
+    // 初次渲染后测量
+    const timer = setTimeout(adjustWidth, 100);
+
+    // 监听子树变化（展开/折叠/加载）
+    const observer = new MutationObserver(() => {
+      setTimeout(adjustWidth, 50);
+    });
+    observer.observe(aside, { childList: true, subtree: true });
+
+    return () => {
+      clearTimeout(timer);
+      observer.disconnect();
+    };
+  }, [showProjectTree, activeSession?.path]);
 
   const insertConversationTagToActiveTerminal = useCallback((text: string) => {
     if (!activeSessionId || !text) return;
@@ -2605,7 +2636,8 @@ function App() {
               onMouseDown={startProjectTreeResize} 
               data-agent-type={activeSession?.type || "claude"}
             />
-            <aside 
+            <aside
+              ref={projectTreeAsideRef}
               className="project-tree-aside"
               style={{ width: `${projectTreeWidth}px` }}
             >
