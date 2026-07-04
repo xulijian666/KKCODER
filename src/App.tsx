@@ -521,7 +521,14 @@ function App() {
     const adjustWidth = () => {
       const root = aside.querySelector(".project-tree-root");
       if (!root) return;
-      const contentWidth = (root as HTMLElement).scrollWidth;
+      
+      // 临时清除 minWidth 限制以便精确测量内容的自然最大宽度，防止宽度无限递增的反馈循环
+      const htmlRoot = root as HTMLElement;
+      const originalMinWidth = htmlRoot.style.minWidth;
+      htmlRoot.style.minWidth = "0";
+      const contentWidth = htmlRoot.scrollWidth;
+      htmlRoot.style.minWidth = originalMinWidth;
+
       const maxW = Math.floor(window.innerWidth * 0.4);
       const newW = Math.max(200, Math.min(maxW, contentWidth + 4));
       setProjectTreeWidth(newW);
