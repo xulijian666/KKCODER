@@ -139,6 +139,7 @@ impl SessionActor {
         let flush_interval = Duration::from_millis(16); // 16ms 微批
         let max_buffer_size = 4096; // 4KB 立即 flush
         let mut pty_buf = [0u8; 4096];
+        let mut leftover = Vec::new();
 
         self.status.set(SessionStatus::Idle);
 
@@ -167,7 +168,15 @@ impl SessionActor {
                 } => {
                     match result {
                         Ok(n) if n > 0 => {
-                            let data = String::from_utf8_lossy(&pty_buf[..n]).to_string();
+                            let mut current = leftover;
+                            current.extend_from_slice(&pty_buf[..n]);
+
+                            let incomplete_len = get_incomplete_utf8_suffix_len(&current);
+                            let valid_len = current.len() - incomplete_len;
+
+                            leftover = current[valid_len..].to_vec();
+
+                            let data = String::from_utf8_lossy(&current[..valid_len]).to_string();
                             buffer.push_str(&data);
 
                             // 检查 flush 条件
@@ -223,4 +232,33 @@ impl SessionActor {
 
         buffer.clear();
     }
+}
+
+fn get_incomplete_utf8_suffix_len(bytes: &[u8]) -> usize {
+    let len = bytes.len();
+    if len == 0 {
+        return 0;
+    }
+    let check_limit = std::cmp::min(len, 4);
+    for i in 1..=check_limit {
+        let byte = bytes[len - i];
+        if byte >= 192 {
+            let needed = if byte < 224 {
+                2
+            } else if byte < 240 {
+                3
+            } else {
+                4
+            };
+            if i < needed {
+                return i;
+            } else {
+                return 0;
+            }
+        }
+        if byte < 128 {
+            break;
+        }
+    }
+    0
 }

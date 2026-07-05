@@ -901,6 +901,35 @@ fn open_terminal_path(path: String) -> Result<(), String> {
     Err("指定路径及其父目录均不存在".to_string())
 }
 
+fn get_incomplete_utf8_suffix_len(bytes: &[u8]) -> usize {
+    let len = bytes.len();
+    if len == 0 {
+        return 0;
+    }
+    let check_limit = std::cmp::min(len, 4);
+    for i in 1..=check_limit {
+        let byte = bytes[len - i];
+        if byte >= 192 {
+            let needed = if byte < 224 {
+                2
+            } else if byte < 240 {
+                3
+            } else {
+                4
+            };
+            if i < needed {
+                return i;
+            } else {
+                return 0;
+            }
+        }
+        if byte < 128 {
+            break;
+        }
+    }
+    0
+}
+
 // 7. 拉起本地虚拟终端并运行 Agent (重连会话自动键入 /resume 恢复上下文)
 #[tauri::command]
 fn spawn_terminal(
@@ -1177,13 +1206,25 @@ fn spawn_terminal(
         log_to_file("PTY reader listener thread spawned.");
         let mut reader = reader;
         let mut buffer = [0u8; 4096];
+        let mut leftover = Vec::new();
         let mut seq: u64 = 0;
         while let Ok(n) = reader.read(&mut buffer) {
             if n == 0 {
                 log_to_file("PTY reader thread: read EOF (0 bytes). Exiting reader loop.");
                 break;
             }
-            let data = String::from_utf8_lossy(&buffer[..n]).to_string();
+            let mut current = leftover;
+            current.extend_from_slice(&buffer[..n]);
+
+            let incomplete_len = get_incomplete_utf8_suffix_len(&current);
+            let valid_len = current.len() - incomplete_len;
+
+            leftover = current[valid_len..].to_vec();
+
+            let data = String::from_utf8_lossy(&current[..valid_len]).to_string();
+            if data.is_empty() {
+                continue;
+            }
 
             // 发送到前端
             app_handle_clone

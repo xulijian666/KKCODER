@@ -718,7 +718,7 @@ body {
 .terminal-container {
   flex: 1;
   background-color: var(--bg-terminal);
-  padding: 10px;
+  padding: 10px 10px 2px 10px; /* 缩减底部内边距，极大减少终端最下方黑色空白 */
   overflow: hidden;
   position: relative;
   display: flex;

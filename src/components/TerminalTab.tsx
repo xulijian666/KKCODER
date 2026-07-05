@@ -1,7 +1,8 @@
 import React, { useEffect, useRef } from "react";
-import { Terminal } from "xterm";
-import { FitAddon } from "xterm-addon-fit";
-import "xterm/css/xterm.css";
+import { Terminal } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
+import { WebglAddon } from "@xterm/addon-webgl";
+import "@xterm/xterm/css/xterm.css";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
@@ -232,6 +233,7 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
       theme: initialColors,
       convertEol: true,
       minimumContrastRatio: 4.5,
+      windowsPty: { backend: "conpty" }, // 启用 Windows ConPTY 兼容模式，防止双重 reflow 导致历史行重复 Bug
     });
 
     // 注册自定义 LinkProvider 支持网页链接和 Windows 本地路径点击打开
@@ -325,6 +327,25 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(terminalRef.current);
+
+    // 延迟少许（利用 setTimeout(..., 0)）以避开 xterm.js 核心 viewport 构建与 RenderService 初始化的微任务赛跑，确保安全加载
+    setTimeout(() => {
+      if (term.element) {
+        try {
+          const webglAddon = new WebglAddon();
+          webglAddon.onContextLoss(() => {
+            log("WebGL context lost at runtime. Disposing WebglAddon...");
+            try {
+              webglAddon.dispose();
+            } catch (_) {}
+          });
+          term.loadAddon(webglAddon);
+          log("WebGL terminal renderer loaded successfully.");
+        } catch (e) {
+          log("WebGL renderer not supported, falling back to default DOM renderer: " + e);
+        }
+      }
+    }, 0);
     let initialTerminalDimensions: { cols: number; rows: number } | null = null;
     try {
       fitAddon.fit();
@@ -762,13 +783,7 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
         });
     });
 
-    // 4. 监听终端自身的 resize 事件并同步到 PTY
-    log("Binding term.onResize to resize_terminal...");
-    const onResizeDisposable = term.onResize(({ cols, rows }) => {
-      invoke("resize_terminal", { sessionId, cols, rows }).catch((err) => {
-        log(`resize_terminal error: ${err}`);
-      });
-    });
+
 
     // 5. 调用 Rust spawn_terminal 接口拉起后端 PTY 进程
     log("Calling Backend invoke('spawn_terminal')...");
@@ -839,7 +854,7 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
         } catch (e) {
           // 捕获未挂载时测量的尺寸异常
         }
-      }, 120); // 120ms 防抖，过滤高频 resize 触发，让侧边栏拖拽顺畅无比且终端完全不闪烁
+      }, 100); // 100ms 防抖，过滤窗口拖拽中的高频瞬时尺寸状态，防范 Windows ConPTY 重构缓冲区时产生的内容重复与重合 Bug
     };
 
     const resizeObserver = new ResizeObserver((entries) => {
@@ -944,15 +959,17 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
       // 精准防抖动触发 fit，等 Canvas 重绘完成
       setTimeout(() => {
         try {
-          fitAddon.fit();
-          term.scrollToBottom(); // 确保字号发生热切时，视口也强制滚动到最下方
-          const dims = fitAddon.proposeDimensions();
-          if (dims) {
-            invoke("resize_terminal", {
-              sessionId,
-              cols: dims.cols,
-              rows: dims.rows,
-            }).catch((err) => log(`Font size change resize sync error: ${err}`));
+          if (term.element) {
+            fitAddon.fit();
+            term.scrollToBottom(); // 确保字号发生热切时，视口也强制滚动到最下方
+            const dims = fitAddon.proposeDimensions();
+            if (dims) {
+              invoke("resize_terminal", {
+                sessionId,
+                cols: dims.cols,
+                rows: dims.rows,
+              }).catch((err) => log(`Font size change resize sync error: ${err}`));
+            }
           }
         } catch (err) {}
       }, 50);
@@ -981,7 +998,6 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
       window.removeEventListener("kkcoder-font-size-change", handleFontSizeChange);
       window.removeEventListener("kkcoder-insert-conversation-tag", handleInsertConversationTag);
       onDataDisposable.dispose();
-      onResizeDisposable.dispose();
       if (unlistenFn) {
         unlistenFn();
       }
@@ -998,7 +1014,7 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
       log(`Auto-focusing and fitting terminal instance for active session: ${sessionId}`);
       // 立即执行一次 fit，防止在布局显示时出现短暂空白或闪烁
       try {
-        if (fitAddonRef.current && xtermRef.current) {
+        if (fitAddonRef.current && xtermRef.current && xtermRef.current.element) {
           fitAddonRef.current.fit();
         }
       } catch (e) {}
@@ -1006,7 +1022,7 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
       // 延迟 80ms 等 DOM 完全刷新 (display: flex 生效) 后平滑捕获系统焦点并重新测绘画布
       const timer = setTimeout(() => {
         try {
-          if (fitAddonRef.current && xtermRef.current) {
+          if (fitAddonRef.current && xtermRef.current && xtermRef.current.element) {
             fitAddonRef.current.fit();
             xtermRef.current.scrollToBottom();
             const dims = fitAddonRef.current.proposeDimensions();
@@ -1018,8 +1034,8 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
                 rows: dims.rows,
               }).catch((err) => log(`Active tab resize sync error: ${err}`));
             }
+            xtermRef.current.focus();
           }
-          xtermRef.current?.focus();
         } catch (e) {
           console.error("Failed to focus or fit terminal", e);
         }
