@@ -13,7 +13,7 @@ import {
 interface TerminalTabProps {
   sessionId: string;
   directory: string;
-  agentType: "claude" | "pi";
+  agentType: "claude" | "agy" | "codex";
   agentSessionId: string;
   isReopen: boolean;
   onSpawned?: () => void;
@@ -88,7 +88,6 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
   agentSessionId,
   isReopen,
   onSpawned,
-  onCaptureSessionId,
   onStateChange,
   busy,
   isActive,
@@ -99,7 +98,6 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
-  const capturedRef = useRef<boolean>(false);
 
   const onCommandCompleteRef = useRef(onCommandComplete);
   useEffect(() => {
@@ -459,15 +457,59 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
 
       if (arg.ctrlKey && arg.code === "KeyV") {
         if (arg.type === "keydown" && !arg.repeat) {
-          log("Ctrl+V keydown event captured in terminal. Reading clipboard text first...");
-          navigator.clipboard.readText().then(async (text) => {
-            let isFilePath = false;
-            if (text && text.trim().length > 0) {
-              try {
-                isFilePath = await invoke<boolean>("check_if_paths_exist", { text });
-              } catch (err) {
-                log(`Failed to check if paths exist: ${err}`);
+          log("Ctrl+V keydown event captured in terminal. Reading clipboard...");
+          // WebView/PTY 下 Claude Code 读不到宿主剪贴板图片，必须：截图落盘 → 粘贴路径 → Claude 转成 [Image]
+          const pasteClipboardImage = async () => {
+            try {
+              const clipboardItems = await navigator.clipboard.read();
+              for (const clipboardItem of clipboardItems) {
+                for (const type of clipboardItem.types) {
+                  if (!type.startsWith("image/")) continue;
+                  log(`Detected image paste of type: ${type}`);
+                  try {
+                    const blob = await clipboardItem.getType(type);
+                    const ext = type.includes("jpeg") || type.includes("jpg")
+                      ? "jpg"
+                      : type.includes("gif")
+                        ? "gif"
+                        : type.includes("webp")
+                          ? "webp"
+                          : "png";
+                    const filename = `clipboard_img_${Date.now()}_${Math.random().toString(36).substring(2, 9)}.${ext}`;
+                    const arrayBuffer = await blob.arrayBuffer();
+                    const bytes = Array.from(new Uint8Array(arrayBuffer));
+                    const filePath = await invoke<string>("save_clipboard_image", { bytes, filename });
+                    log(`Successfully saved clipboard image to: ${filePath}`);
+                    // 不加尾部空格，让 Claude Code 自动把图片路径转成 [Image]
+                    term.paste(`"${filePath}"`);
+                    return true;
+                  } catch (e) {
+                    log(`Failed to save clipboard image: ${e}`);
+                    return false;
+                  }
+                }
               }
+            } catch (e) {
+              log(`Failed to read clipboard items for image: ${e}`);
+            }
+            return false;
+          };
+
+          navigator.clipboard.readText().then(async (text) => {
+            // 优先处理纯图片剪贴板（截图通常无文本）
+            if (!text || !text.trim()) {
+              const pastedImage = await pasteClipboardImage();
+              if (!pastedImage) {
+                log("Clipboard has neither text nor image.");
+              }
+              return;
+            }
+
+            let isFilePath = false;
+            try {
+              isFilePath = await invoke<boolean>("check_if_paths_exist", { text });
+            } catch (err) {
+              log(`Failed to check if paths exist: ${err}`);
             }
 
             if (isFilePath) {
@@ -475,116 +517,19 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
               const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
               const formatted = lines.map(line => {
                 const clean = line.replace(/^"(.*)"$/, '$1').replace(/^'(.*)'$/, '$1');
-                if (/\.(png|jpe?g|gif|webp|bmp|tiff)$/i.test(clean)) {
-                  // Add a trailing space inside the quotes to prevent Claude Code from auto-converting to [Image]
-                  return `"${clean} "`;
-                }
                 return `"${clean}"`;
               }).join(" ");
               term.paste(formatted);
-            } else {
-              try {
-                const clipboardItems = await navigator.clipboard.read();
-                let hasImage = false;
-                for (const clipboardItem of clipboardItems) {
-                  for (const type of clipboardItem.types) {
-                    if (type.startsWith("image/")) {
-                      hasImage = true;
-                      log(`Detected image paste of type: ${type}`);
-                      try {
-                        const blob = await clipboardItem.getType(type);
-                        const filename = `clipboard_img_${Date.now()}_${Math.random().toString(36).substring(2, 9)}.png.tmp`;
-                        
-                        const reader = new FileReader();
-                        reader.onload = async () => {
-                          try {
-                            const arrayBuffer = reader.result as ArrayBuffer;
-                            const bytes = new Uint8Array(arrayBuffer);
-                            const filePath = await invoke<string>("save_clipboard_image", {
-                              bytes: Array.from(bytes),
-                              filename
-                            });
-                            log(`Successfully saved clipboard image to: ${filePath}`);
-                            term.paste(`"${filePath}"`);
-                          } catch (e) {
-                            log(`Failed to save clipboard image via Tauri: ${e}`);
-                          }
-                        };
-                        reader.readAsArrayBuffer(blob);
-                      } catch (e) {
-                        log(`Failed to read clipboard image blob: ${e}`);
-                      }
-                      break;
-                    }
-                  }
-                  if (hasImage) break;
-                }
-                
-                if (!hasImage) {
-                  if (text) {
-                    log(`Pasting clipboard text (len=${text.length}).`);
-                    registerPastedText(text);
-                    if (agentType === "pi") {
-                      const processedText = text.replace(/\r?\n/g, " ");
-                      term.paste(processedText);
-                    } else {
-                      term.paste(text);
-                    }
-                  }
-                }
-              } catch (err) {
-                log(`Failed to read clipboard items, falling back to text: ${err}`);
-                if (text) {
-                  registerPastedText(text);
-                  if (agentType === "pi") {
-                    const processedText = text.replace(/\r?\n/g, " ");
-                    term.paste(processedText);
-                  } else {
-                    term.paste(text);
-                  }
-                }
-              }
+              return;
             }
-          }).catch((err) => {
+
+            // 文本存在时也可能同时带图片（少数截图工具）；优先贴文本
+            log(`Pasting clipboard text (len=${text.length}).`);
+            registerPastedText(text);
+            term.paste(text);
+          }).catch(async (err) => {
             log(`Failed to read clipboard text: ${err}`);
-            navigator.clipboard.read().then(async (clipboardItems) => {
-              let hasImage = false;
-              for (const clipboardItem of clipboardItems) {
-                for (const type of clipboardItem.types) {
-                  if (type.startsWith("image/")) {
-                    hasImage = true;
-                    log(`Detected image paste of type: ${type}`);
-                    try {
-                      const blob = await clipboardItem.getType(type);
-                      const filename = `clipboard_img_${Date.now()}_${Math.random().toString(36).substring(2, 9)}.png.tmp`;
-                      
-                      const reader = new FileReader();
-                      reader.onload = async () => {
-                        try {
-                          const arrayBuffer = reader.result as ArrayBuffer;
-                          const bytes = new Uint8Array(arrayBuffer);
-                          const filePath = await invoke<string>("save_clipboard_image", {
-                            bytes: Array.from(bytes),
-                            filename
-                          });
-                          log(`Successfully saved clipboard image to: ${filePath}`);
-                          term.paste(`"${filePath}"`);
-                        } catch (e) {
-                          log(`Failed to save clipboard image via Tauri: ${e}`);
-                        }
-                      };
-                      reader.readAsArrayBuffer(blob);
-                    } catch (e) {
-                      log(`Failed to read clipboard image blob: ${e}`);
-                    }
-                    break;
-                  }
-                }
-                if (hasImage) break;
-              }
-            }).catch((e) => {
-              log(`Failed all clipboard fallbacks: ${e}`);
-            });
+            await pasteClipboardImage();
           });
         }
         return false; // 返回 false 拦截浏览器默认及 keyup/keydown 重复事件，规避双重粘贴
@@ -681,31 +626,7 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
                 }, delay);
               }
 
-              // 首次创建的 Pi 终端：自动捕获 /session 指令返回的实际 session ID 并回传保存
-              if (agentType === "pi" && !isReopen && !capturedRef.current) {
-                const rawOutput = event.payload.data;
-                // 1. 尝试匹配 "Session ID: xxx" 格式
-                const match = rawOutput.match(/(?:Session ID|session id|Session|session)\s*[:=]?\s*([a-zA-Z0-9\-]{8,64})/i);
-                if (match && match[1] && match[1].toLowerCase() !== "session") {
-                  const capturedId = match[1];
-                  capturedRef.current = true;
-                  log(`Captured Pi real session ID: ${capturedId}`);
-                  if (onCaptureSessionId) {
-                    onCaptureSessionId(sessionId, capturedId);
-                  }
-                } else {
-                  // 2. 尝试匹配标准 UUID 格式
-                  const uuidMatch = rawOutput.match(/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/);
-                  if (uuidMatch) {
-                    const capturedId = uuidMatch[0];
-                    capturedRef.current = true;
-                    log(`Captured Pi UUID session ID: ${capturedId}`);
-                    if (onCaptureSessionId) {
-                      onCaptureSessionId(sessionId, capturedId);
-                    }
-                  }
-                }
-              }
+
             }
           }
         );
@@ -890,7 +811,7 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
     };
     document.addEventListener("contextmenu", handleRawContextMenu, true);
 
-    // 注册系统级粘贴静默盾牌，彻底防范任何 WebView2 原生 edit 命令引发的双份粘贴或非预期落盘事件
+    // 注册系统级粘贴静默盾牌，彻底防范任何 WebView2 原生 edit 命令引发的双份粘贴
     const handlePaste = (e: ClipboardEvent) => {
       log("Native paste event captured in silent shield. Silencing standard insertion...");
       isPastingRef.current = true;
