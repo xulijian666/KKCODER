@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useMemo, useLayoutEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
-import { Sidebar, Session, ClaudeIcon, PiIcon } from "./components/Sidebar";
+import { Sidebar, Session, ClaudeIcon, PiIcon, CodexIcon } from "./components/Sidebar";
 import { TerminalTab } from "./components/TerminalTab";
+import { CompatibilityTerminalTab } from "./components/NativeTerminalTab";
 import { NewSessionModal } from "./components/NewSessionModal";
 import { SettingsModal } from "./components/SettingsModal";
 import { MdEditorModal } from "./components/MdEditorModal";
@@ -19,6 +20,13 @@ import { updateSessionLastUserMessageAt } from "./utils/sessionActivity";
 import { readSessionCleanupSettings } from "./utils/sessionCleanup";
 import { shouldResumeSession } from "./utils/sessionResume";
 import { syncTaskbarUnreadBadge } from "./utils/taskbarBadge";
+import {
+  CLAUDE_TERMINAL_MODE_KEY,
+  resolveClaudeTerminalMode,
+  shouldUseNativeTerminal,
+  type ClaudeTerminalMode,
+} from "./utils/terminalMode";
+import { resolveTerminalWriteCommand } from "./utils/terminalTransport";
 import "./App.css";
 
 // 100% 安全的 UUID 生成器，防止 WebView2 部分版本及非安全上下文抛错闪退
@@ -97,14 +105,39 @@ function App() {
   }, [activeSessionId]);
   const isWindowFocusedRef = useRef<boolean>(true);
   const [openTabIds, setOpenTabIds] = useState<string[]>([]);
+  const [claudeTerminalMode, setClaudeTerminalMode] = useState<ClaudeTerminalMode>(() => {
+    return resolveClaudeTerminalMode(localStorage.getItem(CLAUDE_TERMINAL_MODE_KEY));
+  });
+  const [terminalModeBySession, setTerminalModeBySession] = useState<Record<string, ClaudeTerminalMode>>({});
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
-  const [selectedAgent, setSelectedAgent] = useState<"claude" | "pi">("claude");
+  const [selectedAgent, setSelectedAgent] = useState<"claude" | "pi" | "codex">("claude");
   const [showModal, setShowModal] = useState<boolean>(false);
   const [prefilledProjectPath, setPrefilledProjectPath] = useState<string | undefined>(undefined);
   const [showSettings, setShowSettings] = useState<boolean>(false);
   const [showMdEditor, setShowMdEditor] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [newSessionIds, setNewSessionIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    const handleTerminalModeChange = (event: Event) => {
+      const mode = resolveClaudeTerminalMode((event as CustomEvent<string>).detail);
+      setClaudeTerminalMode(mode);
+    };
+    window.addEventListener("kkcoder-claude-terminal-mode-change", handleTerminalModeChange);
+    return () => {
+      window.removeEventListener("kkcoder-claude-terminal-mode-change", handleTerminalModeChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    setTerminalModeBySession((previous) => {
+      const next: Record<string, ClaudeTerminalMode> = {};
+      for (const sessionId of openTabIds) {
+        next[sessionId] = previous[sessionId] ?? claudeTerminalMode;
+      }
+      return next;
+    });
+  }, [openTabIds, claudeTerminalMode]);
 
   // AI回答完成的闪烁状态
   const [glowingSessionIds, setGlowingSessionIds] = useState<string[]>([]);
@@ -326,6 +359,23 @@ function App() {
     };
   }, []);
 
+  const writeToSessionTerminal = useCallback(async (
+    sessionId: string,
+    data: string,
+    announceCompatibilitySubmission = false,
+  ) => {
+    const session = sessions.find((item) => item.id === sessionId);
+    if (!session) throw new Error(`会话 ${sessionId} 不存在`);
+    const mode = terminalModeBySession[sessionId] ?? claudeTerminalMode;
+    const command = resolveTerminalWriteCommand(session.type, mode);
+    await invoke(command, { sessionId, data });
+    if (command === "write_to_compat_terminal" && announceCompatibilitySubmission) {
+      window.dispatchEvent(new CustomEvent("kkcoder-compat-terminal-submitted", {
+        detail: { sessionId },
+      }));
+    }
+  }, [claudeTerminalMode, sessions, terminalModeBySession]);
+
   const handleTriggerShortcut = (content: string) => {
     if (!activeSessionId) return;
     const isBusy = sessionBusy[activeSessionId] || false;
@@ -337,7 +387,7 @@ function App() {
       setQueue(prev => [...prev, { id: generateUUID(), prompt: content }]);
     } else {
       setSessionBusy(prev => ({ ...prev, [activeSessionId]: true }));
-      invoke("write_to_terminal", { sessionId: activeSessionId, data: content + "\r\n" })
+      writeToSessionTerminal(activeSessionId, content + "\r\n", true)
         .then(() => {
           handleUserSubmittedInputWithRenameReset(activeSessionId);
         })
@@ -489,7 +539,7 @@ function App() {
       setSessionBusy(prev => ({ ...prev, [activeSessionId]: true }));
       
       // 写入终端
-      invoke("write_to_terminal", { sessionId: activeSessionId, data: nextTask.prompt + "\r\n" })
+      writeToSessionTerminal(activeSessionId, nextTask.prompt + "\r\n", true)
         .then(() => {
           handleUserSubmittedInputWithRenameReset(activeSessionId);
           log(`[Queue] Successfully sent task to terminal. Removing from queue...`);
@@ -501,7 +551,7 @@ function App() {
           setSessionBusy(prev => ({ ...prev, [activeSessionId]: false }));
         });
     }
-  }, [queue, activeSessionId, sessionBusy]);
+  }, [queue, activeSessionId, sessionBusy, writeToSessionTerminal]);
 
   // 当队列长度或显示状态变化时，强力触发 resize 事件，确保 xterm.js 虚拟终端完美重测尺寸且不遮挡输入框
   useEffect(() => {
@@ -2168,8 +2218,8 @@ function App() {
                     key={s.id}
                     data-id={s.id}
                     className={`tab ${isActive ? "active" : ""} ${
-                      isActive && s.type === "pi" ? "pi-tab" : ""
-                    } ${isGlowing ? (s.type === "pi" ? "glowing-pi" : "glowing-claude") : ""} ${
+                      isActive && (s.type === "pi" ? "pi-tab" : s.type === "codex" ? "codex-tab" : "")
+                    } ${isGlowing ? (s.type === "pi" ? "glowing-pi" : s.type === "codex" ? "glowing-codex" : "glowing-claude") : ""} ${
                       draggingIndex === index ? "dragging" : ""
                     }`}
                     draggable={!isRenaming}
@@ -2220,7 +2270,7 @@ function App() {
                         {sessionBusy[s.id] ? (
                           <span className="tab-loading-spinner" title="思考中..." />
                         ) : (
-                          s.type === "claude" ? <ClaudeIcon size={14} color="#D97757" /> : <PiIcon size={14} color="var(--color-green)" />
+                          s.type === "claude" ? <ClaudeIcon size={14} color="#D97757" /> : (s.type === "codex" ? <CodexIcon size={14} color="var(--color-cyan)" /> : <PiIcon size={14} color="var(--color-green)" />)
                         )}
                         <span className="tab-title-text" title={s.isTemp ? s.name : `${s.name} (${s.project})`}>{s.isTemp ? s.name : `${s.name} (${s.project})`}</span>
                       </span>
@@ -2255,6 +2305,8 @@ function App() {
                   if (!isOpen) return null;
                   const isActive = activeSessionId === s.id;
                   const shouldResume = shouldResumeSession(s.id, newSessionIds);
+                  const sessionTerminalMode = terminalModeBySession[s.id] ?? claudeTerminalMode;
+                  const useNativeTerminal = shouldUseNativeTerminal(s.type, sessionTerminalMode);
                   return (
                     <div
                       key={s.id}
@@ -2267,26 +2319,46 @@ function App() {
                         position: "relative",
                       }}
                     >
-                      <TerminalTab
-                        sessionId={s.id}
-                        directory={s.path}
-                        agentType={s.type}
-                        agentSessionId={s.agentSessionId}
-                        isReopen={shouldResume}
-                        onSpawned={() => {
-                          log(`TerminalTab spawn resolved for session: ${s.id}. Removing from newSessionIds...`);
-                          setNewSessionIds((prev) => prev.filter((nid) => nid !== s.id));
-                        }}
-                        onCaptureSessionId={handleCaptureSessionId}
-                        busy={sessionBusy[s.id] || false}
-                        onStateChange={(busy) => {
-                          setSessionBusy(prev => ({ ...prev, [s.id]: busy }));
-                        }}
-                        isActive={isActive}
-                        onCommandComplete={() => handleCommandComplete(s.id)}
-                        onUserSubmittedInput={handleUserSubmittedInputWithRenameReset}
-                        onRenameSession={handleRenameSession}
-                      />
+                      {useNativeTerminal ? (
+                        <CompatibilityTerminalTab
+                          sessionId={s.id}
+                          directory={s.path}
+                          agentSessionId={s.agentSessionId}
+                          isReopen={shouldResume}
+                          isActive={isActive}
+                          onSpawned={() => {
+                            log(`CompatibilityTerminalTab spawn resolved for session: ${s.id}. Removing from newSessionIds...`);
+                            setNewSessionIds((prev) => prev.filter((nid) => nid !== s.id));
+                          }}
+                          onStateChange={(busy) => {
+                            setSessionBusy(prev => ({ ...prev, [s.id]: busy }));
+                          }}
+                          onCommandComplete={() => handleCommandComplete(s.id)}
+                          onUserSubmittedInput={handleUserSubmittedInputWithRenameReset}
+                          onRenameSession={handleRenameSession}
+                        />
+                      ) : (
+                        <TerminalTab
+                          sessionId={s.id}
+                          directory={s.path}
+                          agentType={s.type}
+                          agentSessionId={s.agentSessionId}
+                          isReopen={shouldResume}
+                          onSpawned={() => {
+                            log(`TerminalTab spawn resolved for session: ${s.id}. Removing from newSessionIds...`);
+                            setNewSessionIds((prev) => prev.filter((nid) => nid !== s.id));
+                          }}
+                          onCaptureSessionId={handleCaptureSessionId}
+                          busy={sessionBusy[s.id] || false}
+                          onStateChange={(busy) => {
+                            setSessionBusy(prev => ({ ...prev, [s.id]: busy }));
+                          }}
+                          isActive={isActive}
+                          onCommandComplete={() => handleCommandComplete(s.id)}
+                          onUserSubmittedInput={handleUserSubmittedInputWithRenameReset}
+                          onRenameSession={handleRenameSession}
+                        />
+                      )}
                       {sessionBusy[s.id] && (
                         <div className="terminal-thinking-badge">
                           <span className="thinking-dot-pulse"></span>
@@ -2986,7 +3058,7 @@ function App() {
                       <div className="restore-item-info">
                         <div className="restore-item-name">{s.name}</div>
                         <div className="restore-item-path" title={s.path}>
-                          {s.type === "claude" ? "claude-code" : "pi"} · {s.path}
+                          {s.type === "claude" ? "claude-code" : (s.type === "codex" ? "codex" : "pi")} · {s.path}
                         </div>
                       </div>
                       <button

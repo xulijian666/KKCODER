@@ -6,6 +6,7 @@ use portable_pty::{native_pty_system, CommandBuilder, PtySize, MasterPty};
 use std::io::Write;
 
 mod remote;
+mod native_terminal;
 
 // 极其可靠的本地调试文件日志输出器，自动写入 kkcoder_debug.log 以便于闪退后追溯
 fn log_to_file(message: &str) {
@@ -1046,6 +1047,13 @@ fn spawn_terminal(
         } else {
             "pi\r\n".to_string()
         }
+    } else if agent_type == "codex" {
+        // Codex：首次启动 codex；重开会话用 codex resume <session-id> 恢复
+        if is_reopen {
+            format!("codex resume {}\r\n", agent_session_id)
+        } else {
+            "codex\r\n".to_string()
+        }
     } else {
         "\r\n".to_string()
     };
@@ -1139,6 +1147,34 @@ fn spawn_terminal(
                     w.flush().ok();
                 }
                 log_to_file("Background thread: /session cmd written!");
+            }
+        });
+    }
+
+    // 如果是首次创建的 Codex 会话，则延时 2.5 秒等 Codex CLI 完全拉起后，自动键入 /status 获取 session UUID
+    // Codex 会在 stdout 里输出 "Session: <uuid>"，前端通过 PTY 输出正则抓取并持久化
+    if !is_reopen && agent_type == "codex" {
+        log_to_file("!is_reopen is true for Codex: spawning background thread for `/status` writing...");
+        let sessions_clone = state.sessions.clone();
+        let session_id_clone = session_id.clone();
+        std::thread::spawn(move || {
+            log_to_file(&format!("Background `/status` thread spawned. spawn_token={}. Sleeping 2500ms...", spawn_token));
+            std::thread::sleep(std::time::Duration::from_millis(2500));
+            log_to_file("Background `/status` thread sleep finished. Locking sessions map...");
+            let mut sessions = sessions_clone.lock().unwrap();
+            if let Some(session) = sessions.get_mut(&session_id_clone) {
+                if session.spawn_token != spawn_token {
+                    log_to_file(&format!("Stale spawn token detected (active={}, thread={}). Safely skipping /status query.", session.spawn_token, spawn_token));
+                    return;
+                }
+
+                log_to_file("Background thread: writing /status cmd...");
+                {
+                    let mut w = session.writer.lock().unwrap();
+                    w.write_all(b"/status\r\n").ok();
+                    w.flush().ok();
+                }
+                log_to_file("Background thread: /status cmd written!");
             }
         });
     }
@@ -3154,6 +3190,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(pty_manager)
+        .manage(native_terminal::manager::NativeTerminalManager::default())
         .manage(remote::frp::FrpManager::new())
         .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
@@ -3282,6 +3319,10 @@ pub fn run() {
             write_to_terminal,
             resize_terminal,
             close_terminal,
+            native_terminal::spawn_compat_terminal,
+            native_terminal::write_to_compat_terminal,
+            native_terminal::resize_compat_terminal,
+            native_terminal::close_compat_terminal,
             rename_session,
             toggle_favorite,
             touch_session_last_user_message,

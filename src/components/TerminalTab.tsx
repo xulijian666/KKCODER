@@ -13,7 +13,7 @@ import {
 interface TerminalTabProps {
   sessionId: string;
   directory: string;
-  agentType: "claude" | "pi";
+  agentType: "claude" | "pi" | "codex";
   agentSessionId: string;
   isReopen: boolean;
   onSpawned?: () => void;
@@ -681,15 +681,17 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
                 }, delay);
               }
 
-              // 首次创建的 Pi 终端：自动捕获 /session 指令返回的实际 session ID 并回传保存
-              if (agentType === "pi" && !isReopen && !capturedRef.current) {
+              // 首次创建的 Pi/Codex 终端：自动捕获会话真实 session ID 并回传保存
+              //   - Pi：由 Rust 在启动 2s 后写入 /session，CLI 输出 "Session ID: <id>"
+              //   - Codex：由 Rust 在启动 2.5s 后写入 /status，CLI 输出 "Session: <uuid>"
+              if ((agentType === "pi" || agentType === "codex") && !isReopen && !capturedRef.current) {
                 const rawOutput = event.payload.data;
-                // 1. 尝试匹配 "Session ID: xxx" 格式
+                // 1. 尝试匹配 "Session ID: xxx" 或 "Session: <uuid>" 格式
                 const match = rawOutput.match(/(?:Session ID|session id|Session|session)\s*[:=]?\s*([a-zA-Z0-9\-]{8,64})/i);
                 if (match && match[1] && match[1].toLowerCase() !== "session") {
                   const capturedId = match[1];
                   capturedRef.current = true;
-                  log(`Captured Pi real session ID: ${capturedId}`);
+                  log(`[${agentType}] Captured real session ID: ${capturedId}`);
                   if (onCaptureSessionId) {
                     onCaptureSessionId(sessionId, capturedId);
                   }
@@ -699,7 +701,7 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
                   if (uuidMatch) {
                     const capturedId = uuidMatch[0];
                     capturedRef.current = true;
-                    log(`Captured Pi UUID session ID: ${capturedId}`);
+                    log(`[${agentType}] Captured UUID session ID: ${capturedId}`);
                     if (onCaptureSessionId) {
                       onCaptureSessionId(sessionId, capturedId);
                     }
