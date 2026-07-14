@@ -8,6 +8,11 @@ import {
   SESSION_CLEANUP_DAYS_KEY,
   SESSION_CLEANUP_ENABLED_KEY,
 } from "../utils/sessionCleanup";
+import {
+  CLAUDE_TERMINAL_MODE_KEY,
+  resolveClaudeTerminalMode,
+  type ClaudeTerminalMode,
+} from "../utils/terminalMode";
 
 // 会话名称修正 localStorage keys
 const AUTO_RENAME_ON_STARTUP_KEY = "kkcoder_setting_auto_rename_startup";
@@ -560,6 +565,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
     const val = localStorage.getItem("kkcoder_setting_scrollback");
     return val === null ? 10000 : parseInt(val, 10);
   });
+  const [claudeTerminalMode, setClaudeTerminalMode] = useState<ClaudeTerminalMode>(() => {
+    return resolveClaudeTerminalMode(localStorage.getItem(CLAUDE_TERMINAL_MODE_KEY));
+  });
   const [sessionCleanupEnabled, setSessionCleanupEnabled] = useState<boolean>(() => {
     return localStorage.getItem(SESSION_CLEANUP_ENABLED_KEY) === "true";
   });
@@ -709,6 +717,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
   useEffect(() => {
     localStorage.setItem("kkcoder_setting_scrollback", String(scrollback));
   }, [scrollback]);
+
+  useEffect(() => {
+    localStorage.setItem(CLAUDE_TERMINAL_MODE_KEY, claudeTerminalMode);
+    window.dispatchEvent(new CustomEvent("kkcoder-claude-terminal-mode-change", {
+      detail: claudeTerminalMode,
+    }));
+  }, [claudeTerminalMode]);
 
   useEffect(() => {
     localStorage.setItem(SESSION_CLEANUP_DAYS_KEY, String(normalizeSessionCleanupDays(sessionCleanupDays)));
@@ -1119,6 +1134,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
                     <span className="slider-value">{fontSize.toFixed(1)}px</span>
                   </div>
                 </div>
+
+                {/Windows/i.test(navigator.userAgent) && (
+                  <div className="settings-group">
+                    <div className="settings-group-label">Claude Code 兼容终端模式</div>
+                    <div className="settings-switch-row">
+                      <label className="switch-container">
+                        <input
+                          type="checkbox"
+                          checked={claudeTerminalMode === "native"}
+                          onChange={(e) => setClaudeTerminalMode(e.target.checked ? "native" : "standard")}
+                        />
+                        <span className="switch-slider"></span>
+                      </label>
+                      <span className="switch-label">使用独立的安全 PTY 与 xterm 渲染链路</span>
+                    </div>
+                    <div className="settings-helper-text">
+                      仅影响新打开或重新打开的 Claude 标签；Pi、Codex 和当前正在运行的标签保持不变。
+                    </div>
+                  </div>
+                )}
 
                 {/* 3. 关闭窗口时 */}
                 <div className="settings-group">

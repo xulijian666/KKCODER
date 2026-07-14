@@ -13,7 +13,7 @@ import {
 interface TerminalTabProps {
   sessionId: string;
   directory: string;
-  agentType: "claude" | "agy" | "codex";
+  agentType: "claude" | "pi" | "codex";
   agentSessionId: string;
   isReopen: boolean;
   onSpawned?: () => void;

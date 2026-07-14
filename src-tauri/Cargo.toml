@@ -38,5 +38,4 @@ rand = "0.8"
 dashmap = "6"
 async-trait = "0.1"
 futures-util = "0.3"
-
-
+base64 = "0.22"
