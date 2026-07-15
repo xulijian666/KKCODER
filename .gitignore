@@ -32,3 +32,15 @@ tests/
 # frp binaries
 src-tauri/frpc.exe
 src-tauri/frp.zip
+
+# 本地 AI Agent Skills（仅保留项目自有的 guizang）
+.agents/skills/*
+!.agents/skills/guizang-social-card-skill/
+!.agents/skills/guizang-social-card-skill/**
+.claude/skills/*
+!.claude/skills/guizang-social-card-skill/
+!.claude/skills/guizang-social-card-skill/**
+
+# 本地工具配置 / 快捷方式
+.antigravitycli/
+*.lnk
