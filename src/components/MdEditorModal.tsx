@@ -277,9 +277,9 @@ export const MdEditorModal: React.FC<MdEditorModalProps> = ({
           {/* 预览态 */}
           {(mode === "preview" || mode === "split") && (
             <div
+              className="markdown-body"
               style={{
                 flex: 1,
-                padding: "16px",
                 overflowY: "auto",
                 background: mode === "preview" ? "transparent" : "rgba(0,0,0,0.05)",
                 userSelect: "text"
