@@ -119,25 +119,40 @@ export const CompatibilityTerminalTab: React.FC<CompatibilityTerminalTabProps> =
     fitAddonRef.current = fitAddon;
 
     terminal.attachCustomKeyEventHandler((event) => {
-      if (!(event.ctrlKey && event.code === "KeyC")) return true;
-      if (event.type !== "keydown") return false;
+      // Ctrl+C — 有选区则复制，无选区则发送中断
+      if (event.ctrlKey && event.code === "KeyC") {
+        if (event.type !== "keydown") return false;
 
-      const action = resolveCtrlCAction(
-        terminal.hasSelection(),
-        userInputBufferRef.current,
-        event.repeat,
-      );
-      if (action === "copy") {
-        navigator.clipboard.writeText(terminal.getSelection()).catch((reason) => {
-          console.error("Failed to copy compatibility terminal selection", reason);
-        });
-      } else if (action === "interrupt") {
-        userInputBufferRef.current = "";
-        invoke("write_to_compat_terminal", { sessionId, data: "\x03" }).catch((reason) => {
-          console.error("Failed to clear compatibility terminal input", reason);
-        });
+        const action = resolveCtrlCAction(
+          terminal.hasSelection(),
+          userInputBufferRef.current,
+          event.repeat,
+        );
+        if (action === "copy") {
+          navigator.clipboard.writeText(terminal.getSelection()).catch((reason) => {
+            console.error("Failed to copy compatibility terminal selection", reason);
+          });
+        } else if (action === "interrupt") {
+          userInputBufferRef.current = "";
+          invoke("write_to_compat_terminal", { sessionId, data: "\x03" }).catch((reason) => {
+            console.error("Failed to clear compatibility terminal input", reason);
+          });
+        }
+        return false;
       }
-      return false;
+
+      // Ctrl+V — 直接读取剪贴板粘贴（无需 Ctrl+Shift+V）
+      if (event.ctrlKey && event.code === "KeyV") {
+        if (event.type !== "keydown" || event.repeat) return false;
+        navigator.clipboard.readText().then((text) => {
+          if (text) terminal.paste(text);
+        }).catch((err) => {
+          console.error("Failed to read clipboard for paste in native terminal:", err);
+        });
+        return false;
+      }
+
+      return true;
     });
 
     let cancelled = false;

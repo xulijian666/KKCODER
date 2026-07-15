@@ -2926,9 +2926,32 @@ input:checked + .switch-slider:before {
 }
 
 .tree-node-name {
+  overflow: hidden;
   white-space: nowrap;
+  text-overflow: ellipsis;
   flex-shrink: 0;
   padding-right: 16px;
+  position: relative;
+}
+
+/* 文件名内层 span — 用于悬停滚动动画，宽度为文本自然宽度 */
+.tree-node-name-inner {
+  display: inline-block;
+  white-space: nowrap;
+}
+
+/* 悬停时丝滑滚动显示完整文件名 */
+.tree-node:hover .tree-node-name-inner {
+  animation: tree-name-scroll 4.5s ease-in-out 0.5s;
+}
+
+@keyframes tree-name-scroll {
+  0%   { transform: translateX(0); }
+  10%  { transform: translateX(0); }
+  40%,
+  55% { transform: translateX(min(0px, calc(-100% + 180px))); }
+  85%  { transform: translateX(0); }
+  100% { transform: translateX(0); }
 }
 
 .project-tree-resizer {
