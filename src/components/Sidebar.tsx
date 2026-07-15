@@ -116,9 +116,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   // 1. 折叠项目列表的状态
   const [collapsedProjects, setCollapsedProjects] = useState<string[]>([]);
-  // 回收站与确认删除 Modal 状态
+  // 回收站 Modal 状态
   const [showTrashModal, setShowTrashModal] = useState<boolean>(false);
-  const [sessionToDelete, setSessionToDelete] = useState<Session | null>(null);
   // 收藏夹折叠状态
   const [favoritesCollapsed, setFavoritesCollapsed] = useState<boolean>(false);
   const [confirmState, setConfirmState] = useState<{
@@ -1206,7 +1205,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             className="context-menu-item"
             style={{ color: "#ef4444" }}
             onClick={() => {
-              setSessionToDelete(contextMenu.session);
+              onDeleteSession(null, contextMenu.session.id);
               setContextMenu(null);
             }}
           >
@@ -1331,55 +1330,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 }}
               >
                 移除
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 确认删除会话弹窗 */}
-      {sessionToDelete && (
-        <div className="modal-overlay show" style={{ zIndex: 1100 }} onClick={() => setSessionToDelete(null)}>
-          <div className="modal-card" style={{ maxWidth: "380px", padding: "20px" }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: "flex", gap: "12px", alignItems: "flex-start" }}>
-              <span style={{ 
-                display: "inline-flex", 
-                alignItems: "center", 
-                justifyContent: "center", 
-                width: "24px", 
-                height: "24px", 
-                borderRadius: "50%", 
-                backgroundColor: "#fef3c7", 
-                color: "#d97706",
-                fontSize: "14px",
-                fontWeight: "bold",
-                flexShrink: 0
-              }}>
-                !
-              </span>
-              <div style={{ flex: 1 }}>
-                <h3 style={{ margin: "0 0 8px 0", fontSize: "14.5px", fontWeight: 700, color: "var(--text-primary)" }}>确认删除</h3>
-                <p style={{ margin: 0, fontSize: "12.5px", color: "var(--text-secondary)", lineHeight: "1.5" }}>
-                  确定要删除该会话吗？删除后将移入回收站。
-                </p>
-              </div>
-            </div>
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px", marginTop: "20px" }}>
-              <button 
-                className="modal-btn modal-btn-cancel" 
-                onClick={() => setSessionToDelete(null)}
-              >
-                取 消
-              </button>
-              <button 
-                className="modal-btn modal-btn-create" 
-                style={{ backgroundColor: "#ef4444", color: "#fff", boxShadow: "0 2px 4px rgba(239, 68, 68, 0.2)" }}
-                onClick={() => {
-                  onDeleteSession(null, sessionToDelete.id);
-                  setSessionToDelete(null);
-                }}
-              >
-                删 除
               </button>
             </div>
           </div>

@@ -2912,17 +2912,28 @@ input:checked + .switch-slider:before {
   align-items: center;
   justify-content: center;
   margin-right: 6px;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
   color: var(--text-secondary);
+}
+
+.tree-material-icon {
+  width: 16px;
+  height: 16px;
+  display: block;
+  object-fit: contain;
+  flex-shrink: 0;
+  pointer-events: none;
+  user-select: none;
 }
 
 .folder-icon {
-  color: var(--color-orange);
-  opacity: 0.85;
+  opacity: 0.95;
 }
 
 .file-icon {
-  color: var(--text-secondary);
-  opacity: 0.75;
+  opacity: 0.95;
 }
 
 .tree-node-name {

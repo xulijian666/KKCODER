@@ -1,14 +1,12 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { 
-  Folder, 
-  FolderOpen, 
-  FileText, 
-  Search, 
-  RefreshCw, 
-  ChevronRight, 
-  ChevronDown 
+import {
+  Search,
+  RefreshCw,
+  ChevronRight,
+  ChevronDown
 } from "lucide-react";
+import { resolveMaterialIconUrl } from "../utils/materialFileIcons";
 
 interface FileEntry {
   name: string;
@@ -310,11 +308,14 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
             )}
           </span>
           <span className="tree-node-icon">
-            {node.isDir ? (
-              shouldShowChildren ? <FolderOpen size={14} className="folder-icon open" /> : <Folder size={14} className="folder-icon" />
-            ) : (
-              <FileText size={14} className="file-icon" />
-            )}
+            <img
+              className={`tree-material-icon ${node.isDir ? "folder-icon" : "file-icon"}`}
+              src={resolveMaterialIconUrl(node.name, node.isDir, shouldShowChildren)}
+              alt=""
+              width={16}
+              height={16}
+              draggable={false}
+            />
           </span>
           <span className="tree-node-name" title={node.name}>
             <span className="tree-node-name-inner">{node.name}</span>
