@@ -9,6 +9,13 @@ import {
   captureUserInputData,
   deriveSessionTitleFromInput,
 } from "../utils/sessionTitle";
+import {
+  getActiveTerminalTheme,
+  getDefaultTerminalTheme,
+  TERMINAL_SCHEME_CHANGE_EVENT,
+  resolveTerminalSchemeMode,
+  TERMINAL_SCHEME_MODE_KEY,
+} from "../utils/terminalScheme";
 
 interface TerminalTabProps {
   sessionId: string;
@@ -27,40 +34,11 @@ interface TerminalTabProps {
 }
 
 const getTerminalThemeColors = (themeName: string) => {
-  let isDark = false;
-  if (themeName === "dark-blue" || themeName === "dark-purple" || themeName === "dark-zinc") {
-    isDark = true;
-  } else if (themeName === "auto") {
-    isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-  } else {
-    isDark = false;
+  // 自定义终端配色优先；否则跟随 App 主题的默认黑/白底色
+  if (resolveTerminalSchemeMode(localStorage.getItem(TERMINAL_SCHEME_MODE_KEY)) === "custom") {
+    return getActiveTerminalTheme(themeName);
   }
-
-  return {
-    background: isDark ? "#000000" : "#ffffff",
-    foreground: isDark ? "#f8fafc" : "#334155",
-    cursor: isDark ? "#f8fafc" : "#334155", // 使用原生前景色，消除多余亮色闪烁光标
-    selectionBackground: isDark ? "rgba(29, 78, 216, 0.45)" : "rgba(59, 130, 246, 0.3)",
-    black: isDark ? "#000000" : "#0f172a",
-    red: "#ef4444",
-    green: "#10b981",
-    yellow: "#f59e0b",
-    blue: "#3b82f6",
-    magenta: "#8b5cf6",
-    cyan: "#06b6d4",
-    // 浅色模式下，ANSI White 必须映射为深灰色，否则白底白字无法看清
-    white: isDark ? "#ffffff" : "#475569",
-    // 浅色模式下，明亮色版本需要降低亮度（使用深沉的高饱和度色），保证高对比度与易读性
-    brightBlack: isDark ? "#94a3b8" : "#64748b",
-    brightRed: isDark ? "#f87171" : "#dc2626",
-    brightGreen: isDark ? "#34d399" : "#16a34a",
-    brightYellow: isDark ? "#fbbf24" : "#d97706",
-    brightBlue: isDark ? "#60a5fa" : "#2563eb",
-    brightMagenta: isDark ? "#a78bfa" : "#7c3aed",
-    brightCyan: isDark ? "#22d3ee" : "#0891b2",
-    // 浅色模式下，ANSI Bright White 必须映射为炭黑色，保证完美易读性
-    brightWhite: isDark ? "#ffffff" : "#0f172a",
-  };
+  return getDefaultTerminalTheme(themeName);
 };
 
 interface ConversationTagInsertDetail {
@@ -846,15 +824,21 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
       }
     }
 
-    // 7. 监听主题切换的全局自定义事件，实现 PTY 终端画布底色实时刷新 (黑底 `#000000` / 白底 `#ffffff`)
+    // 7. 监听主题切换的全局自定义事件，实现 PTY 终端画布底色实时刷新
     const handleThemeChange = (e: Event) => {
       const customEvent = e as CustomEvent<string>;
       const newTheme = customEvent.detail;
       log(`Received theme change event: theme=${newTheme}`);
-      const newColors = getTerminalThemeColors(newTheme);
-      term.options.theme = newColors;
+      term.options.theme = getTerminalThemeColors(newTheme);
     };
     window.addEventListener("kkcoder-theme-change", handleThemeChange);
+
+    const handleTerminalSchemeChange = () => {
+      const appTheme = localStorage.getItem("kkcoder_setting_theme") || "light-premium";
+      log("Received terminal scheme change event");
+      term.options.theme = getTerminalThemeColors(appTheme);
+    };
+    window.addEventListener(TERMINAL_SCHEME_CHANGE_EVENT, handleTerminalSchemeChange);
 
     // 7b. 监听终端字体切换的全局自定义事件，实现 PTY 终端字体实时更新
     const handleFontChange = (e: Event) => {
@@ -915,6 +899,7 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
       }
       resizeObserver.disconnect();
       window.removeEventListener("kkcoder-theme-change", handleThemeChange);
+      window.removeEventListener(TERMINAL_SCHEME_CHANGE_EVENT, handleTerminalSchemeChange);
       window.removeEventListener("kkcoder-font-change", handleFontChange);
       window.removeEventListener("kkcoder-font-size-change", handleFontSizeChange);
       window.removeEventListener("kkcoder-insert-conversation-tag", handleInsertConversationTag);

@@ -12,6 +12,10 @@ import {
   createNativeTerminalLifecycle,
   type NativeTerminalLifecycle,
 } from "../utils/nativeTerminalLifecycle";
+import {
+  getActiveTerminalTheme,
+  TERMINAL_SCHEME_CHANGE_EVENT,
+} from "../utils/terminalScheme";
 import "./NativeTerminalTab.css";
 
 interface CompatibilityTerminalTabProps {
@@ -96,6 +100,7 @@ export const CompatibilityTerminalTab: React.FC<CompatibilityTerminalTabProps> =
     const fontSize = Number.parseFloat(localStorage.getItem("kkcoder_setting_font_size") || "13.5");
     const scrollback = Number.parseInt(localStorage.getItem("kkcoder_setting_scrollback") || "10000", 10);
     const decoder = new TextDecoder("utf-8");
+    const terminalTheme = getActiveTerminalTheme();
     const terminal = new Terminal({
       cols: 80,
       rows: 24,
@@ -105,12 +110,7 @@ export const CompatibilityTerminalTab: React.FC<CompatibilityTerminalTabProps> =
       scrollback: Number.isFinite(scrollback) ? scrollback : 10000,
       scrollOnEraseInDisplay: true,
       windowsPty: { backend: "conpty" },
-      theme: {
-        background: "#000000",
-        foreground: "#f8fafc",
-        cursor: "#f8fafc",
-        selectionBackground: "rgba(148, 163, 184, 0.35)",
-      },
+      theme: terminalTheme,
     });
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
@@ -358,6 +358,20 @@ export const CompatibilityTerminalTab: React.FC<CompatibilityTerminalTabProps> =
     };
     window.addEventListener("kkcoder-compat-terminal-submitted", handleProgrammaticSubmission);
 
+    const handleFontChange = (e: Event) => {
+      const detail = (e as CustomEvent<string>).detail;
+      if (!terminalRef.current) return;
+      terminalRef.current.options.fontFamily = `${detail}, Fira Code, Consolas, Monaco, monospace`;
+      fitAddonRef.current?.fit();
+    };
+    window.addEventListener("kkcoder-font-change", handleFontChange);
+
+    const handleTerminalSchemeChange = () => {
+      if (!terminalRef.current) return;
+      terminalRef.current.options.theme = getActiveTerminalTheme();
+    };
+    window.addEventListener(TERMINAL_SCHEME_CHANGE_EVENT, handleTerminalSchemeChange);
+
     const resizeDisposable = terminal.onResize(({ cols, rows }) => {
       if (!spawnedRef.current || cols < 40 || rows < 8) return;
       invoke("resize_compat_terminal", { sessionId, cols, rows }).catch((reason) => {
@@ -388,6 +402,8 @@ export const CompatibilityTerminalTab: React.FC<CompatibilityTerminalTabProps> =
       resizeObserver.disconnect();
       window.removeEventListener("kkcoder-insert-conversation-tag", handleInsertConversationTag);
       window.removeEventListener("kkcoder-compat-terminal-submitted", handleProgrammaticSubmission);
+      window.removeEventListener("kkcoder-font-change", handleFontChange);
+      window.removeEventListener(TERMINAL_SCHEME_CHANGE_EVENT, handleTerminalSchemeChange);
       dataDisposable.dispose();
       resizeDisposable.dispose();
       unlisten?.();

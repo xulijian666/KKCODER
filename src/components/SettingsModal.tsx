@@ -13,6 +13,14 @@ import {
   resolveClaudeTerminalMode,
   type ClaudeTerminalMode,
 } from "../utils/terminalMode";
+import {
+  TERMINAL_SCHEME_MODE_KEY,
+  TERMINAL_SCHEME_JSON_KEY,
+  resolveTerminalSchemeMode,
+  parseWindowsTerminalScheme,
+  dispatchTerminalSchemeChange,
+  type TerminalSchemeMode,
+} from "../utils/terminalScheme";
 
 // 会话名称修正 localStorage keys
 const AUTO_RENAME_ON_STARTUP_KEY = "kkcoder_setting_auto_rename_startup";
@@ -568,6 +576,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
   const [claudeTerminalMode, setClaudeTerminalMode] = useState<ClaudeTerminalMode>(() => {
     return resolveClaudeTerminalMode(localStorage.getItem(CLAUDE_TERMINAL_MODE_KEY));
   });
+  const [terminalSchemeMode, setTerminalSchemeMode] = useState<TerminalSchemeMode>(() => {
+    return resolveTerminalSchemeMode(localStorage.getItem(TERMINAL_SCHEME_MODE_KEY));
+  });
+  const [terminalSchemeJson, setTerminalSchemeJson] = useState<string>(() => {
+    return localStorage.getItem(TERMINAL_SCHEME_JSON_KEY) || "";
+  });
+  const [terminalSchemeError, setTerminalSchemeError] = useState<string>("");
+  const [terminalSchemeName, setTerminalSchemeName] = useState<string>(() => {
+    const raw = localStorage.getItem(TERMINAL_SCHEME_JSON_KEY);
+    if (!raw) return "";
+    const parsed = parseWindowsTerminalScheme(raw);
+    return parsed.ok ? (parsed.scheme.name || "自定义") : "";
+  });
   const [sessionCleanupEnabled, setSessionCleanupEnabled] = useState<boolean>(() => {
     return localStorage.getItem(SESSION_CLEANUP_ENABLED_KEY) === "true";
   });
@@ -724,6 +745,53 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
       detail: claudeTerminalMode,
     }));
   }, [claudeTerminalMode]);
+
+  useEffect(() => {
+    localStorage.setItem(TERMINAL_SCHEME_MODE_KEY, terminalSchemeMode);
+    dispatchTerminalSchemeChange();
+  }, [terminalSchemeMode]);
+
+  const applyCustomScheme = () => {
+    const result = parseWindowsTerminalScheme(terminalSchemeJson);
+    if (!result.ok) {
+      setTerminalSchemeError(result.error);
+      return;
+    }
+    setTerminalSchemeError("");
+    setTerminalSchemeName(result.scheme.name || "自定义");
+    // 规范化后存一份，确保下次加载稳定
+    const normalized = JSON.stringify(
+      {
+        name: result.scheme.name || "Custom",
+        background: result.theme.background,
+        foreground: result.theme.foreground,
+        cursorColor: result.theme.cursor,
+        selectionBackground: result.theme.selectionBackground,
+        black: result.theme.black,
+        red: result.theme.red,
+        green: result.theme.green,
+        yellow: result.theme.yellow,
+        blue: result.theme.blue,
+        purple: result.theme.magenta,
+        cyan: result.theme.cyan,
+        white: result.theme.white,
+        brightBlack: result.theme.brightBlack,
+        brightRed: result.theme.brightRed,
+        brightGreen: result.theme.brightGreen,
+        brightYellow: result.theme.brightYellow,
+        brightBlue: result.theme.brightBlue,
+        brightPurple: result.theme.brightMagenta,
+        brightCyan: result.theme.brightCyan,
+        brightWhite: result.theme.brightWhite,
+      },
+      null,
+      2,
+    );
+    setTerminalSchemeJson(normalized);
+    localStorage.setItem(TERMINAL_SCHEME_JSON_KEY, normalized);
+    setTerminalSchemeMode("custom");
+    dispatchTerminalSchemeChange();
+  };
 
   useEffect(() => {
     localStorage.setItem(SESSION_CLEANUP_DAYS_KEY, String(normalizeSessionCleanupDays(sessionCleanupDays)));
@@ -1133,6 +1201,86 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
                     />
                     <span className="slider-value">{fontSize.toFixed(1)}px</span>
                   </div>
+                </div>
+
+                {/* 2d. 终端配色 */}
+                <div className="settings-group">
+                  <div className="settings-group-label">终端配色</div>
+                  <div className="settings-btn-group">
+                    <button
+                      className={`settings-toggle-btn ${terminalSchemeMode === "default" ? "active" : ""}`}
+                      onClick={() => {
+                        setTerminalSchemeMode("default");
+                        setTerminalSchemeError("");
+                      }}
+                    >
+                      默认
+                    </button>
+                    <button
+                      className={`settings-toggle-btn ${terminalSchemeMode === "custom" ? "active" : ""}`}
+                      onClick={() => setTerminalSchemeMode("custom")}
+                    >
+                      自定义{terminalSchemeName ? ` · ${terminalSchemeName}` : ""}
+                    </button>
+                  </div>
+                  {terminalSchemeMode === "custom" && (
+                    <>
+                      <div className="settings-helper-text">
+                        粘贴 Windows Terminal 配色 JSON（支持 windowsterminalthemes.dev 导出格式），普通模式与兼容模式都会生效。
+                      </div>
+                      <textarea
+                        className="settings-textarea"
+                        value={terminalSchemeJson}
+                        onChange={(e) => {
+                          setTerminalSchemeJson(e.target.value);
+                          setTerminalSchemeError("");
+                        }}
+                        placeholder={`{\n  "name": "Alabaster",\n  "background": "#f7f7f7",\n  "foreground": "#000000",\n  ...\n}`}
+                        rows={10}
+                        style={{
+                          width: "100%",
+                          marginTop: 8,
+                          fontFamily: "Consolas, Monaco, monospace",
+                          fontSize: 12,
+                          lineHeight: 1.45,
+                          padding: 10,
+                          borderRadius: 6,
+                          border: "1px solid var(--border-color)",
+                          background: "var(--bg-sidebar)",
+                          color: "var(--text-primary)",
+                          resize: "vertical",
+                          boxSizing: "border-box",
+                        }}
+                      />
+                      <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center", flexWrap: "wrap" }}>
+                        <button className="settings-toggle-btn active" onClick={applyCustomScheme}>
+                          应用配色
+                        </button>
+                        <button
+                          className="settings-toggle-btn"
+                          onClick={() => {
+                            setTerminalSchemeJson("");
+                            setTerminalSchemeName("");
+                            setTerminalSchemeError("");
+                            localStorage.removeItem(TERMINAL_SCHEME_JSON_KEY);
+                            setTerminalSchemeMode("default");
+                          }}
+                        >
+                          清除
+                        </button>
+                        {terminalSchemeError ? (
+                          <span style={{ fontSize: 12, color: "#ef4444" }}>{terminalSchemeError}</span>
+                        ) : terminalSchemeName ? (
+                          <span style={{ fontSize: 12, color: "#22c55e" }}>已应用：{terminalSchemeName}</span>
+                        ) : null}
+                      </div>
+                    </>
+                  )}
+                  {terminalSchemeMode === "default" && (
+                    <div className="settings-helper-text">
+                      跟随 App 主题自动切换终端黑/白底色。
+                    </div>
+                  )}
                 </div>
 
                 {/Windows/i.test(navigator.userAgent) && (
