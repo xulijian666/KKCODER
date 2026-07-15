@@ -141,14 +141,86 @@ export const CompatibilityTerminalTab: React.FC<CompatibilityTerminalTabProps> =
         return false;
       }
 
-      // Ctrl+V — 直接读取剪贴板粘贴（无需 Ctrl+Shift+V）
+      // Ctrl+V — 优先检测剪贴板图片（截图粘贴），其次处理文件路径，最后纯文本
       if (event.ctrlKey && event.code === "KeyV") {
         if (event.type !== "keydown" || event.repeat) return false;
-        navigator.clipboard.readText().then((text) => {
-          if (text) terminal.paste(text);
-        }).catch((err) => {
-          console.error("Failed to read clipboard for paste in native terminal:", err);
-        });
+
+        const pasteClipboardImage = async (): Promise<boolean> => {
+          try {
+            const clipboardItems = await navigator.clipboard.read();
+            for (const clipboardItem of clipboardItems) {
+              for (const type of clipboardItem.types) {
+                if (!type.startsWith("image/")) continue;
+                try {
+                  const blob = await clipboardItem.getType(type);
+                  const ext =
+                    type.includes("jpeg") || type.includes("jpg")
+                      ? "jpg"
+                      : type.includes("gif")
+                        ? "gif"
+                        : type.includes("webp")
+                          ? "webp"
+                          : "png";
+                  const filename = `clipboard_img_${Date.now()}_${Math.random().toString(36).substring(2, 9)}.${ext}`;
+                  const arrayBuffer = await blob.arrayBuffer();
+                  const bytes = Array.from(new Uint8Array(arrayBuffer));
+                  const filePath = await invoke<string>("save_clipboard_image", { bytes, filename });
+                  terminal.paste(`"${filePath}"`);
+                  return true;
+                } catch (e) {
+                  console.error("Failed to save clipboard image in compat terminal:", e);
+                  return false;
+                }
+              }
+            }
+          } catch (e) {
+            console.error("Failed to read clipboard items for image in compat terminal:", e);
+          }
+          return false;
+        };
+
+        navigator.clipboard
+          .readText()
+          .then(async (text) => {
+            if (!text || !text.trim()) {
+              const pastedImage = await pasteClipboardImage();
+              if (!pastedImage) {
+                console.warn("Clipboard has neither text nor image in compat terminal.");
+              }
+              return;
+            }
+
+            let isFilePath = false;
+            try {
+              isFilePath = await invoke<boolean>("check_if_paths_exist", { text });
+            } catch (err) {
+              console.error(`Failed to check if paths exist in compat terminal: ${err}`);
+            }
+
+            if (isFilePath) {
+              const lines = text
+                .split(/\r?\n/)
+                .map((l) => l.trim())
+                .filter((l) => l.length > 0);
+              const formatted = lines
+                .map((line) => {
+                  const clean = line
+                    .replace(/^"(.*)"$/, "$1")
+                    .replace(/^'(.*)'$/, "$1");
+                  return `"${clean}"`;
+                })
+                .join(" ");
+              terminal.paste(formatted);
+              return;
+            }
+
+            terminal.paste(text);
+          })
+          .catch(async (err) => {
+            console.error("Failed to read clipboard text in compat terminal:", err);
+            await pasteClipboardImage();
+          });
+
         return false;
       }
 

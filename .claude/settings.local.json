@@ -5,7 +5,9 @@
       "Bash(netstat -ano)",
       "Bash(netsh interface *)",
       "Bash(npx tsc *)",
-      "Bash(cargo check *)"
+      "Bash(cargo check *)",
+      "Bash(cat)",
+      "Bash(echo \"Done: $?\")"
     ]
   }
 }
