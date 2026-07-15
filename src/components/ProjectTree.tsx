@@ -317,7 +317,7 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
             )}
           </span>
           <span className="tree-node-name" title={node.name}>
-            {node.name}
+            <span className="tree-node-name-inner">{node.name}</span>
           </span>
         </div>
         
