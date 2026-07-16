@@ -39,6 +39,8 @@ export type XtermTheme = {
   foreground: string;
   cursor: string;
   selectionBackground: string;
+  /** 选区文字色；不设时 xterm 保留原前景，浅色选区上容易糊成白底白字 */
+  selectionForeground: string;
   black: string;
   red: string;
   green: string;
@@ -69,6 +71,30 @@ const pickColor = (...candidates: unknown[]): string | undefined => {
   return undefined;
 };
 
+/** Rough luminance check so custom schemes get a readable selectionForeground */
+const isLikelyDarkBackground = (color: string): boolean => {
+  const hex = color.trim();
+  if (hex.startsWith("#")) {
+    let body = hex.slice(1);
+    if (body.length === 3) {
+      body = body
+        .split("")
+        .map((ch) => ch + ch)
+        .join("");
+    }
+    if (body.length === 8) body = body.slice(0, 6);
+    if (body.length === 6) {
+      const r = Number.parseInt(body.slice(0, 2), 16);
+      const g = Number.parseInt(body.slice(2, 4), 16);
+      const b = Number.parseInt(body.slice(4, 6), 16);
+      // relative luminance approximation
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b < 140;
+    }
+  }
+  // rgba / unknown → assume dark-ish to keep light text
+  return true;
+};
+
 export const resolveTerminalSchemeMode = (raw: string | null): TerminalSchemeMode =>
   raw === "custom" ? "custom" : "default";
 
@@ -86,7 +112,8 @@ export const getDefaultTerminalTheme = (appThemeName?: string): XtermTheme => {
     background: isDark ? "#000000" : "#ffffff",
     foreground: isDark ? "#f8fafc" : "#334155",
     cursor: isDark ? "#f8fafc" : "#334155",
-    selectionBackground: isDark ? "rgba(29, 78, 216, 0.45)" : "rgba(59, 130, 246, 0.3)",
+    selectionBackground: isDark ? "rgba(59, 130, 246, 0.45)" : "rgba(37, 99, 235, 0.28)",
+    selectionForeground: isDark ? "#ffffff" : "#0f172a",
     black: isDark ? "#000000" : "#0f172a",
     red: "#ef4444",
     green: "#10b981",
@@ -94,7 +121,8 @@ export const getDefaultTerminalTheme = (appThemeName?: string): XtermTheme => {
     blue: "#3b82f6",
     magenta: "#8b5cf6",
     cyan: "#06b6d4",
-    white: isDark ? "#ffffff" : "#475569",
+    // 浅色：ANSI White 映射为深灰，防止思考展开/反色块白底白字
+    white: isDark ? "#e2e8f0" : "#475569",
     brightBlack: isDark ? "#94a3b8" : "#64748b",
     brightRed: isDark ? "#f87171" : "#dc2626",
     brightGreen: isDark ? "#34d399" : "#16a34a",
@@ -143,6 +171,8 @@ export const parseWindowsTerminalScheme = (
     foreground,
     cursor: pickColor(s.cursorColor, s.cursor) || foreground,
     selectionBackground: pickColor(s.selectionBackground) || "rgba(148, 163, 184, 0.35)",
+    // 自定义方案通常不带 selectionForeground；按背景亮度给默认反差色
+    selectionForeground: isLikelyDarkBackground(background) ? "#ffffff" : "#0f172a",
     black: pickColor(s.black) || "#000000",
     red: pickColor(s.red) || "#ef4444",
     green: pickColor(s.green) || "#10b981",

@@ -124,6 +124,8 @@ export const CompatibilityTerminalTab: React.FC<CompatibilityTerminalTabProps> =
       fontSize: Number.isFinite(fontSize) ? fontSize : 13.5,
       scrollback: Number.isFinite(scrollback) ? scrollback : 10000,
       scrollOnEraseInDisplay: true,
+      // 提升 ANSI 浅色字在亮/暗底上的可读性，避免思考展开白底白字
+      minimumContrastRatio: 4.5,
       windowsPty: { backend: "conpty" },
       theme: terminalTheme,
     });
@@ -290,6 +292,13 @@ export const CompatibilityTerminalTab: React.FC<CompatibilityTerminalTabProps> =
 
       return true;
     });
+
+    // 拦截 WebView2/xterm 原生 paste，只保留上面 Ctrl+V 的手动粘贴路径，防止粘贴两次
+    const handleNativePaste = (event: ClipboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    container.addEventListener("paste", handleNativePaste, true);
 
     let cancelled = false;
     let unlisten: UnlistenFn | null = null;
@@ -466,6 +475,7 @@ export const CompatibilityTerminalTab: React.FC<CompatibilityTerminalTabProps> =
     return () => {
       cancelled = true;
       resizeObserver.disconnect();
+      container.removeEventListener("paste", handleNativePaste, true);
       window.removeEventListener("kkcoder-insert-conversation-tag", handleInsertConversationTag);
       window.removeEventListener("kkcoder-compat-terminal-submitted", handleProgrammaticSubmission);
       window.removeEventListener("kkcoder-font-change", handleFontChange);
