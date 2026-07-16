@@ -9,6 +9,11 @@ import {
   buildCmdResumeCommand,
   buildPowerShellResumeCommand,
 } from "../utils/sessionResume";
+import {
+  getVisibleAgents,
+  type AgentType,
+  type EnabledAgents,
+} from "../utils/enabledAgents";
 
 export const ClaudeIcon: React.FC<{ size?: number; color?: string }> = ({ size = 18, color }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" style={{ color, display: "inline-block", verticalAlign: "middle" }}>
@@ -47,7 +52,7 @@ export interface Session {
   name: string;
   project: string;
   path: string;
-  type: "claude" | "pi" | "codex";
+  type: AgentType;
   agentSessionId: string;
   createdAt?: string; // 保存数据库创建时间戳
   lastUserMessageAt?: string;
@@ -68,8 +73,9 @@ export interface ArchivedProject {
 }
 
 interface SidebarProps {
-  selectedAgent: "claude" | "pi" | "codex";
-  onSelectAgent: (agent: "claude" | "pi" | "codex") => void;
+  selectedAgent: AgentType;
+  onSelectAgent: (agent: AgentType) => void;
+  enabledAgents: EnabledAgents;
   onOpenNewSession: (prefilledPath?: string) => void;
   onCreateSessionDirectly?: (projectPath: string) => void;
   onOpenTempSession: () => void;
@@ -96,6 +102,7 @@ interface SidebarProps {
 export const Sidebar: React.FC<SidebarProps> = ({
   selectedAgent,
   onSelectAgent,
+  enabledAgents,
   onOpenNewSession,
   onCreateSessionDirectly,
   onOpenTempSession,
@@ -118,6 +125,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   width,
   sessionBusy,
 }) => {
+  const visibleAgents = useMemo(() => getVisibleAgents(enabledAgents), [enabledAgents]);
+  const selectedAgentIndex = Math.max(0, visibleAgents.indexOf(selectedAgent));
   // 1. 折叠项目列表的状态
   const [collapsedProjects, setCollapsedProjects] = useState<string[]>([]);
   // 回收站 Modal 状态
@@ -744,30 +753,39 @@ export const Sidebar: React.FC<SidebarProps> = ({
     <aside className="sidebar-aside" style={width !== undefined ? { width: `${width}px` } : undefined}>
       {/* 新建 AI 会话头部区域 */}
       <div className="sidebar-header">
-        {/* Agent 选卡切换 */}
-        <div className="agent-selector">
-          <div className={`agent-selector-slider ${selectedAgent}`} />
-          <button
-            className={`agent-tab ${selectedAgent === "claude" ? "active claude-style" : ""}`}
-            onClick={() => onSelectAgent("claude")}
-            title="Claude Code"
-          >
-            <ClaudeIcon size={18} color={selectedAgent === "claude" ? "#D97757" : "var(--text-secondary)"} />
-          </button>
-          <button
-            className={`agent-tab ${selectedAgent === "pi" ? "active pi-style" : ""}`}
-            onClick={() => onSelectAgent("pi")}
-            title="Pi"
-          >
-            <PiIcon size={18} color={selectedAgent === "pi" ? "var(--color-green)" : "var(--text-secondary)"} />
-          </button>
-          <button
-            className={`agent-tab ${selectedAgent === "codex" ? "active codex-style" : ""}`}
-            onClick={() => onSelectAgent("codex")}
-            title="Codex"
-          >
-            <CodexIcon size={18} color={selectedAgent === "codex" ? "var(--color-cyan)" : "var(--text-secondary)"} />
-          </button>
+        {/* Agent 标识 / 切换：始终显示已启用助手；仅 Claude 时保留 Claude Code 标志 */}
+        <div className="agent-selector" data-count={visibleAgents.length}>
+          {visibleAgents.length > 1 && (
+            <div
+              className="agent-selector-slider"
+              data-index={selectedAgentIndex}
+            />
+          )}
+          {visibleAgents.map((agent) => {
+            const isActive = selectedAgent === agent;
+            const title = agent === "claude" ? "Claude Code" : agent === "pi" ? "Pi" : "Codex";
+            const activeColor =
+              agent === "claude" ? "#D97757" : agent === "pi" ? "var(--color-green)" : "var(--color-cyan)";
+            const styleClass =
+              agent === "claude" ? "claude-style" : agent === "pi" ? "pi-style" : "codex-style";
+            return (
+              <button
+                key={agent}
+                className={`agent-tab ${isActive ? `active ${styleClass}` : ""}`}
+                onClick={() => onSelectAgent(agent)}
+                title={title}
+                type="button"
+              >
+                {agent === "claude" ? (
+                  <ClaudeIcon size={18} color={isActive ? activeColor : "var(--text-secondary)"} />
+                ) : agent === "pi" ? (
+                  <PiIcon size={18} color={isActive ? activeColor : "var(--text-secondary)"} />
+                ) : (
+                  <CodexIcon size={18} color={isActive ? activeColor : "var(--text-secondary)"} />
+                )}
+              </button>
+            );
+          })}
         </div>
         
         {/* 新建会话按钮、机器人按钮与回收站按钮 */}

@@ -27,6 +27,13 @@ import {
   shouldUseNativeTerminal,
   type ClaudeTerminalMode,
 } from "./utils/terminalMode";
+import {
+  ENABLED_AGENTS_CHANGE_EVENT,
+  isAgentEnabled,
+  loadEnabledAgents,
+  type AgentType,
+  type EnabledAgents,
+} from "./utils/enabledAgents";
 import { resolveTerminalWriteCommand } from "./utils/terminalTransport";
 import {
   clearSessionQueue,
@@ -118,7 +125,8 @@ function App() {
   });
   const [terminalModeBySession, setTerminalModeBySession] = useState<Record<string, ClaudeTerminalMode>>({});
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
-  const [selectedAgent, setSelectedAgent] = useState<"claude" | "pi" | "codex">("claude");
+  const [selectedAgent, setSelectedAgent] = useState<AgentType>("claude");
+  const [enabledAgents, setEnabledAgents] = useState<EnabledAgents>(() => loadEnabledAgents());
   const [showModal, setShowModal] = useState<boolean>(false);
   const [prefilledProjectPath, setPrefilledProjectPath] = useState<string | undefined>(undefined);
   const [showSettings, setShowSettings] = useState<boolean>(false);
@@ -137,6 +145,24 @@ function App() {
       window.removeEventListener("kkcoder-claude-terminal-mode-change", handleTerminalModeChange);
     };
   }, []);
+
+  useEffect(() => {
+    const handleEnabledAgentsChange = (event: Event) => {
+      const detail = (event as CustomEvent<EnabledAgents>).detail;
+      const next = detail ?? loadEnabledAgents();
+      setEnabledAgents(next);
+    };
+    window.addEventListener(ENABLED_AGENTS_CHANGE_EVENT, handleEnabledAgentsChange);
+    return () => {
+      window.removeEventListener(ENABLED_AGENTS_CHANGE_EVENT, handleEnabledAgentsChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isAgentEnabled(selectedAgent, enabledAgents)) {
+      setSelectedAgent("claude");
+    }
+  }, [enabledAgents, selectedAgent]);
 
   useEffect(() => {
     setTerminalModeBySession((previous) => {
@@ -2195,6 +2221,7 @@ function App() {
         <Sidebar
           selectedAgent={selectedAgent}
           onSelectAgent={setSelectedAgent}
+          enabledAgents={enabledAgents}
           onOpenNewSession={(path) => {
             setPrefilledProjectPath(path);
             setShowModal(true);

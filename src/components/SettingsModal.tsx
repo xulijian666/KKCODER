@@ -21,6 +21,11 @@ import {
   dispatchTerminalSchemeChange,
   type TerminalSchemeMode,
 } from "../utils/terminalScheme";
+import {
+  loadEnabledAgents,
+  saveEnabledAgents,
+  type EnabledAgents,
+} from "../utils/enabledAgents";
 
 // 会话名称修正 localStorage keys
 const AUTO_RENAME_ON_STARTUP_KEY = "kkcoder_setting_auto_rename_startup";
@@ -533,6 +538,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
     return localStorage.getItem("kkcoder_setting_theme") || "light-premium";
   });
   // Language state removed to satisfy TS6133 strict check
+  const [enabledAgents, setEnabledAgents] = useState<EnabledAgents>(() => loadEnabledAgents());
   const [closeBehavior, setCloseBehavior] = useState<string>(() => {
     return localStorage.getItem("kkcoder_setting_close_behavior") || "exit";
   });
@@ -745,6 +751,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
       detail: claudeTerminalMode,
     }));
   }, [claudeTerminalMode]);
+
+  useEffect(() => {
+    saveEnabledAgents(enabledAgents);
+  }, [enabledAgents]);
 
   useEffect(() => {
     localStorage.setItem(TERMINAL_SCHEME_MODE_KEY, terminalSchemeMode);
@@ -1152,6 +1162,47 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
                     >
                       English
                     </button>
+                  </div>
+                </div>
+
+                {/* 2a. AI 助手 */}
+                <div className="settings-group">
+                  <div className="settings-group-label">AI 助手</div>
+                  <div className="settings-switch-row">
+                    <label className="switch-container">
+                      <input type="checkbox" checked disabled />
+                      <span className="switch-slider"></span>
+                    </label>
+                    <span className="switch-label">Claude Code（默认支持）</span>
+                  </div>
+                  <div className="settings-switch-row" style={{ marginTop: 10 }}>
+                    <label className="switch-container">
+                      <input
+                        type="checkbox"
+                        checked={enabledAgents.pi}
+                        onChange={(e) =>
+                          setEnabledAgents((prev) => ({ ...prev, claude: true, pi: e.target.checked }))
+                        }
+                      />
+                      <span className="switch-slider"></span>
+                    </label>
+                    <span className="switch-label">启用 Pi</span>
+                  </div>
+                  <div className="settings-switch-row" style={{ marginTop: 10 }}>
+                    <label className="switch-container">
+                      <input
+                        type="checkbox"
+                        checked={enabledAgents.codex}
+                        onChange={(e) =>
+                          setEnabledAgents((prev) => ({ ...prev, claude: true, codex: e.target.checked }))
+                        }
+                      />
+                      <span className="switch-slider"></span>
+                    </label>
+                    <span className="switch-label">启用 Codex</span>
+                  </div>
+                  <div className="settings-helper-text">
+                    未启用的助手不会出现在侧栏切换中；Claude Code 始终可用。仅启用 Claude 时侧栏仍保留 Claude Code 标志。
                   </div>
                 </div>
 
