@@ -31,6 +31,19 @@ interface CompatibilityTerminalTabProps {
   onRenameSession?: (sessionId: string, newName: string) => void;
 }
 
+interface AtomicInputTag {
+  id: number;
+  start: number;
+  end: number;
+  text: string;
+}
+
+const getTextCharLength = (text: string) => Array.from(text).length;
+
+const sliceTextByChars = (text: string, start: number, end?: number) => {
+  return Array.from(text).slice(start, end).join("");
+};
+
 const decodeBase64Bytes = (encoded: string): Uint8Array => {
   const binary = atob(encoded);
   const bytes = new Uint8Array(binary.length);
@@ -70,6 +83,8 @@ export const CompatibilityTerminalTab: React.FC<CompatibilityTerminalTabProps> =
   const onRenameSessionRef = useRef(onRenameSession);
   onRenameSessionRef.current = onRenameSession;
   const userInputBufferRef = useRef("");
+  const atomicInputTagsRef = useRef<AtomicInputTag[]>([]);
+  const atomicInputTagCounterRef = useRef(0);
   const isAnsweringRef = useRef(false);
   const commandStartTimeRef = useRef(0);
   const completionTimerRef = useRef<number | null>(null);
@@ -118,7 +133,55 @@ export const CompatibilityTerminalTab: React.FC<CompatibilityTerminalTabProps> =
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
 
+    const pruneAtomicInputTags = () => {
+      const buffer = userInputBufferRef.current;
+      const bufferLength = getTextCharLength(buffer);
+      atomicInputTagsRef.current = atomicInputTagsRef.current.filter((tag) => {
+        if (tag.end > bufferLength) return false;
+        return sliceTextByChars(buffer, tag.start, tag.end) === tag.text;
+      });
+    };
+
+    const registerAtomicInputTag = (text: string) => {
+      const start = getTextCharLength(userInputBufferRef.current);
+      const end = start + getTextCharLength(text);
+      atomicInputTagCounterRef.current += 1;
+      atomicInputTagsRef.current.push({
+        id: atomicInputTagCounterRef.current,
+        start,
+        end,
+        text,
+      });
+      userInputBufferRef.current += text;
+    };
+
+    const tryDeleteTrailingAtomicInputTag = () => {
+      pruneAtomicInputTags();
+      const buffer = userInputBufferRef.current;
+      const bufferLength = getTextCharLength(buffer);
+      const tag = [...atomicInputTagsRef.current].reverse().find((candidate) => {
+        return candidate.end === bufferLength && sliceTextByChars(buffer, candidate.start, candidate.end) === candidate.text;
+      });
+
+      if (!tag) return false;
+
+      const deleteSequence = "\x7f".repeat(getTextCharLength(tag.text));
+      userInputBufferRef.current = sliceTextByChars(buffer, 0, tag.start);
+      atomicInputTagsRef.current = atomicInputTagsRef.current.filter((candidate) => candidate.id !== tag.id);
+
+      invoke("write_to_compat_terminal", { sessionId, data: deleteSequence }).catch((reason) => {
+        console.error("Failed to delete atomic input tag in compatibility terminal", reason);
+      });
+      return true;
+    };
+
     terminal.attachCustomKeyEventHandler((event) => {
+      if ((event.code === "Backspace" || event.key === "Backspace") && event.type === "keydown" && !event.ctrlKey && !event.altKey && !event.metaKey) {
+        if (tryDeleteTrailingAtomicInputTag()) {
+          return false;
+        }
+      }
+
       // Ctrl+C — 有选区则复制，无选区则发送中断
       if (event.ctrlKey && event.code === "KeyC") {
         if (event.type !== "keydown") return false;
@@ -134,6 +197,7 @@ export const CompatibilityTerminalTab: React.FC<CompatibilityTerminalTabProps> =
           });
         } else if (action === "interrupt") {
           userInputBufferRef.current = "";
+          atomicInputTagsRef.current = [];
           invoke("write_to_compat_terminal", { sessionId, data: "\x03" }).catch((reason) => {
             console.error("Failed to clear compatibility terminal input", reason);
           });
@@ -307,6 +371,7 @@ export const CompatibilityTerminalTab: React.FC<CompatibilityTerminalTabProps> =
     const dataDisposable = terminal.onData((data) => {
       const captured = captureUserInputData(userInputBufferRef.current, data);
       userInputBufferRef.current = captured.buffer;
+      pruneAtomicInputTags();
       let submittedAt: string | null = null;
 
       if (captured.submitted) {
@@ -323,6 +388,7 @@ export const CompatibilityTerminalTab: React.FC<CompatibilityTerminalTabProps> =
         }
 
         userInputBufferRef.current = "";
+        atomicInputTagsRef.current = [];
         beginAnswering();
       }
 
@@ -344,7 +410,7 @@ export const CompatibilityTerminalTab: React.FC<CompatibilityTerminalTabProps> =
     const handleInsertConversationTag = (event: Event) => {
       const detail = (event as CustomEvent<{ sessionId: string; text: string }>).detail;
       if (!detail || detail.sessionId !== sessionId || !detail.text) return;
-      userInputBufferRef.current += detail.text;
+      registerAtomicInputTag(detail.text);
       invoke("write_to_compat_terminal", { sessionId, data: detail.text })
         .then(() => terminal.focus())
         .catch((reason) => console.error("Failed to insert path into compatibility terminal", reason));

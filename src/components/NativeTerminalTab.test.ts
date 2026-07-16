@@ -29,6 +29,9 @@ test("uses only the isolated compatibility PTY command surface", () => {
   assert.match(source, /onCommandComplete/);
   assert.match(source, /attachCustomKeyEventHandler/);
   assert.match(source, /resolveCtrlCAction/);
+  assert.match(source, /registerAtomicInputTag/);
+  assert.match(source, /tryDeleteTrailingAtomicInputTag/);
+  assert.match(source, /Backspace/);
   assert.match(source, /"\\x03"/);
   assert.doesNotMatch(source, /invoke\("spawn_terminal"/);
   assert.doesNotMatch(source, /invoke\("write_to_terminal"/);

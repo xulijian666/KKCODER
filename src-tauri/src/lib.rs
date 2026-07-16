@@ -2706,6 +2706,186 @@ fn read_project_file_content(project_path: String, relative_path: String) -> Res
 }
 
 #[tauri::command]
+fn write_project_file_content(
+    project_path: String,
+    relative_path: String,
+    content: String,
+) -> Result<(), String> {
+    log_to_file(&format!(
+        "write_project_file_content called: project_path={}, relative_path={}",
+        project_path, relative_path
+    ));
+    let root = std::path::Path::new(&project_path);
+    let full_path = root.join(&relative_path);
+
+    let root_canonical = root
+        .canonicalize()
+        .map_err(|e| format!("Failed to canonicalize project root: {}", e))?;
+
+    // Resolve parent first so we can create/overwrite the target file safely.
+    let parent = full_path
+        .parent()
+        .ok_or_else(|| "Invalid file path".to_string())?;
+    let parent_canonical = parent
+        .canonicalize()
+        .map_err(|e| format!("Parent directory not found or inaccessible: {}", e))?;
+
+    if !parent_canonical.starts_with(&root_canonical) {
+        return Err("Access denied: File outside project root".to_string());
+    }
+
+    let file_name = full_path
+        .file_name()
+        .ok_or_else(|| "Invalid file name".to_string())?;
+    let target_path = parent_canonical.join(file_name);
+
+    if target_path.exists() && !target_path.is_file() {
+        return Err("Not a file".to_string());
+    }
+
+    if content.len() > 5 * 1024 * 1024 {
+        return Err("File content exceeds 5MB limit".to_string());
+    }
+
+    std::fs::write(&target_path, content.as_bytes())
+        .map_err(|e| format!("Failed to write file: {}", e))?;
+    Ok(())
+}
+
+fn validate_single_path_segment(name: &str) -> Result<(), String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("名称不能为空".to_string());
+    }
+    if trimmed == "." || trimmed == ".." {
+        return Err("非法名称".to_string());
+    }
+    if trimmed.contains('/') || trimmed.contains('\\') {
+        return Err("名称不能包含路径分隔符".to_string());
+    }
+    if trimmed.chars().any(|c| matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*')) {
+        return Err("名称包含非法字符".to_string());
+    }
+    Ok(())
+}
+
+fn format_rename_io_error(err: std::io::Error, is_dir: bool) -> String {
+    use std::io::ErrorKind;
+
+    let kind = err.kind();
+    let raw = err.raw_os_error();
+    let msg = err.to_string();
+    let msg_lower = msg.to_lowercase();
+
+    // Windows: ERROR_SHARING_VIOLATION=32, ERROR_LOCK_VIOLATION=33,
+    // ERROR_CURRENT_DIRECTORY=16, ERROR_USER_MAPPED_FILE=1224
+    let locked_by_code = matches!(raw, Some(16) | Some(32) | Some(33) | Some(1224));
+    let locked_by_kind = matches!(
+        kind,
+        ErrorKind::PermissionDenied | ErrorKind::ResourceBusy | ErrorKind::WouldBlock
+    );
+    let locked_by_msg = [
+        "being used by another process",
+        "another program is using",
+        "used by another process",
+        "sharing violation",
+        "resource busy",
+        "device or resource busy",
+        "text file busy",
+        "cannot access the file",
+        "process cannot access",
+        "正被另一进程使用",
+        "正由另一进程使用",
+        "另一个程序正在使用",
+        "其他程序正在使用",
+        "文件正被使用",
+        "无法访问该文件",
+        "共享冲突",
+        "拒绝访问",
+    ]
+    .iter()
+    .any(|hint| msg_lower.contains(hint) || msg.contains(hint));
+
+    if locked_by_code || locked_by_kind || locked_by_msg {
+        if is_dir {
+            return "该文件夹正被其他程序占用，暂时无法重命名。请先关闭相关程序（例如 WPS、资源管理器预览、终端当前目录）后再试。".to_string();
+        }
+        return "该文件正被其他程序打开（例如 WPS/Word），暂时无法重命名。请先关闭后再试。".to_string();
+    }
+
+    if matches!(kind, ErrorKind::NotFound) {
+        return "源文件已不存在，可能刚被移动或删除。".to_string();
+    }
+    if matches!(kind, ErrorKind::AlreadyExists) {
+        return "目标名称已存在，请换一个名字。".to_string();
+    }
+
+    format!("重命名失败: {}", msg)
+}
+
+#[tauri::command]
+fn rename_project_entry(
+    project_path: String,
+    relative_path: String,
+    new_name: String,
+) -> Result<String, String> {
+    log_to_file(&format!(
+        "rename_project_entry called: project_path={}, relative_path={}, new_name={}",
+        project_path, relative_path, new_name
+    ));
+
+    validate_single_path_segment(&new_name)?;
+    let new_name = new_name.trim().to_string();
+
+    let root = std::path::Path::new(&project_path);
+    let full_path = root.join(&relative_path);
+
+    let root_canonical = root
+        .canonicalize()
+        .map_err(|e| format!("Failed to canonicalize project root: {}", e))?;
+    let source_canonical = full_path
+        .canonicalize()
+        .map_err(|e| format!("源路径不存在或无法访问: {}", e))?;
+
+    if !source_canonical.starts_with(&root_canonical) {
+        return Err("Access denied: File outside project root".to_string());
+    }
+    if source_canonical == root_canonical {
+        return Err("不能重命名项目根目录".to_string());
+    }
+
+    let parent = source_canonical
+        .parent()
+        .ok_or_else(|| "无法解析父目录".to_string())?;
+    let dest_path = parent.join(&new_name);
+
+    if dest_path.exists() {
+        return Err(format!("目标名称已存在: {}", new_name));
+    }
+
+    // Extra guard: destination must still stay under project root.
+    let dest_parent_canonical = parent
+        .canonicalize()
+        .map_err(|e| format!("父目录无法访问: {}", e))?;
+    if !dest_parent_canonical.starts_with(&root_canonical) {
+        return Err("Access denied: File outside project root".to_string());
+    }
+
+    let is_dir = source_canonical.is_dir();
+    std::fs::rename(&source_canonical, &dest_path)
+        .map_err(|e| format_rename_io_error(e, is_dir))?;
+
+    // Return new relative path using forward slashes for frontend consistency.
+    let relative = dest_path
+        .strip_prefix(&root_canonical)
+        .map_err(|_| "无法计算相对路径".to_string())?;
+    let relative_str = relative
+        .to_string_lossy()
+        .replace('\\', "/");
+    Ok(relative_str)
+}
+
+#[tauri::command]
 fn open_file_in_system(path: String) -> Result<(), String> {
     log_to_file(&format!("open_file_in_system called: path={}", path));
     #[cfg(target_os = "windows")]
@@ -3344,6 +3524,8 @@ pub fn run() {
             read_project_directory,
             search_project_files,
             read_project_file_content,
+            write_project_file_content,
+            rename_project_entry,
             open_file_in_system,
             open_in_file_manager,
             select_ccswitch_file,

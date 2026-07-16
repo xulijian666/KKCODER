@@ -7,6 +7,7 @@ import { CompatibilityTerminalTab } from "./components/NativeTerminalTab";
 import { NewSessionModal } from "./components/NewSessionModal";
 import { SettingsModal } from "./components/SettingsModal";
 import { MdEditorModal } from "./components/MdEditorModal";
+import { FileEditorModal } from "./components/FileEditorModal";
 import { ProjectTree } from "./components/ProjectTree";
 import { renderMarkdownToHtml } from "./utils/markdown";
 import { getHighlightedLines } from "./utils/highlighter";
@@ -122,6 +123,7 @@ function App() {
   const [prefilledProjectPath, setPrefilledProjectPath] = useState<string | undefined>(undefined);
   const [showSettings, setShowSettings] = useState<boolean>(false);
   const [showMdEditor, setShowMdEditor] = useState<boolean>(false);
+  const [editingFilePath, setEditingFilePath] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [newSessionIds, setNewSessionIds] = useState<string[]>([]);
 
@@ -908,6 +910,31 @@ function App() {
     const formatted = `"${relativePath}" `;
     insertConversationTagToActiveTerminal(formatted);
   }, [insertConversationTagToActiveTerminal]);
+
+  const handleEditFile = useCallback((relativePath: string) => {
+    setEditingFilePath(relativePath);
+  }, []);
+
+  const handlePathRenamed = useCallback((oldPath: string, newPath: string) => {
+    setPreviewFile(prev => {
+      if (!prev) return prev;
+      if (prev.path === oldPath) {
+        return { ...prev, path: newPath };
+      }
+      if (prev.path.startsWith(`${oldPath}/`)) {
+        return { ...prev, path: `${newPath}${prev.path.slice(oldPath.length)}` };
+      }
+      return prev;
+    });
+    setEditingFilePath(prev => {
+      if (!prev) return prev;
+      if (prev === oldPath) return newPath;
+      if (prev.startsWith(`${oldPath}/`)) {
+        return `${newPath}${prev.slice(oldPath.length)}`;
+      }
+      return prev;
+    });
+  }, []);
 
 
 
@@ -2632,7 +2659,7 @@ function App() {
           {/* 底部控制状态条 */}
           <div className="bottom-panel">
             {activeSession ? (
-              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+              <div className="bottom-panel-left">
                 <button
                   className={`folder-button ${activeSession.type === "pi" ? "pi-hover" : ""}`}
                   onClick={handleOpenFolder}
@@ -2647,39 +2674,33 @@ function App() {
                 <button
                   className={`md-button ${activeSession.type === "pi" ? "pi-hover" : ""}`}
                   onClick={() => setShowMdEditor(true)}
-                  title={activeSession.type === "pi" ? "快速生成/编辑 AGENTS.md" : "快速生成/编辑 CLAUDE.md"}
+                  title="编辑项目规则（默认 CLAUDE.md，保存后同步 AGENTS.md）"
                 >
                   <svg className="doc-svg-icon" xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: "2px", opacity: 0.85 }}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
-                  <span>{activeSession.type === "pi" ? "AGENTS.md" : "CLAUDE.md"}</span>
+                  <span>规则</span>
                 </button>
               </div>
             ) : (
-              <div style={{ color: "var(--text-secondary)", fontSize: "12px" }}>
+              <div className="bottom-panel-left" style={{ color: "var(--text-secondary)", fontSize: "12px" }}>
                 无活动项目会话
               </div>
             )}
 
-            {/* 新增的【队列】状态栏按钮 */}
+            {/* 中间：快捷短语 + 队列（窄宽时可横向滚动，避免与左右重叠） */}
             {activeSession && (
-              <div className="queue-status-btn-container" style={{
-                position: "absolute",
-                left: "50%",
-                transform: "translateX(-50%)",
-                display: "flex",
-                gap: "8px",
-                alignItems: "center"
-              }}>
-                {/* 快捷短语按钮 */}
-                {shortcutsEnabled && shortcutsList.filter(sc => sc.title.trim() && sc.content.trim()).map((sc, idx) => (
-                  <button
-                    key={idx}
-                    className="shortcut-status-btn"
-                    onClick={() => handleTriggerShortcut(sc.content)}
-                    title={`快捷短语: 点击发送 "${sc.content}"`}
-                  >
-                    <span>{sc.title}</span>
-                  </button>
-                ))}
+              <div className="bottom-panel-center">
+                <div className="bottom-shortcuts-scroll">
+                  {shortcutsEnabled && shortcutsList.filter(sc => sc.title.trim() && sc.content.trim()).map((sc, idx) => (
+                    <button
+                      key={idx}
+                      className="shortcut-status-btn"
+                      onClick={() => handleTriggerShortcut(sc.content)}
+                      title={`快捷短语: 点击发送 "${sc.content}"`}
+                    >
+                      <span>{sc.title}</span>
+                    </button>
+                  ))}
+                </div>
 
                 <button
                   className="queue-status-btn"
@@ -2703,7 +2724,6 @@ function App() {
                     <span className="queue-badge">{activeQueue.length}</span>
                   )}
                 </button>
-
               </div>
             )}
 
@@ -2749,6 +2769,8 @@ function App() {
                   projectPath={activeSession.path}
                   onFileClick={handleFileClick}
                   onInsertPathToTerminal={handleInsertPathToTerminal}
+                  onEditFile={handleEditFile}
+                  onPathRenamed={handlePathRenamed}
                 />
               ) : (
                 <div className="tree-placeholder-container">
@@ -2813,13 +2835,23 @@ function App() {
         }}
       />
 
-      {/* 📝 Markdown 编辑器弹窗组件 */}
+      {/* 📝 规则编辑器：默认 CLAUDE.md，保存后同步 AGENTS.md */}
       {activeSession && (
         <MdEditorModal
           show={showMdEditor}
           onClose={() => setShowMdEditor(false)}
           projectPath={activeSession.path}
-          filename={activeSession.type === "pi" ? "AGENTS.md" : "CLAUDE.md"}
+          filename="CLAUDE.md"
+        />
+      )}
+
+      {/* 文本文件编辑器弹窗 */}
+      {activeSession && editingFilePath && (
+        <FileEditorModal
+          show={!!editingFilePath}
+          onClose={() => setEditingFilePath(null)}
+          projectPath={activeSession.path}
+          relativePath={editingFilePath}
         />
       )}
 

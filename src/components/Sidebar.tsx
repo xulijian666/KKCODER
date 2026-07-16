@@ -5,6 +5,10 @@ import {
   formatRelativeSessionActivityTime,
   sortSessionsByActivityDesc,
 } from "../utils/sessionActivity";
+import {
+  buildCmdResumeCommand,
+  buildPowerShellResumeCommand,
+} from "../utils/sessionResume";
 
 export const ClaudeIcon: React.FC<{ size?: number; color?: string }> = ({ size = 18, color }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" style={{ color, display: "inline-block", verticalAlign: "middle" }}>
@@ -279,6 +283,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     y: number;
     session: Session;
   } | null>(null);
+  const [resumeSubmenuOpen, setResumeSubmenuOpen] = useState(false);
   const contextMenuRef = useRef<HTMLDivElement>(null);
 
   // 3b. 项目右键上下文菜单状态
@@ -346,6 +351,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     const closeMenu = () => {
       setContextMenu(null);
       setProjectContextMenu(null);
+      setResumeSubmenuOpen(false);
     };
     window.addEventListener("click", closeMenu);
     return () => window.removeEventListener("click", closeMenu);
@@ -356,10 +362,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
     const handleCloseSidebarContextMenu = () => {
       setContextMenu(null);
       setProjectContextMenu(null);
+      setResumeSubmenuOpen(false);
     };
     window.addEventListener("close-sidebar-context-menu", handleCloseSidebarContextMenu);
     return () => window.removeEventListener("close-sidebar-context-menu", handleCloseSidebarContextMenu);
   }, []);
+
+  useEffect(() => {
+    if (!contextMenu) {
+      setResumeSubmenuOpen(false);
+    }
+  }, [contextMenu]);
 
   // 监听 ESC 键关闭移除确认弹窗
   useEffect(() => {
@@ -571,6 +584,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     e.preventDefault();
     e.stopPropagation();
     setProjectContextMenu(null); // 关闭项目右键菜单
+    setResumeSubmenuOpen(false);
     setContextMenu({
       x: e.clientX,
       y: e.clientY,
@@ -578,6 +592,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
     });
     // 触发事件关闭标签页右键菜单
     window.dispatchEvent(new CustomEvent("close-tab-context-menu"));
+  };
+
+  const copyResumeCommand = (shell: "cmd" | "powershell") => {
+    if (!contextMenu) return;
+    const { path, agentSessionId } = contextMenu.session;
+    const command =
+      shell === "cmd"
+        ? buildCmdResumeCommand(path, agentSessionId)
+        : buildPowerShellResumeCommand(path, agentSessionId);
+    navigator.clipboard.writeText(command).catch(() => {});
+    setResumeSubmenuOpen(false);
+    setContextMenu(null);
   };
 
   // 8. 统一会话行渲染函数 (复用在置顶收藏组和常规项目树中)
@@ -1182,6 +1208,42 @@ export const Sidebar: React.FC<SidebarProps> = ({
           >
             复制 Session ID
           </button>
+          {contextMenu.session.type === "claude" && (
+            <div
+              className={`context-menu-submenu-trigger${resumeSubmenuOpen ? " open" : ""}`}
+              onMouseEnter={() => setResumeSubmenuOpen(true)}
+              onClick={(e) => {
+                e.stopPropagation();
+                setResumeSubmenuOpen((open) => !open);
+              }}
+            >
+              <button className="context-menu-item context-menu-submenu-button" type="button">
+                <span>复制恢复命令</span>
+                <span className="context-menu-submenu-arrow">›</span>
+              </button>
+              {resumeSubmenuOpen && (
+                <div
+                  className="context-menu context-menu-submenu"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <button
+                    className="context-menu-item"
+                    type="button"
+                    onClick={() => copyResumeCommand("cmd")}
+                  >
+                    CMD
+                  </button>
+                  <button
+                    className="context-menu-item"
+                    type="button"
+                    onClick={() => copyResumeCommand("powershell")}
+                  >
+                    PowerShell
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
           <button
             className="context-menu-item"
             onClick={() => {

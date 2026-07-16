@@ -9,3 +9,13 @@ export function shouldResumeSession(
 ): boolean {
   return !newSessionIds.includes(sessionId) && hasSessionDialogue(sessionId, storage);
 }
+
+/** 任意路径 CMD 一键恢复 Claude 会话 */
+export function buildCmdResumeCommand(projectPath: string, agentSessionId: string): string {
+  return `cd /d "${projectPath}" && claude --dangerously-skip-permissions --resume ${agentSessionId}`;
+}
+
+/** 任意路径 PowerShell 一键恢复 Claude 会话 */
+export function buildPowerShellResumeCommand(projectPath: string, agentSessionId: string): string {
+  return `Set-Location "${projectPath}"; claude --dangerously-skip-permissions --resume ${agentSessionId}`;
+}

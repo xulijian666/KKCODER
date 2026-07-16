@@ -6,27 +6,37 @@ interface MdEditorModalProps {
   show: boolean;
   onClose: () => void;
   projectPath: string;
-  filename: string; // "CLAUDE.md" or "AGENTS.md"
+  /** 默认读取/编辑的主文件，保存后同步到 AGENTS.md */
+  filename?: string;
 }
+
+const PRIMARY_RULE_FILE = "CLAUDE.md";
+const SYNC_RULE_FILE = "AGENTS.md";
 
 export const MdEditorModal: React.FC<MdEditorModalProps> = ({
   show,
   onClose,
   projectPath,
-  filename,
+  filename = PRIMARY_RULE_FILE,
 }) => {
   const [content, setContent] = useState("");
   const [originalContent, setOriginalContent] = useState("");
   const [mode, setMode] = useState<"edit" | "preview" | "split">("edit");
   const [isSaving, setIsSaving] = useState(false);
+  const [saveHint, setSaveHint] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const isDirty = content !== originalContent;
+  const primaryFile = filename || PRIMARY_RULE_FILE;
+  const syncFile = primaryFile.toUpperCase() === SYNC_RULE_FILE.toUpperCase()
+    ? PRIMARY_RULE_FILE
+    : SYNC_RULE_FILE;
 
-  // 1. 打开弹窗时异步读取 Markdown 文件内容
+  // 1. 打开弹窗时异步读取主规则文件（默认 CLAUDE.md）
   useEffect(() => {
     if (show && projectPath) {
-      invoke<string>("read_markdown_file", { path: projectPath, filename })
+      setSaveHint("");
+      invoke<string>("read_markdown_file", { path: projectPath, filename: primaryFile })
         .then((data) => {
           setContent(data || "");
           setOriginalContent(data || "");
@@ -37,13 +47,13 @@ export const MdEditorModal: React.FC<MdEditorModalProps> = ({
           setOriginalContent("");
         });
     }
-  }, [show, projectPath, filename]);
+  }, [show, projectPath, primaryFile]);
 
   // 2. 键盘快捷键监听：Ctrl+S 保存，Esc 关闭
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!show) return;
-      
+
       if (e.ctrlKey && e.key === "s") {
         e.preventDefault();
         handleSave();
@@ -52,24 +62,38 @@ export const MdEditorModal: React.FC<MdEditorModalProps> = ({
         onClose();
       }
     };
-    
+
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [show, content, filename, projectPath]);
+  }, [show, content, primaryFile, projectPath]);
 
-  // 3. 异步写入/保存 Markdown 文件
+  // 3. 保存主文件，并同步写入同目录 AGENTS.md（或反向同步）
   const handleSave = async () => {
     if (!projectPath) return;
     setIsSaving(true);
+    setSaveHint("");
     try {
       await invoke("write_markdown_file", {
         path: projectPath,
-        filename,
+        filename: primaryFile,
         content,
       });
+
+      // 每次操作完成后，同步更新同目录的另一份规则文件
+      try {
+        await invoke("write_markdown_file", {
+          path: projectPath,
+          filename: syncFile,
+          content,
+        });
+        setSaveHint(`已保存 ${primaryFile}，并同步更新 ${syncFile}`);
+      } catch (syncErr) {
+        console.error(`同步 ${syncFile} 失败:`, syncErr);
+        setSaveHint(`已保存 ${primaryFile}，但同步 ${syncFile} 失败`);
+      }
+
       setOriginalContent(content);
-      // 显示气泡试听提示（可选，静默保存即可）
-      console.log(`保存 ${filename} 成功！`);
+      console.log(`保存 ${primaryFile} 并同步 ${syncFile} 成功`);
     } catch (err) {
       alert(`保存失败: ${err}`);
     } finally {
@@ -139,11 +163,22 @@ export const MdEditorModal: React.FC<MdEditorModalProps> = ({
             userSelect: "none"
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <span style={{ fontSize: "14px", fontWeight: 700, color: "var(--text-primary)" }}>
-              {filename}
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
+            <span style={{ fontSize: "14px", fontWeight: 700, color: "var(--text-primary)", whiteSpace: "nowrap" }}>
+              规则 · {primaryFile}
             </span>
-            <span style={{ fontSize: "11px", color: "var(--text-secondary)", opacity: 0.8, fontFamily: "monospace" }}>
+            <span
+              style={{
+                fontSize: "11px",
+                color: "var(--text-secondary)",
+                opacity: 0.8,
+                fontFamily: "monospace",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+              title={projectPath}
+            >
               {projectPath}
             </span>
             {isDirty && (
@@ -256,7 +291,7 @@ export const MdEditorModal: React.FC<MdEditorModalProps> = ({
               value={content}
               onChange={(e) => setContent(e.target.value)}
               onKeyDown={handleTextareaKeyDown}
-              placeholder={`在这里输入 ${filename} 内容...\n\n项目约定、代码规范、常用指令等可以存放在这里，AI 会自动读取。`}
+              placeholder={`在这里输入 ${primaryFile} 内容...\n\n项目约定、代码规范、常用指令等可以存放在这里。\n保存后会同步更新同目录的 ${syncFile}。`}
               style={{
                 flex: 1,
                 border: "none",
@@ -304,12 +339,17 @@ export const MdEditorModal: React.FC<MdEditorModalProps> = ({
             userSelect: "none"
           }}
         >
-          <div style={{ display: "flex", gap: "12px" }}>
-            <span><kbd style={{ background: "rgba(255,255,255,0.1)", padding: "1px 4px", borderRadius: "3px" }}>Ctrl+S</kbd> 保存</span>
+          <div style={{ display: "flex", gap: "12px", alignItems: "center", minWidth: 0, flex: 1 }}>
+            <span><kbd style={{ background: "rgba(255,255,255,0.1)", padding: "1px 4px", borderRadius: "3px" }}>Ctrl+S</kbd> 保存并同步</span>
             <span><kbd style={{ background: "rgba(255,255,255,0.1)", padding: "1px 4px", borderRadius: "3px" }}>Tab</kbd> 缩进</span>
             <span><kbd style={{ background: "rgba(255,255,255,0.1)", padding: "1px 4px", borderRadius: "3px" }}>Esc</kbd> 关闭</span>
+            {saveHint && (
+              <span style={{ color: "var(--color-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {saveHint}
+              </span>
+            )}
           </div>
-          <div>
+          <div style={{ flexShrink: 0 }}>
             <span>{lineCount} 行</span>
             <span style={{ margin: "0 6px" }}>·</span>
             <span>{charCount} 字符</span>

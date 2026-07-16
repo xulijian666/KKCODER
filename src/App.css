@@ -598,6 +598,36 @@ body {
   font-size: 13px;
 }
 
+.context-menu-submenu-trigger {
+  position: relative;
+  width: 100%;
+}
+
+.context-menu-submenu-button {
+  justify-content: space-between;
+}
+
+.context-menu-submenu-trigger.open > .context-menu-submenu-button,
+.context-menu-submenu-trigger:hover > .context-menu-submenu-button {
+  background-color: var(--bg-active-item);
+  color: var(--text-active-item);
+}
+
+.context-menu-submenu-arrow {
+  margin-left: auto;
+  opacity: 0.7;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.context-menu-submenu {
+  position: absolute;
+  top: 0;
+  left: calc(100% + 2px);
+  min-width: 120px;
+  z-index: 1001;
+}
+
 
 /* 主工作区 */
 .main-workspace {
@@ -750,11 +780,79 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 16px;
+  gap: 8px;
+  padding: 0 12px;
   font-size: 12px;
   flex-shrink: 0;
   color: var(--text-secondary);
   position: relative;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* 左：文件夹 + 规则 */
+.bottom-panel-left {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 42%;
+  overflow: hidden;
+}
+
+.bottom-panel-left .folder-button span,
+.bottom-panel-left .md-button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 140px;
+}
+
+/* 中：快捷短语（可横向滚动）+ 队列，避免 absolute 居中导致与两侧重叠 */
+.bottom-panel-center {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.bottom-shortcuts-scroll {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  mask-image: linear-gradient(to right, transparent 0, #000 8px, #000 calc(100% - 8px), transparent 100%);
+}
+
+.bottom-shortcuts-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.bottom-shortcuts-scroll .shortcut-status-btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  max-width: 120px;
+}
+
+.bottom-shortcuts-scroll .shortcut-status-btn span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
+  max-width: 100px;
+}
+
+.bottom-panel-center .queue-status-btn {
+  flex: 0 0 auto;
 }
 
 /* 📂 文件夹按钮 - 极致克制扁平化状态栏设计 */
@@ -762,6 +860,8 @@ body {
   display: flex;
   align-items: center;
   gap: 4px;
+  flex-shrink: 0;
+  min-width: 0;
   background-color: transparent !important;
   border: none !important;
   color: var(--text-secondary) !important;
@@ -784,11 +884,12 @@ body {
   color: var(--text-primary) !important;
 }
 
-/* 📝 Markdown 编辑按钮 */
+/* 📝 规则编辑按钮 */
 .md-button {
   display: flex;
   align-items: center;
   gap: 4px;
+  flex-shrink: 0;
   background-color: transparent !important;
   border: none !important;
   color: var(--text-secondary) !important;
@@ -815,6 +916,12 @@ body {
   display: flex;
   align-items: center;
   gap: 12px;
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 28%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text-secondary);
   font-size: 12px;
 }
@@ -2945,6 +3052,28 @@ input:checked + .switch-slider:before {
   position: relative;
 }
 
+.tree-node.renaming {
+  background-color: var(--bg-hover-item);
+}
+
+.tree-rename-input {
+  flex: 1;
+  min-width: 80px;
+  max-width: 220px;
+  height: 18px;
+  margin-right: 8px;
+  padding: 0 4px;
+  border: 1px solid var(--color-primary);
+  border-radius: 3px;
+  outline: none;
+  background: var(--bg-main);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: inherit;
+  line-height: 18px;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-primary) 25%, transparent);
+}
+
 /* 文件名内层 span — 用于悬停滚动动画，宽度为文本自然宽度 */
 .tree-node-name-inner {
   display: inline-block;
@@ -3012,8 +3141,15 @@ input:checked + .switch-slider:before {
   transition: background-color 0.15s ease;
 }
 
-.tree-context-menu button:hover {
+.tree-context-menu button:hover:not(:disabled):not(.disabled) {
   background-color: var(--bg-hover-item);
+}
+
+.tree-context-menu button:disabled,
+.tree-context-menu button.disabled {
+  color: var(--text-secondary);
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .tree-context-menu .menu-divider {

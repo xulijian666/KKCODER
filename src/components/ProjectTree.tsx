@@ -7,6 +7,7 @@ import {
   ChevronDown
 } from "lucide-react";
 import { resolveMaterialIconUrl } from "../utils/materialFileIcons";
+import { isEditableTextFile } from "../utils/textFiles";
 
 interface FileEntry {
   name: string;
@@ -28,6 +29,8 @@ interface ProjectTreeProps {
   projectPath: string;
   onFileClick: (relativePath: string) => void;
   onInsertPathToTerminal: (relativePath: string) => void;
+  onEditFile?: (relativePath: string) => void;
+  onPathRenamed?: (oldPath: string, newPath: string) => void;
 }
 
 // 极其简单快速的剪贴板复制辅助函数
@@ -39,10 +42,19 @@ const copyToClipboard = async (text: string) => {
   }
 };
 
+const isValidEntryName = (name: string) => {
+  const trimmed = name.trim();
+  if (!trimmed || trimmed === "." || trimmed === "..") return false;
+  if (/[<>:"/\\|?*]/.test(trimmed)) return false;
+  return true;
+};
+
 export const ProjectTree: React.FC<ProjectTreeProps> = ({
   projectPath,
   onFileClick,
   onInsertPathToTerminal,
+  onEditFile,
+  onPathRenamed,
 }) => {
   const [treeData, setTreeData] = useState<FileNode>({ name: "root", path: "", isDir: true, size: 0, children: [] });
   const [loading, setLoading] = useState(false);
@@ -54,7 +66,7 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
   useEffect(() => {
     expandedFoldersRef.current = expandedFolders;
   }, [expandedFolders]);
-  
+
   // 右键菜单状态
   const [contextMenu, setContextMenu] = useState<{
     x: number;
@@ -62,6 +74,12 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
     filePath: string;
     isDir: boolean;
   } | null>(null);
+
+  const [renamingPath, setRenamingPath] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [renameSubmitting, setRenameSubmitting] = useState(false);
+  const renameInputRef = useRef<HTMLInputElement>(null);
+  const renameCancelRef = useRef(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -231,14 +249,14 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
   const handleContextMenu = (e: React.MouseEvent, filePath: string, isDir: boolean) => {
     e.preventDefault();
     e.stopPropagation();
-    
+
     let x = e.clientX;
     let y = e.clientY;
-    
+
     if (x + 160 > window.innerWidth) {
       x = Math.max(0, x - 160);
     }
-    
+
     setContextMenu({
       x,
       y,
@@ -247,11 +265,106 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
     });
   };
 
+  const beginRename = (filePath: string) => {
+    const currentName = filePath.split(/[/\\]/).pop() || filePath;
+    renameCancelRef.current = false;
+    setRenamingPath(filePath);
+    setRenameValue(currentName);
+    setContextMenu(null);
+  };
+
+  const cancelRename = () => {
+    renameCancelRef.current = true;
+    setRenamingPath(null);
+    setRenameValue("");
+    setRenameSubmitting(false);
+  };
+
+  const remapExpandedFolders = (oldPath: string, newPath: string) => {
+    setExpandedFolders(prev => {
+      const next: Record<string, boolean> = {};
+      for (const [path, expanded] of Object.entries(prev)) {
+        if (path === oldPath) {
+          next[newPath] = expanded;
+        } else if (path.startsWith(`${oldPath}/`)) {
+          next[`${newPath}${path.slice(oldPath.length)}`] = expanded;
+        } else {
+          next[path] = expanded;
+        }
+      }
+      return next;
+    });
+  };
+
+  const commitRename = async () => {
+    if (!renamingPath || renameSubmitting) return;
+
+    const oldPath = renamingPath;
+    const oldName = oldPath.split(/[/\\]/).pop() || oldPath;
+    const nextName = renameValue.trim();
+
+    if (!nextName || nextName === oldName) {
+      cancelRename();
+      return;
+    }
+    if (!isValidEntryName(nextName)) {
+      alert("名称非法：不能为空，也不能包含 \\ / : * ? \" < > |");
+      renameInputRef.current?.focus();
+      renameInputRef.current?.select();
+      return;
+    }
+
+    setRenameSubmitting(true);
+    try {
+      const newPath = await invoke<string>("rename_project_entry", {
+        projectPath,
+        relativePath: oldPath,
+        newName: nextName,
+      });
+
+      remapExpandedFolders(oldPath, newPath);
+      onPathRenamed?.(oldPath, newPath);
+      setRenamingPath(null);
+      setRenameValue("");
+      await loadFiles(true);
+
+      if (searchQuery.trim()) {
+        setSearchQuery(prev => prev);
+      }
+    } catch (err) {
+      const message = String(err || "未知错误");
+      // 后端已返回友好文案时不再套一层“重命名失败:”
+      alert(message.startsWith("重命名失败") || message.includes("无法重命名") || message.includes("已存在")
+        ? message
+        : `重命名失败: ${message}`);
+      renameInputRef.current?.focus();
+      renameInputRef.current?.select();
+    } finally {
+      setRenameSubmitting(false);
+    }
+  };
+
   useEffect(() => {
     const closeMenu = () => setContextMenu(null);
     window.addEventListener("click", closeMenu);
     return () => window.removeEventListener("click", closeMenu);
   }, []);
+
+  useEffect(() => {
+    if (!renamingPath) return;
+    const timer = window.setTimeout(() => {
+      const input = renameInputRef.current;
+      if (!input) return;
+      input.focus();
+      const dot = input.value.lastIndexOf(".");
+      if (dot > 0) {
+        input.setSelectionRange(0, dot);
+      } else {
+        input.select();
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [renamingPath]);
 
   // 递归树节点渲染器
   const renderNode = (node: FileNode, depth = 0) => {
@@ -266,12 +379,14 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
     const relativePath = node.path;
     const isExpanded = expandedFolders[relativePath] || false;
     const paddingLeft = `${depth * 14 + 10}px`;
+    const isRenaming = renamingPath === relativePath;
 
     // 搜索模式下默认全部展开以供匹配结果一目了然，非搜索模式根据 expandedFolders 折叠/展开
     const shouldShowChildren = node.isDir && (searchQuery.trim() ? true : isExpanded);
 
     const handleNodeClick = (e: React.MouseEvent) => {
       e.stopPropagation();
+      if (isRenaming) return;
       if (node.isDir) {
         handleFolderExpand(node);
       } else {
@@ -280,7 +395,8 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
     };
 
     const handleDragStart = (e: React.DragEvent) => {
-      if (node.isDir) return;
+      if (isRenaming) return;
+      // 文件与文件夹都可拖入对话上下文，格式与右键「添加到对话」一致
       e.dataTransfer.setData("text/plain", `"${relativePath}" `);
       e.dataTransfer.effectAllowed = "copy";
       // 拖拽时给自身加半透明效果
@@ -294,9 +410,9 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
     return (
       <div key={relativePath} className="tree-node-wrapper">
         <div
-          className={`tree-node ${node.isDir ? "directory-node" : "file-node"}`}
+          className={`tree-node ${node.isDir ? "directory-node" : "file-node"} ${isRenaming ? "renaming" : ""}`}
           style={{ paddingLeft }}
-          draggable={!node.isDir}
+          draggable={!isRenaming}
           onDragStart={handleDragStart}
           onDragEnd={handleDragEnd}
           onClick={handleNodeClick}
@@ -317,11 +433,40 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
               draggable={false}
             />
           </span>
-          <span className="tree-node-name" title={node.name}>
-            <span className="tree-node-name-inner">{node.name}</span>
-          </span>
+          {isRenaming ? (
+            <input
+              ref={renameInputRef}
+              className="tree-rename-input"
+              value={renameValue}
+              disabled={renameSubmitting}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onClick={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  void commitRename();
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  cancelRename();
+                }
+              }}
+              onBlur={() => {
+                if (renameCancelRef.current) {
+                  renameCancelRef.current = false;
+                  return;
+                }
+                void commitRename();
+              }}
+            />
+          ) : (
+            <span className="tree-node-name" title={node.name}>
+              <span className="tree-node-name-inner">{node.name}</span>
+            </span>
+          )}
         </div>
-        
+
         {shouldShowChildren && node.children && node.children.length > 0 && (
           <div className="tree-node-children">
             {node.children.map(child => renderNode(child, depth + 1))}
@@ -372,7 +517,7 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
 
       {/* 自定义右键菜单 */}
       {contextMenu && (
-        <div 
+        <div
           className="tree-context-menu"
           style={{
             position: "fixed",
@@ -382,7 +527,40 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
           }}
           onClick={(e) => e.stopPropagation()}
         >
-          <button 
+          {(() => {
+            const canEdit =
+              !contextMenu.isDir &&
+              isEditableTextFile(contextMenu.filePath, contextMenu.isDir) &&
+              !!onEditFile;
+            return (
+              <button
+                className={canEdit ? undefined : "disabled"}
+                disabled={!canEdit}
+                title={
+                  contextMenu.isDir
+                    ? "文件夹不支持编辑"
+                    : canEdit
+                      ? "编辑此文本文件"
+                      : "该文件类型不支持编辑"
+                }
+                onClick={() => {
+                  if (!canEdit || !onEditFile) return;
+                  onEditFile(contextMenu.filePath);
+                  setContextMenu(null);
+                }}
+              >
+                编辑
+              </button>
+            );
+          })()}
+          <button
+            onClick={() => {
+              beginRename(contextMenu.filePath);
+            }}
+          >
+            重命名
+          </button>
+          <button
             onClick={() => {
               onInsertPathToTerminal(contextMenu.filePath);
               setContextMenu(null);
@@ -391,7 +569,7 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
             添加到对话
           </button>
           <div className="menu-divider" />
-          <button 
+          <button
             onClick={() => {
               const separator = projectPath.endsWith("/") || projectPath.endsWith("\\") ? "" : "/";
               const absolutePath = `${projectPath}${separator}${contextMenu.filePath}`;
@@ -402,7 +580,7 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
           >
             在文件管理器中打开
           </button>
-          <button 
+          <button
             onClick={() => {
               const separator = projectPath.endsWith("/") || projectPath.endsWith("\\") ? "" : "/";
               const absolutePath = `${projectPath}${separator}${contextMenu.filePath}`;
