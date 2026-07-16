@@ -1212,6 +1212,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <div
               className={`context-menu-submenu-trigger${resumeSubmenuOpen ? " open" : ""}`}
               onMouseEnter={() => setResumeSubmenuOpen(true)}
+              onMouseLeave={() => setResumeSubmenuOpen(false)}
               onClick={(e) => {
                 e.stopPropagation();
                 setResumeSubmenuOpen((open) => !open);

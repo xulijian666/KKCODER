@@ -623,9 +623,12 @@ body {
 .context-menu-submenu {
   position: absolute;
   top: 0;
-  left: calc(100% + 2px);
+  left: 100%;
   min-width: 120px;
   z-index: 1001;
+  /* 与主菜单无缝衔接，避免移入子菜单时触发 mouseleave 闪断 */
+  margin-left: 0;
+  padding-left: 2px;
 }
 
 
