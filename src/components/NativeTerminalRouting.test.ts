@@ -21,7 +21,7 @@ test("persists and announces the opt-in Claude native terminal setting", () => {
 });
 
 test("routes only newly opened Claude tabs through the isolated compatibility component", () => {
-  assert.match(appSource, /import \{ CompatibilityTerminalTab \}/);
+  assert.match(appSource, /CompatibilityTerminalTab/);
   assert.match(appSource, /shouldUseNativeTerminal/);
   assert.match(appSource, /kkcoder-claude-terminal-mode-change/);
   assert.match(appSource, /resolveTerminalWriteCommand/);

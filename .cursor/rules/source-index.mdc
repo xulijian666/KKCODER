@@ -1,0 +1,41 @@
+---
+description: 变更 src 时必须同步更新前端源码总目录 SOURCE_INDEX.md
+alwaysApply: true
+---
+
+# 前端源码总目录维护（强制）
+
+权威总索引文件：
+
+- **`src/SOURCE_INDEX.md`**
+
+## 何时必须更新
+
+在 `src/` 下发生下列任一情况时，**同一任务内**必须更新 `src/SOURCE_INDEX.md`：
+
+1. **新增** 组件、Hook、util、样式或测试文件  
+2. **删除 / 重命名 / 移动** 上述文件  
+3. **对外职责或导出符号** 变化（即使文件名未变）  
+4. 修改 `components/index.ts`、`hooks/index.ts`、`utils/index.ts` 的导出列表  
+
+仅改函数内部实现、且文件路径与导出表都不变时，可不改总目录。
+
+## 如何更新
+
+1. 在 `SOURCE_INDEX.md` 对应章节增删改表格行（路径 + 职责 + 是否经 barrel 导出）。  
+2. 对外暴露的 API 同步维护对应 barrel：  
+   - `src/components/index.ts`  
+   - `src/hooks/index.ts`  
+   - `src/utils/index.ts`  
+3. 必要时更新「会话域依赖关系」简图与「最后人工维护核对」日期。  
+4. 结构约定可交叉引用：`.trellis/spec/frontend/directory-structure.md`（**不能替代** `SOURCE_INDEX.md`）。
+
+## 禁止
+
+- 新增模块只写代码、不登记总目录  
+- 只改 `index.ts` 却不改 `SOURCE_INDEX.md`（或相反）  
+- 把总目录写到其他随意路径而不更新本规则中的路径  
+
+## 对用户可见说明
+
+完成涉及 `src/` 结构的改动后，在回复中简要说明：**已更新 `src/SOURCE_INDEX.md`**（若本次无结构变更则无需提及）。
