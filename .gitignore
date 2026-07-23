@@ -44,3 +44,14 @@ src-tauri/frp.zip
 # 本地工具配置 / 快捷方式
 .antigravitycli/
 *.lnk
+
+# Cursor：本地 agents/skills/hooks 不入库；共享规则可提交
+.cursor/agents/
+.cursor/commands/
+.cursor/hooks/
+.cursor/hooks.json
+.cursor/skills/
+
+# Trellis：运行时工作区与任务状态（配置/spec/scripts 仍可提交）
+.trellis/workspace/
+.trellis/tasks/

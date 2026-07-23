@@ -6,6 +6,8 @@
 
 # Session/window scoped runtime state
 .runtime/
+workspace/
+tasks/
 
 # Ralph Loop state file
 .ralph-state.json
