@@ -184,7 +184,7 @@ export function useSessionTabs({
 
   const handleDragStart = useCallback((event: DragEvent, index: number) => {
     event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", index.toString());
+    // sessionId 由 SessionTabBar 写入；这里不再用 index 覆盖 text/plain
     setTimeout(() => {
       setDraggingIndex(index);
     }, 0);
@@ -226,8 +226,13 @@ export function useSessionTabs({
     setDraggingIndex(null);
   }, []);
 
+  const clearDragging = useCallback(() => {
+    setDraggingIndex(null);
+  }, []);
+
   const handleDrop = useCallback((event: DragEvent) => {
     event.preventDefault();
+    setDraggingIndex(null);
   }, []);
 
   const activateTab = useCallback(
@@ -246,6 +251,7 @@ export function useSessionTabs({
     newSessionIds,
     setNewSessionIds,
     draggingIndex,
+    clearDragging,
     highlightSessionId,
     setHighlightSessionId,
     tabContextMenu,

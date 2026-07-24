@@ -1048,9 +1048,9 @@ fn spawn_terminal(
             "pi\r\n".to_string()
         }
     } else if agent_type == "codex" {
-        // Codex：首次启动 codex；重开会话用 codex resume <session-id> 恢复
-        if is_reopen {
-            format!("codex resume {}\r\n", agent_session_id)
+        // Codex：首次只能 `codex` 启动；重开且已捕获真实 session id 时用 resume
+        if is_reopen && !agent_session_id.trim().is_empty() {
+            format!("codex resume {}\r\n", agent_session_id.trim())
         } else {
             "codex\r\n".to_string()
         }
@@ -1151,33 +1151,9 @@ fn spawn_terminal(
         });
     }
 
-    // 如果是首次创建的 Codex 会话，则延时 2.5 秒等 Codex CLI 完全拉起后，自动键入 /status 获取 session UUID
-    // Codex 会在 stdout 里输出 "Session: <uuid>"，前端通过 PTY 输出正则抓取并持久化
-    if !is_reopen && agent_type == "codex" {
-        log_to_file("!is_reopen is true for Codex: spawning background thread for `/status` writing...");
-        let sessions_clone = state.sessions.clone();
-        let session_id_clone = session_id.clone();
-        std::thread::spawn(move || {
-            log_to_file(&format!("Background `/status` thread spawned. spawn_token={}. Sleeping 2500ms...", spawn_token));
-            std::thread::sleep(std::time::Duration::from_millis(2500));
-            log_to_file("Background `/status` thread sleep finished. Locking sessions map...");
-            let mut sessions = sessions_clone.lock().unwrap();
-            if let Some(session) = sessions.get_mut(&session_id_clone) {
-                if session.spawn_token != spawn_token {
-                    log_to_file(&format!("Stale spawn token detected (active={}, thread={}). Safely skipping /status query.", session.spawn_token, spawn_token));
-                    return;
-                }
-
-                log_to_file("Background thread: writing /status cmd...");
-                {
-                    let mut w = session.writer.lock().unwrap();
-                    w.write_all(b"/status\r\n").ok();
-                    w.flush().ok();
-                }
-                log_to_file("Background thread: /status cmd written!");
-            }
-        });
-    }
+    // Codex session id 不再通过自动键入 /status 获取：
+    // 首次仅启动 `codex`；首句对话后由前端调用 capture_codex_session_id
+    // 从 ~/.codex/sessions 的 rollout 文件静默绑定真实 UUID。
 
     let session_id_clone = session_id.clone();
     let app_handle_clone = app_handle.clone();
@@ -1629,6 +1605,160 @@ fn encode_claude_project_path(path: &str) -> String {
     path.replace(':', "-")
         .replace('\\', "-")
         .replace('/', "-")
+}
+
+// ==================== Codex 会话 ID 捕获（~/.codex/sessions） ====================
+
+/// 归一化路径，便于 cwd 比较（盘符小写、统一 `/`、去掉尾部分隔符）
+fn normalize_path_for_compare(path: &str) -> String {
+    let mut normalized = path.replace('\\', "/");
+    while normalized.ends_with('/') && normalized.len() > 1 {
+        normalized.pop();
+    }
+    // Windows 盘符统一小写
+    if normalized.len() >= 2 && normalized.as_bytes()[1] == b':' {
+        let mut chars: Vec<char> = normalized.chars().collect();
+        chars[0] = chars[0].to_ascii_lowercase();
+        normalized = chars.into_iter().collect();
+    }
+    normalized
+}
+
+/// 从 rollout 文件名解析 session UUID
+/// 例: rollout-2026-07-24T00-48-42-019f8fe1-1bac-7293-b0c4-b811a5cf95ca.jsonl
+fn parse_codex_session_id_from_filename(file_name: &str) -> Option<String> {
+    let stem = file_name.strip_suffix(".jsonl")?;
+    let rest = stem.strip_prefix("rollout-")?;
+    // UUID 固定 36 字符，位于文件名末尾
+    if rest.len() < 36 {
+        return None;
+    }
+    let candidate = &rest[rest.len() - 36..];
+    if candidate.len() == 36
+        && candidate.as_bytes().get(8) == Some(&b'-')
+        && candidate.as_bytes().get(13) == Some(&b'-')
+        && candidate.as_bytes().get(18) == Some(&b'-')
+        && candidate.as_bytes().get(23) == Some(&b'-')
+    {
+        return Some(candidate.to_string());
+    }
+    None
+}
+
+/// 读取 rollout 首条 session_meta 中的 cwd / session_id
+fn read_codex_rollout_meta(path: &std::path::Path) -> Option<(String, String)> {
+    use std::io::{BufRead, BufReader};
+    let file = std::fs::File::open(path).ok()?;
+    let mut reader = BufReader::new(file);
+    let mut first_line = String::new();
+    reader.read_line(&mut first_line).ok()?;
+    let obj: serde_json::Value = serde_json::from_str(first_line.trim()).ok()?;
+    if obj.get("type").and_then(|v| v.as_str()) != Some("session_meta") {
+        // 仍可从文件名拿 id；cwd 可能在 payload 里
+    }
+    let payload = obj.get("payload")?;
+    let session_id = payload
+        .get("session_id")
+        .or_else(|| payload.get("id"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .and_then(parse_codex_session_id_from_filename)
+        })?;
+    let cwd = payload
+        .get("cwd")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    Some((session_id, cwd))
+}
+
+/// 在 ~/.codex/sessions 下按项目 cwd 查找最近生成的 Codex session UUID
+pub(crate) fn find_latest_codex_session_id(
+    project_path: &str,
+    not_before_ms: Option<u64>,
+) -> Option<String> {
+    let home = dirs::home_dir()?;
+    let sessions_root = home.join(".codex").join("sessions");
+    if !sessions_root.is_dir() {
+        return None;
+    }
+
+    let target_cwd = normalize_path_for_compare(project_path);
+    let not_before = not_before_ms.unwrap_or(0);
+
+    let mut best: Option<(u64, String)> = None;
+    let mut stack = vec![sessions_root];
+
+    while let Some(dir) = stack.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let file_name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(n) => n,
+                None => continue,
+            };
+            if !file_name.starts_with("rollout-") || !file_name.ends_with(".jsonl") {
+                continue;
+            }
+
+            let modified_ms = entry
+                .metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+
+            if not_before > 0 && modified_ms + 2_000 < not_before {
+                // 允许 2s 时钟误差；过旧文件跳过
+                continue;
+            }
+
+            let (session_id, cwd) = match read_codex_rollout_meta(&path) {
+                Some(v) => v,
+                None => continue,
+            };
+            if cwd.is_empty() {
+                continue;
+            }
+            if normalize_path_for_compare(&cwd) != target_cwd {
+                continue;
+            }
+
+            match &best {
+                Some((best_ms, _)) if *best_ms >= modified_ms => {}
+                _ => best = Some((modified_ms, session_id)),
+            }
+        }
+    }
+
+    best.map(|(_, id)| id)
+}
+
+/// 捕获当前项目下最新生成的 Codex session id，供前端写回 SQLite
+#[tauri::command]
+fn capture_codex_session_id(project_path: String, not_before_ms: Option<u64>) -> Result<String, String> {
+    log_to_file(&format!(
+        "capture_codex_session_id: project_path={}, not_before_ms={:?}",
+        project_path, not_before_ms
+    ));
+    match find_latest_codex_session_id(&project_path, not_before_ms) {
+        Some(id) => {
+            log_to_file(&format!("capture_codex_session_id found: {}", id));
+            Ok(id)
+        }
+        None => Err("尚未找到匹配的 Codex 会话文件，请稍后再试".to_string()),
+    }
 }
 
 /// 在 ~/.claude/projects/ 下查找指定 session 的 JSONL 文件
@@ -3499,6 +3629,7 @@ pub fn run() {
             write_to_terminal,
             resize_terminal,
             close_terminal,
+            capture_codex_session_id,
             native_terminal::spawn_compat_terminal,
             native_terminal::write_to_compat_terminal,
             native_terminal::resize_compat_terminal,

@@ -6,25 +6,41 @@ import type { TabContextMenuState } from "../hooks/useSessionTabs";
 export interface TabContextMenuProps {
   menu: TabContextMenuState | null;
   sessions: Session[];
+  activeSessionId: string;
+  isDualSplit?: boolean;
+  openTabCount?: number;
   onCloseTab: (event: MouseEvent, sessionId: string) => void;
   onCloseOtherTabs: (sessionId: string) => void;
   onStartRename: (sessionId: string, currentName: string) => void;
   onLocateSession: (sessionId: string) => void;
+  onOpenInSplit?: (sessionId: string) => void;
+  onExitSplit?: () => void;
   onClose: () => void;
 }
 
 export const TabContextMenu: React.FC<TabContextMenuProps> = ({
   menu,
   sessions,
+  activeSessionId,
+  isDualSplit = false,
+  openTabCount = 0,
   onCloseTab,
   onCloseOtherTabs,
   onStartRename,
   onLocateSession,
+  onOpenInSplit,
+  onExitSplit,
   onClose,
 }) => {
   if (!menu) return null;
 
   const session = sessions.find((item) => item.id === menu.sessionId);
+  const canSplitThis =
+    Boolean(onOpenInSplit) &&
+    openTabCount >= 2 &&
+    menu.sessionId !== activeSessionId;
+  const canSplitWithCompanion =
+    Boolean(onOpenInSplit) && openTabCount >= 2 && !isDualSplit;
 
   return (
     <div
@@ -54,8 +70,49 @@ export const TabContextMenu: React.FC<TabContextMenuProps> = ({
       >
         关闭其他标签
       </button>
+
+      {(canSplitThis || canSplitWithCompanion || isDualSplit) && (
+        <>
+          <div style={{ borderBottom: "1px dashed var(--border-color)", margin: "4px 6px" }} />
+          {canSplitThis && (
+            <button
+              className="context-menu-item"
+              onClick={() => {
+                onOpenInSplit?.(menu.sessionId);
+                onClose();
+              }}
+            >
+              在另一侧打开分屏
+            </button>
+          )}
+          {canSplitWithCompanion && menu.sessionId === activeSessionId && (
+            <button
+              className="context-menu-item"
+              onClick={() => {
+                onOpenInSplit?.(menu.sessionId);
+                onClose();
+              }}
+            >
+              与相邻标签分屏
+            </button>
+          )}
+          {isDualSplit && onExitSplit && (
+            <button
+              className="context-menu-item"
+              onClick={() => {
+                onExitSplit();
+                onClose();
+              }}
+            >
+              退出分屏
+            </button>
+          )}
+        </>
+      )}
+
       {!session?.isTemp && (
         <>
+          <div style={{ borderBottom: "1px dashed var(--border-color)", margin: "4px 6px" }} />
           <button
             className="context-menu-item"
             onClick={() => {

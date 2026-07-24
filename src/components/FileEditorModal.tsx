@@ -1,5 +1,10 @@
 import React, { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import {
+  confirmAction,
+  formatFeedbackError,
+  notifyError,
+} from "../utils/appFeedback";
 
 interface FileEditorModalProps {
   show: boolean;
@@ -71,7 +76,7 @@ export const FileEditorModal: React.FC<FileEditorModalProps> = ({
       });
       setOriginalContent(contentRef.current);
     } catch (err) {
-      alert(`保存失败: ${err}`);
+      notifyError(`保存失败：${formatFeedbackError(err)}`);
     } finally {
       setIsSaving(false);
     }
@@ -86,7 +91,7 @@ export const FileEditorModal: React.FC<FileEditorModalProps> = ({
         void handleSave();
       } else if (e.key === "Escape") {
         e.preventDefault();
-        onClose();
+        void handleClose();
       }
     };
 
@@ -111,9 +116,16 @@ export const FileEditorModal: React.FC<FileEditorModalProps> = ({
     });
   };
 
-  const handleClose = () => {
-    if (isDirty && !window.confirm("有未保存的修改，确定关闭？")) {
-      return;
+  const handleClose = async () => {
+    if (isDirty) {
+      const confirmed = await confirmAction({
+        title: "放弃未保存修改？",
+        message: "当前文件有未保存的更改，关闭后将丢失。",
+        confirmText: "放弃并关闭",
+        cancelText: "继续编辑",
+        isDanger: true,
+      });
+      if (!confirmed) return;
     }
     onClose();
   };
@@ -227,7 +239,7 @@ export const FileEditorModal: React.FC<FileEditorModalProps> = ({
                 alignItems: "center",
                 justifyContent: "center",
               }}
-              onClick={handleClose}
+              onClick={() => void handleClose()}
               title="关闭编辑器"
             >
               ×

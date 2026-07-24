@@ -11,6 +11,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { FileText } from "lucide-react";
 import { renderMarkdownToHtml } from "../utils/markdown";
 import { getHighlightedLines } from "../utils/highlighter";
+import { formatFeedbackError, notifyError } from "../utils/appFeedback";
 
 export interface PreviewFileState {
   path: string;
@@ -518,7 +519,7 @@ export const FilePreviewPanel: React.FC<FilePreviewPanelProps> = ({
                   projectPath?.endsWith("/") || projectPath?.endsWith("\\") ? "" : "/";
                 const absolutePath = `${projectPath}${separator}${previewFile.path}`;
                 invoke("open_file_in_system", { path: absolutePath }).catch((error) =>
-                  alert(`打开文件失败: ${error}`),
+                  notifyError(`打开文件失败：${formatFeedbackError(error)}`),
                 );
               }}
             >

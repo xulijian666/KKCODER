@@ -8,6 +8,8 @@ import {
 } from "lucide-react";
 import { resolveMaterialIconUrl } from "../utils/materialFileIcons";
 import { isEditableTextFile } from "../utils/textFiles";
+import { formatFeedbackError, notifyError, notifyWarning } from "../utils/appFeedback";
+import { useReturnTerminalFocusWhenUnblocked } from "../hooks/useReturnTerminalFocusWhenUnblocked";
 
 interface FileEntry {
   name: string;
@@ -29,6 +31,9 @@ interface ProjectTreeProps {
   projectPath: string;
   onFileClick: (relativePath: string) => void;
   onInsertPathToTerminal: (relativePath: string) => void;
+  /** 分屏时：插入到另一侧会话 */
+  onInsertPathToOtherSide?: (relativePath: string) => void;
+  otherSideInsertLabel?: string;
   onEditFile?: (relativePath: string) => void;
   onPathRenamed?: (oldPath: string, newPath: string) => void;
 }
@@ -53,6 +58,8 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
   projectPath,
   onFileClick,
   onInsertPathToTerminal,
+  onInsertPathToOtherSide,
+  otherSideInsertLabel = "添加到另一侧对话",
   onEditFile,
   onPathRenamed,
 }) => {
@@ -74,6 +81,8 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
     filePath: string;
     isDir: boolean;
   } | null>(null);
+
+  useReturnTerminalFocusWhenUnblocked(!!contextMenu, 40);
 
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -308,7 +317,7 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
       return;
     }
     if (!isValidEntryName(nextName)) {
-      alert("名称非法：不能为空，也不能包含 \\ / : * ? \" < > |");
+      notifyWarning("名称无效：不能为空或包含 \\ / : * ? \" < > |");
       renameInputRef.current?.focus();
       renameInputRef.current?.select();
       return;
@@ -332,11 +341,15 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
         setSearchQuery(prev => prev);
       }
     } catch (err) {
-      const message = String(err || "未知错误");
+      const message = formatFeedbackError(err, "未知错误");
       // 后端已返回友好文案时不再套一层“重命名失败:”
-      alert(message.startsWith("重命名失败") || message.includes("无法重命名") || message.includes("已存在")
-        ? message
-        : `重命名失败: ${message}`);
+      notifyError(
+        message.startsWith("重命名失败") ||
+          message.includes("无法重命名") ||
+          message.includes("已存在")
+          ? message
+          : `重命名失败：${message}`,
+      );
       renameInputRef.current?.focus();
       renameInputRef.current?.select();
     } finally {
@@ -568,6 +581,16 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
           >
             添加到对话
           </button>
+          {onInsertPathToOtherSide && (
+            <button
+              onClick={() => {
+                onInsertPathToOtherSide(contextMenu.filePath);
+                setContextMenu(null);
+              }}
+            >
+              {otherSideInsertLabel}
+            </button>
+          )}
           <div className="menu-divider" />
           <button
             onClick={() => {

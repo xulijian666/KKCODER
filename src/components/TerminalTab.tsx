@@ -27,7 +27,10 @@ interface TerminalTabProps {
   onCaptureSessionId?: (sessionId: string, agentSessionId: string) => void;
   onStateChange?: (busy: boolean) => void;
   busy?: boolean;
+  /** 键盘焦点归属（活动会话） */
   isActive?: boolean;
+  /** 是否在布局中可见（分屏时两格均为 true）；默认等同 isActive */
+  isVisible?: boolean;
   onCommandComplete?: () => void;
   onUserSubmittedInput?: (sessionId: string, submittedAt: string) => void;
   onRenameSession?: (sessionId: string, newName: string) => void;
@@ -69,6 +72,7 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
   onStateChange,
   busy,
   isActive,
+  isVisible,
   onCommandComplete,
   onUserSubmittedInput,
   onRenameSession,
@@ -76,6 +80,11 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const isVisibleResolved = isVisible ?? isActive;
+  const isVisibleRef = useRef(isVisibleResolved);
+  isVisibleRef.current = Boolean(isVisibleResolved);
+  const isActiveRef = useRef(Boolean(isActive));
+  isActiveRef.current = Boolean(isActive);
 
   const onCommandCompleteRef = useRef(onCommandComplete);
   useEffect(() => {
@@ -731,8 +740,8 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
       }
       resizeTimeout = setTimeout(() => {
         try {
-          if (!isActive) {
-            // 如果该 Tab 当前处于非激活状态 (display: none)，则直接跳过 fit，防范缩成 0 行的 bug
+          if (!isVisibleRef.current) {
+            // 不可见（display: none）时跳过 fit，防范缩成 0 行
             return;
           }
           fitAddon.fit();
@@ -856,8 +865,8 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
       log(`Received font size change event: size=${newSize}`);
       term.options.fontSize = newSize;
       
-      if (!isActive) {
-        // 非激活状态的标签页不进行 fit 计算以防缩至 0 行，激活时自然会重新 fit 覆盖
+      if (!isVisibleRef.current) {
+        // 不可见标签不 fit，显示时再测
         return;
       }
 
@@ -913,55 +922,63 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, directory, agentType]);
 
-  // 当标签页激活时，自动将物理焦点 focus 绑定给当前终端，实现“一开即写、一切即敲”的高端心流
-  // 同时，触发 fitAddon.fit() 重新计算终端画布大小，并同步给 PTY 进程，彻底解决 display: none 到 flex 转换导致的界面缩水/缩成一行的问题
+  // 可见时 fit；仅活动会话捕获键盘焦点
   useEffect(() => {
-    if (isActive && xtermRef.current) {
-      log(`Auto-focusing and fitting terminal instance for active session: ${sessionId}`);
-      // 立即执行一次 fit，防止在布局显示时出现短暂空白或闪烁
-      try {
-        if (fitAddonRef.current && xtermRef.current && xtermRef.current.element) {
-          fitAddonRef.current.fit();
-        }
-      } catch (e) {}
+    if (!xtermRef.current) return;
+    if (!isVisibleResolved && !isActive) return;
 
-      // 延迟 80ms 等 DOM 完全刷新 (display: flex 生效) 后平滑捕获系统焦点并重新测绘画布
-      const timer = setTimeout(() => {
-        try {
-          if (fitAddonRef.current && xtermRef.current && xtermRef.current.element) {
-            fitAddonRef.current.fit();
-            xtermRef.current.scrollToBottom();
-            const dims = fitAddonRef.current.proposeDimensions();
-            if (dims) {
-              log(`Active tab fit dimensions: cols=${dims.cols}, rows=${dims.rows}`);
-              invoke("resize_terminal", {
-                sessionId,
-                cols: dims.cols,
-                rows: dims.rows,
-              }).catch((err) => log(`Active tab resize sync error: ${err}`));
-            }
+    log(
+      `Layout update for session: ${sessionId} (visible=${Boolean(isVisibleResolved)}, active=${Boolean(isActive)})`,
+    );
+    try {
+      if (fitAddonRef.current && xtermRef.current.element && isVisibleResolved) {
+        fitAddonRef.current.fit();
+      }
+    } catch (e) {}
+
+    const timer = setTimeout(() => {
+      try {
+        if (fitAddonRef.current && xtermRef.current && xtermRef.current.element && isVisibleResolved) {
+          fitAddonRef.current.fit();
+          xtermRef.current.scrollToBottom();
+          const dims = fitAddonRef.current.proposeDimensions();
+          if (dims) {
+            log(`Visible tab fit dimensions: cols=${dims.cols}, rows=${dims.rows}`);
+            invoke("resize_terminal", {
+              sessionId,
+              cols: dims.cols,
+              rows: dims.rows,
+            }).catch((err) => log(`Visible tab resize sync error: ${err}`));
+          }
+          if (isActive) {
             xtermRef.current.focus();
           }
-        } catch (e) {
-          console.error("Failed to focus or fit terminal", e);
         }
-      }, 80);
-      return () => clearTimeout(timer);
-    }
-  }, [isActive, sessionId]);
+      } catch (e) {
+        console.error("Failed to focus or fit terminal", e);
+      }
+    }, 80);
+    return () => clearTimeout(timer);
+  }, [isActive, isVisibleResolved, sessionId]);
 
-  // 监听来自全局的自动聚焦指令，使得在文件/行号添加到对话等操作后，终端能够瞬间自动重新获得焦点
+  // 焦点契约：全局 requestActiveTerminalFocus → 活动标签或指定 sessionId
   useEffect(() => {
-    const handleFocusRequest = () => {
-      if (isActive && xtermRef.current) {
+    const handleFocusRequest = (event: Event) => {
+      const detail = (event as CustomEvent<{ sessionId?: string }>).detail;
+      if (detail?.sessionId && detail.sessionId !== sessionId) return;
+      if (!detail?.sessionId && !isActiveRef.current) return;
+      if (!xtermRef.current) return;
+      try {
         xtermRef.current.focus();
+      } catch {
+        // xterm 卸载竞态时忽略
       }
     };
     window.addEventListener("kkcoder-focus-active-terminal", handleFocusRequest);
     return () => {
       window.removeEventListener("kkcoder-focus-active-terminal", handleFocusRequest);
     };
-  }, [isActive]);
+  }, [sessionId]);
 
   return (
     <div className={`terminal-container agent-type-${agentType}`}>

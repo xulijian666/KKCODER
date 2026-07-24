@@ -43,3 +43,42 @@ export {
   type AgentType,
   type EnabledAgents,
 } from "./enabledAgents";
+export {
+  notify,
+  notifyInfo,
+  notifySuccess,
+  notifyWarning,
+  notifyError,
+  confirmAction,
+  formatFeedbackError,
+  type FeedbackTone,
+  type ToastPayload,
+  type ConfirmRequestOptions,
+} from "./appFeedback";
+export {
+  FOCUS_ACTIVE_TERMINAL_EVENT,
+  requestActiveTerminalFocus,
+  returnFocusToActiveTerminal,
+  isEditableFocusTarget,
+  isFocusBlockingOverlay,
+} from "./terminalFocus";
+export {
+  SESSION_DRAG_MIME,
+  SESSION_DRAG_MIME_LEGACY,
+  TERMINAL_SPLIT_STORAGE_KEY,
+  isSessionDragEvent,
+  readSessionIdFromDataTransfer,
+  clampSplitRatio,
+  pickSplitCompanionSessionId,
+  placeSessionBesideInTabOrder,
+  type SplitOrientation,
+  type SplitPaneSlot,
+  type TerminalSplitPair,
+} from "./terminalSplit";
+export {
+  resolveTreeBoundSessionId,
+  reconcileProjectTreeBindingMode,
+  resolveOtherSplitSessionId,
+  describeProjectTreeBindingMode,
+  type ProjectTreeBindingMode,
+} from "./projectTreeBinding";

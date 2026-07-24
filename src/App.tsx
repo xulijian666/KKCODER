@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, type Dispatch, type SetStateAction } from "react";
+import { useState, useEffect, useRef, useCallback, type Dispatch, type MouseEvent, type SetStateAction } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Sidebar,
@@ -10,6 +10,7 @@ import {
   MdEditorModal,
   FileEditorModal,
   ProjectTree,
+  ProjectTreeBindingBar,
   TitleBar,
   FilePreviewPanel,
   FilePreviewContextMenu,
@@ -17,6 +18,8 @@ import {
   TabContextMenu,
   SessionRestorePrompt,
   CloseConfirmModal,
+  AppToastHost,
+  ConfirmModal,
 } from "./components";
 import {
   updateSessionLastUserMessageAt,
@@ -32,6 +35,13 @@ import {
   ENABLED_AGENTS_CHANGE_EVENT,
   isAgentEnabled,
   loadEnabledAgents,
+  notifyError,
+  notifyWarning,
+  formatFeedbackError,
+  requestActiveTerminalFocus,
+  isEditableFocusTarget,
+  isSessionDragEvent,
+  readSessionIdFromDataTransfer,
   type AgentType,
   type EnabledAgents,
 } from "./utils";
@@ -46,7 +56,11 @@ import {
   useFilePreview,
   useSessions,
   useSessionTabs,
+  useTerminalSplit,
+  useProjectTreeBinding,
   useUnreadCompletions,
+  useAppFeedback,
+  useReturnTerminalFocusWhenUnblocked,
 } from "./hooks";
 import "./App.css";
 
@@ -65,14 +79,21 @@ function App() {
     handleTitlebarMouseDown,
   } = useWindowChrome();
 
+  const {
+    toasts,
+    dismissToast,
+    activeConfirm,
+    resolveConfirm,
+  } = useAppFeedback();
+
   const handleLaunchCcswitch = () => {
     const path = localStorage.getItem("kkcoder_setting_ccswitch_path") || "";
     if (!path.trim()) {
-      alert("请先在「设置」->「终端设置」中配置 ccswitch.exe 的路径。");
+      notifyWarning("请先在「设置 → 终端设置」中配置 ccswitch.exe 路径");
       return;
     }
     invoke("launch_ccswitch", { path }).catch((err) => {
-      alert(`启动 ccswitch.exe 失败:\n${err}`);
+      notifyError(`无法启动 ccswitch：${formatFeedbackError(err)}`);
     });
   };
 
@@ -158,6 +179,7 @@ function App() {
     newSessionIds,
     setNewSessionIds,
     draggingIndex,
+    clearDragging,
     highlightSessionId,
     setHighlightSessionId,
     tabContextMenu,
@@ -173,7 +195,6 @@ function App() {
     setShowRestoreToast,
     showRestoreModal,
     setShowRestoreModal,
-    handleSelectSession,
     handleCloseTab,
     handleRestoreSingle,
     handleRestoreAll,
@@ -189,6 +210,94 @@ function App() {
 
   openTabIdsRef.current = openTabIds;
   activeSessionIdRefForSessions.current = activeSessionId;
+
+  const ensureTabOpen = useCallback(
+    (sessionId: string) => {
+      if (!sessionId) return;
+      setOpenTabIds((previous) =>
+        previous.includes(sessionId) ? previous : [...previous, sessionId],
+      );
+    },
+    [setOpenTabIds],
+  );
+
+  const ensureTabsOpen = useCallback(
+    (sessionIds: string[]) => {
+      const uniqueIds = [...new Set(sessionIds.filter(Boolean))];
+      if (uniqueIds.length === 0) return;
+      setOpenTabIds((previous) => {
+        let changed = false;
+        const next = [...previous];
+        for (const sessionId of uniqueIds) {
+          if (!next.includes(sessionId)) {
+            next.push(sessionId);
+            changed = true;
+          }
+        }
+        return changed ? next : previous;
+      });
+    },
+    [setOpenTabIds],
+  );
+
+  const terminalSplit = useTerminalSplit({
+    openTabIds,
+    activeSessionId,
+    setActiveSessionId,
+    restoreEnabled: isInitLoaded,
+    ensureTabOpen,
+    ensureTabsOpen,
+  });
+
+  const {
+    isDual: isDualSplit,
+    pair: splitPair,
+    orientation: splitOrientation,
+    ratio: splitRatio,
+    isResizing: isResizingSplit,
+    enterSplitWithSession,
+    enterSplitByDropAsSecondary,
+    exitSplit,
+    toggleSplit,
+    focusPane,
+    activateSession: activateSplitSession,
+    notifySessionClosed,
+    collapseToSingle,
+    startResize: startSplitResize,
+    resetRatio: resetSplitRatio,
+    hostStyleFor,
+    resizerStyle,
+    paneSlotFor,
+    handleSessionDropOnPane,
+    handleSessionDragOverPane,
+    handleSessionDragOverRoot,
+    handleSessionDropOnRoot,
+    dropHighlightSlot,
+    setDropHighlightSlot,
+  } = terminalSplit;
+
+  const {
+    bindingMode: projectTreeBindingMode,
+    setBindingMode: setProjectTreeBindingMode,
+    treeBoundSessionId,
+    otherSplitSessionId,
+  } = useProjectTreeBinding({
+    isDualSplit,
+    activeSessionId,
+    splitPair,
+  });
+
+  const handleCloseTabWithSplit = useCallback(
+    (event: MouseEvent, sessionId: string) => {
+      const nextActiveFromSplit = notifySessionClosed(sessionId);
+      handleCloseTab(event, sessionId);
+      if (nextActiveFromSplit) {
+        setActiveSessionId(nextActiveFromSplit);
+        requestActiveTerminalFocus({ delayMs: 56, sessionId: nextActiveFromSplit });
+      }
+    },
+    [handleCloseTab, notifySessionClosed, setActiveSessionId],
+  );
 
   const {
     glowingSessionIds,
@@ -303,9 +412,45 @@ function App() {
     });
   };
 
+  /** Codex 首句后从 ~/.codex/sessions 捕获真实 session id 并绑定 */
+  const tryCaptureCodexSessionId = useCallback(
+    async (sessionId: string) => {
+      const targetSession = sessionsRef.current.find((session) => session.id === sessionId);
+      if (!targetSession || targetSession.type !== "codex") return;
+      if (targetSession.agentSessionId?.trim()) return;
+      if (targetSession.isTemp) return;
+
+      const notBeforeMs = Date.now() - 120_000;
+      const delaysMs = [800, 1600, 3200, 5000];
+
+      for (const delayMs of delaysMs) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        const latestSession = sessionsRef.current.find((session) => session.id === sessionId);
+        if (!latestSession || latestSession.type !== "codex") return;
+        if (latestSession.agentSessionId?.trim()) return;
+        try {
+          const capturedId = await invoke<string>("capture_codex_session_id", {
+            projectPath: latestSession.path,
+            notBeforeMs,
+          });
+          if (capturedId?.trim()) {
+            await handleCaptureSessionId(sessionId, capturedId.trim());
+            log(`Codex session id captured for ${sessionId}: ${capturedId.trim()}`);
+            return;
+          }
+        } catch (error) {
+          log(`capture_codex_session_id attempt failed for ${sessionId}: ${error}`);
+        }
+      }
+      log(`Codex session id capture exhausted for ${sessionId}`);
+    },
+    [handleCaptureSessionId],
+  );
+
   const handleUserSubmittedInputWithRenameReset = (sessionId: string, submittedAt?: string) => {
     clearRenameMark(sessionId);
     handleUserSubmittedInput(sessionId, submittedAt);
+    void tryCaptureCodexSessionId(sessionId);
   };
 
   const {
@@ -338,7 +483,7 @@ function App() {
     const isBusy = sessionBusy[activeSessionId] || false;
     if (isBusy) {
       if (getSessionQueue(queueBySession, activeSessionId).length >= 2) {
-        alert("队列已满！目前最多只允许队列中有 2 个排队任务。");
+        notifyWarning("队列已满（2/2），请先清空或等待执行");
         return;
       }
       enqueuePrompt(activeSessionId, content);
@@ -356,6 +501,16 @@ function App() {
   };
 
   const activeSession = sessions.find((s) => s.id === activeSessionId);
+  const treeBoundSession = sessions.find((s) => s.id === treeBoundSessionId);
+  const primarySplitSession = splitPair
+    ? sessions.find((s) => s.id === splitPair.primaryId)
+    : undefined;
+  const secondarySplitSession = splitPair
+    ? sessions.find((s) => s.id === splitPair.secondaryId)
+    : undefined;
+  const splitSameProject =
+    Boolean(primarySplitSession?.path) &&
+    primarySplitSession?.path === secondarySplitSession?.path;
 
   useEffect(() => {
     const aside = projectTreeAsideRef.current;
@@ -379,20 +534,22 @@ function App() {
       });
     }, 150);
     return () => clearTimeout(timer);
-  }, [showProjectTree, activeSession?.path, setProjectTreeWidth]);
+  }, [showProjectTree, treeBoundSession?.path, setProjectTreeWidth]);
 
-  const insertConversationTagToActiveTerminal = useCallback((text: string) => {
-    if (!activeSessionId || !text) return;
+  const insertConversationTagToBoundTerminal = useCallback((text: string) => {
+    if (!treeBoundSessionId || !text) return;
     window.dispatchEvent(new CustomEvent("kkcoder-insert-conversation-tag", {
-      detail: { sessionId: activeSessionId, text },
+      detail: { sessionId: treeBoundSessionId, text },
     }));
-  }, [activeSessionId]);
+    requestActiveTerminalFocus({ delayMs: 40, sessionId: treeBoundSessionId });
+  }, [treeBoundSessionId]);
 
   const handleInsertPathToSession = useCallback((sessionId: string, text: string) => {
     if (!sessionId || !text) return;
     window.dispatchEvent(new CustomEvent("kkcoder-insert-conversation-tag", {
       detail: { sessionId, text },
     }));
+    requestActiveTerminalFocus({ delayMs: 40, sessionId });
   }, []);
 
   const {
@@ -401,18 +558,45 @@ function App() {
     panelProps: filePreviewPanelProps,
     contextMenuProps: filePreviewContextMenuProps,
   } = useFilePreview({
-    projectPath: activeSession?.path,
-    activeSessionId,
-    onInsertConversationTag: insertConversationTagToActiveTerminal,
+    projectPath: treeBoundSession?.path,
+    activeSessionId: treeBoundSessionId,
+    onInsertConversationTag: insertConversationTagToBoundTerminal,
   });
 
   const handleInsertPathToTerminal = useCallback((relativePath: string) => {
-    insertConversationTagToActiveTerminal(`"${relativePath}" `);
-  }, [insertConversationTagToActiveTerminal]);
+    if (!treeBoundSessionId) return;
+    handleInsertPathToSession(treeBoundSessionId, `"${relativePath}" `);
+  }, [handleInsertPathToSession, treeBoundSessionId]);
+
+  const handleInsertPathToOtherSide = useCallback((relativePath: string) => {
+    if (!otherSplitSessionId) return;
+    handleInsertPathToSession(otherSplitSessionId, `"${relativePath}" `);
+  }, [handleInsertPathToSession, otherSplitSessionId]);
 
   const handleEditFile = useCallback((relativePath: string) => {
     setEditingFilePath(relativePath);
   }, []);
+
+  // 焦点契约：任一阻断焦点的叠加层关闭后，键盘归还活动终端
+  const isTerminalFocusBlocked =
+    showModal ||
+    showSettings ||
+    showMdEditor ||
+    !!editingFilePath ||
+    showQueueModal ||
+    showCloseConfirmModal ||
+    showRestoreModal ||
+    !!activeConfirm ||
+    !!tabContextMenu ||
+    !!renamingTabId;
+
+  useReturnTerminalFocusWhenUnblocked(isTerminalFocusBlocked, 56);
+
+  // 活动会话切换后确保可立即键入（与 tab 激活 effect 互补）
+  useEffect(() => {
+    if (!activeSessionId || isTerminalFocusBlocked) return;
+    requestActiveTerminalFocus({ delayMs: 72 });
+  }, [activeSessionId, isTerminalFocusBlocked]);
 
   const handlePathRenamed = useCallback((oldPath: string, newPath: string) => {
     handlePreviewPathRenamed(oldPath, newPath);
@@ -447,14 +631,80 @@ function App() {
       await invoke("open_project_folder", { path: activeSession.path });
     } catch (err) {
       log(`Failed to open folder: ${err}`);
-      alert(`无法打开文件夹: ${err}`);
+      notifyError(`无法打开文件夹：${formatFeedbackError(err)}`);
     }
   };
 
-  const handleActivateTab = useCallback((sessionId: string) => {
-    setActiveSessionId(sessionId);
-    setGlowingSessionIds((prev) => prev.filter((id) => id !== sessionId));
-  }, [setActiveSessionId, setGlowingSessionIds]);
+  const handleActivateTab = useCallback(
+    (sessionId: string) => {
+      activateSplitSession(sessionId);
+      setGlowingSessionIds((prev) => prev.filter((id) => id !== sessionId));
+    },
+    [activateSplitSession, setGlowingSessionIds],
+  );
+
+  const handleSelectSessionWithSplit = useCallback(
+    (sessionId: string) => {
+      ensureTabOpen(sessionId);
+      activateSplitSession(sessionId);
+      if (showRestoreToast) {
+        setShowRestoreToast(false);
+      }
+    },
+    [activateSplitSession, ensureTabOpen, setShowRestoreToast, showRestoreToast],
+  );
+
+  // 分屏快捷键：Ctrl+\ 切换；Ctrl+Alt+1/2 聚焦左右（或上下）
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (isEditableFocusTarget(event.target)) return;
+      if (
+        showModal ||
+        showSettings ||
+        showMdEditor ||
+        editingFilePath ||
+        showQueueModal ||
+        showCloseConfirmModal ||
+        showRestoreModal ||
+        activeConfirm ||
+        tabContextMenu ||
+        renamingTabId
+      ) {
+        return;
+      }
+
+      const isMod = event.ctrlKey || event.metaKey;
+      if (!isMod) return;
+
+      if (event.key === "\\" && !event.altKey && !event.shiftKey) {
+        event.preventDefault();
+        toggleSplit();
+        return;
+      }
+
+      if (event.altKey && (event.key === "1" || event.key === "2")) {
+        if (!isDualSplit) return;
+        event.preventDefault();
+        focusPane(event.key === "1" ? "primary" : "secondary");
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [
+    activeConfirm,
+    editingFilePath,
+    focusPane,
+    isDualSplit,
+    renamingTabId,
+    showCloseConfirmModal,
+    showMdEditor,
+    showModal,
+    showQueueModal,
+    showRestoreModal,
+    showSettings,
+    tabContextMenu,
+    toggleSplit,
+  ]);
 
 
   return (
@@ -494,7 +744,7 @@ function App() {
           onOpenTempSession={handleCreateTempSession}
           sessions={sessions}
           activeSessionId={activeSessionId}
-          onSelectSession={handleSelectSession}
+          onSelectSession={handleSelectSessionWithSplit}
           searchQuery={searchQuery}
           onSearchQueryChange={setSearchQuery}
           onDeleteSession={handleDeleteSession}
@@ -517,19 +767,58 @@ function App() {
         <main
           className={`main-workspace ${isDragOverWorkspace ? "drag-over" : ""}`}
           onDragOver={(e) => {
+            if (isSessionDragEvent(e.dataTransfer)) {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+              if (!isDualSplit) {
+                const bounds = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                const isRightHalf = e.clientX > bounds.left + bounds.width * 0.5;
+                setDropHighlightSlot(isRightHalf ? "secondary" : null);
+              }
+              return;
+            }
             e.preventDefault();
             e.dataTransfer.dropEffect = "copy";
             if (!isDragOverWorkspace) setIsDragOverWorkspace(true);
           }}
           onDragLeave={(e) => {
-            // 只在真正离开 main 区域时清除（忽略子元素冒泡）
             if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) {
               setIsDragOverWorkspace(false);
+              setDropHighlightSlot(null);
             }
           }}
           onDrop={(e) => {
-            e.preventDefault();
             setIsDragOverWorkspace(false);
+            setDropHighlightSlot(null);
+            const sessionId = readSessionIdFromDataTransfer(e.dataTransfer);
+            if (sessionId) {
+              e.preventDefault();
+              e.stopPropagation();
+              // 单屏：拖到主区右半 → 钉到右侧分屏
+              // 注意：终端根节点若已处理 drop，不会冒泡到这里
+              if (!isDualSplit) {
+                // 仅当落点在终端区域右半时分屏；落在标签栏等位置不误触发
+                const splitRoot = document.querySelector(
+                  ".terminal-split-root",
+                ) as HTMLElement | null;
+                const bounds = (
+                  splitRoot ?? (e.currentTarget as HTMLElement)
+                ).getBoundingClientRect();
+                const isRightHalf = e.clientX > bounds.left + bounds.width * 0.5;
+                const isOverTerminal =
+                  !splitRoot ||
+                  (e.clientY >= bounds.top && e.clientY <= bounds.bottom);
+                if (isOverTerminal && isRightHalf) {
+                  clearDragging();
+                  enterSplitByDropAsSecondary(sessionId);
+                } else if (openTabIds.includes(sessionId)) {
+                  clearDragging();
+                  activateSplitSession(sessionId);
+                }
+              }
+              return;
+            }
+            e.preventDefault();
             const text = e.dataTransfer.getData("text/plain");
             if (text) {
               handleInsertPathToSession(activeSessionId, text);
@@ -545,13 +834,18 @@ function App() {
             draggingIndex={draggingIndex}
             renamingTabId={renamingTabId}
             renamingTabText={renamingTabText}
+            paneSlotFor={paneSlotFor}
+            isDualSplit={isDualSplit}
+            splitPair={splitPair}
+            splitOrientation={splitOrientation}
+            splitRatio={splitRatio}
             onWheel={handleTabWheel}
             onDragStart={handleDragStart}
             onDragOver={handleDragOver}
             onDragEnd={handleDragEnd}
             onDrop={handleDrop}
             onActivateTab={handleActivateTab}
-            onCloseTab={handleCloseTab}
+            onCloseTab={handleCloseTabWithSplit}
             onOpenContextMenu={(e, sessionId) => {
               e.preventDefault();
               e.stopPropagation();
@@ -565,10 +859,40 @@ function App() {
 
           {/* 终端区 / 空白提示状态 (采用 Keep-Alive 常驻 DOM 设计，防止切换 Tab 时重新初始化) */}
           <div style={{ flex: 1, display: "flex", flexDirection: "row", position: "relative", overflow: "hidden" }}>
-            <div style={{ flex: 1, display: "flex", flexDirection: "column", position: "relative", overflow: "hidden", height: "100%" }}>
+            <div
+              className={`terminal-split-root ${isDualSplit ? "is-dual" : "is-single"} ${
+                isDualSplit ? `orientation-${splitOrientation}` : ""
+              } ${isResizingSplit ? "is-resizing" : ""} ${
+                !isDualSplit && draggingIndex !== null ? "is-session-dragging" : ""
+              } ${
+                !isDualSplit && dropHighlightSlot === "secondary"
+                  ? "session-drop-right-hint"
+                  : ""
+              }`}
+              onDragOver={(event) => {
+                // 单屏：整区接收标签拖放（右半 → 分屏）
+                if (!isDualSplit) {
+                  handleSessionDragOverRoot(event);
+                }
+              }}
+              onDragLeave={(event) => {
+                if (isDualSplit) return;
+                const related = event.relatedTarget as Node | null;
+                if (!(event.currentTarget as HTMLElement).contains(related)) {
+                  setDropHighlightSlot(null);
+                }
+              }}
+              onDrop={(event) => {
+                if (!isDualSplit) {
+                  const handled = handleSessionDropOnRoot(event);
+                  if (handled) {
+                    clearDragging();
+                  }
+                }
+              }}
+            >
               {openTabIds.length === 0 ? (
                 <div className="empty-state">
-                  <span className="empty-state-icon">🖥️</span>
                   <div className="empty-state-title">KKCoder AI 终端管理器</div>
                   <div className="empty-state-desc">
                     当前没有处于活动状态的会话标签。
@@ -576,74 +900,127 @@ function App() {
                   </div>
                 </div>
               ) : (
-                sessions.map((s) => {
-                  const isOpen = openTabIds.includes(s.id);
-                  if (!isOpen) return null;
-                  const isActive = activeSessionId === s.id;
-                  const shouldResume = shouldResumeSession(s.id, newSessionIds);
-                  const sessionTerminalMode = terminalModeBySession[s.id] ?? claudeTerminalMode;
-                  const useNativeTerminal = shouldUseNativeTerminal(s.type, sessionTerminalMode);
-                  return (
+                <>
+                  {sessions.map((s) => {
+                    const isOpen = openTabIds.includes(s.id);
+                    if (!isOpen) return null;
+                    const isActive = activeSessionId === s.id;
+                    const paneSlot = paneSlotFor(s.id);
+                    const isVisible =
+                      isActive || (isDualSplit && paneSlot !== null);
+                    const shouldResume = shouldResumeSession(s.id, newSessionIds, localStorage, {
+                      agentType: s.type,
+                      agentSessionId: s.agentSessionId,
+                    });
+                    const sessionTerminalMode = terminalModeBySession[s.id] ?? claudeTerminalMode;
+                    const useNativeTerminal = shouldUseNativeTerminal(s.type, sessionTerminalMode);
+                    return (
+                      <div
+                        key={s.id}
+                        className={`terminal-pane-host ${
+                          isActive ? "is-focused" : ""
+                        } ${isVisible ? "is-visible" : ""} ${
+                          paneSlot ? `slot-${paneSlot}` : ""
+                        } ${
+                          dropHighlightSlot && paneSlot === dropHighlightSlot
+                            ? "drop-target"
+                            : ""
+                        }`}
+                        style={hostStyleFor(s.id)}
+                        onMouseDown={() => {
+                          if (isDualSplit && paneSlot && !isActive) {
+                            focusPane(paneSlot);
+                          }
+                        }}
+                        onDragOver={(event) => {
+                          if (!isDualSplit || !paneSlot) return;
+                          handleSessionDragOverPane(event);
+                          if (isSessionDragEvent(event.dataTransfer)) {
+                            setDropHighlightSlot(paneSlot);
+                          }
+                        }}
+                        onDragLeave={(event) => {
+                          if (
+                            !(event.currentTarget as HTMLElement).contains(
+                              event.relatedTarget as Node,
+                            )
+                          ) {
+                            setDropHighlightSlot((current) =>
+                              current === paneSlot ? null : current,
+                            );
+                          }
+                        }}
+                        onDrop={(event) => {
+                          if (!isDualSplit || !paneSlot) return;
+                          const handled = handleSessionDropOnPane(event, paneSlot);
+                          if (handled) {
+                            clearDragging();
+                          }
+                        }}
+                      >
+                        {useNativeTerminal ? (
+                          <CompatibilityTerminalTab
+                            sessionId={s.id}
+                            directory={s.path}
+                            agentSessionId={s.agentSessionId}
+                            isReopen={shouldResume}
+                            isActive={isActive}
+                            isVisible={isVisible}
+                            onSpawned={() => {
+                              log(`CompatibilityTerminalTab spawn resolved for session: ${s.id}. Removing from newSessionIds...`);
+                              setNewSessionIds((prev) => prev.filter((nid) => nid !== s.id));
+                            }}
+                            onStateChange={(busy) => {
+                              setSessionBusy(prev => ({ ...prev, [s.id]: busy }));
+                            }}
+                            onCommandComplete={() => handleCommandComplete(s.id)}
+                            onUserSubmittedInput={handleUserSubmittedInputWithRenameReset}
+                            onRenameSession={handleRenameSession}
+                          />
+                        ) : (
+                          <TerminalTab
+                            sessionId={s.id}
+                            directory={s.path}
+                            agentType={s.type}
+                            agentSessionId={s.agentSessionId}
+                            isReopen={shouldResume}
+                            onSpawned={() => {
+                              log(`TerminalTab spawn resolved for session: ${s.id}. Removing from newSessionIds...`);
+                              setNewSessionIds((prev) => prev.filter((nid) => nid !== s.id));
+                            }}
+                            onCaptureSessionId={handleCaptureSessionId}
+                            busy={sessionBusy[s.id] || false}
+                            onStateChange={(busy) => {
+                              setSessionBusy(prev => ({ ...prev, [s.id]: busy }));
+                            }}
+                            isActive={isActive}
+                            isVisible={isVisible}
+                            onCommandComplete={() => handleCommandComplete(s.id)}
+                            onUserSubmittedInput={handleUserSubmittedInputWithRenameReset}
+                            onRenameSession={handleRenameSession}
+                          />
+                        )}
+                        {sessionBusy[s.id] && (
+                          <div className="terminal-thinking-badge">
+                            <span className="thinking-dot-pulse"></span>
+                            <span className="thinking-text">AI 正在思考...</span>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {isDualSplit && resizerStyle && (
                     <div
-                      key={s.id}
-                      style={{
-                        display: isActive ? "flex" : "none",
-                        flexDirection: "column",
-                        flex: 1,
-                        width: "100%",
-                        height: "100%",
-                        position: "relative",
-                      }}
-                    >
-                      {useNativeTerminal ? (
-                        <CompatibilityTerminalTab
-                          sessionId={s.id}
-                          directory={s.path}
-                          agentSessionId={s.agentSessionId}
-                          isReopen={shouldResume}
-                          isActive={isActive}
-                          onSpawned={() => {
-                            log(`CompatibilityTerminalTab spawn resolved for session: ${s.id}. Removing from newSessionIds...`);
-                            setNewSessionIds((prev) => prev.filter((nid) => nid !== s.id));
-                          }}
-                          onStateChange={(busy) => {
-                            setSessionBusy(prev => ({ ...prev, [s.id]: busy }));
-                          }}
-                          onCommandComplete={() => handleCommandComplete(s.id)}
-                          onUserSubmittedInput={handleUserSubmittedInputWithRenameReset}
-                          onRenameSession={handleRenameSession}
-                        />
-                      ) : (
-                        <TerminalTab
-                          sessionId={s.id}
-                          directory={s.path}
-                          agentType={s.type}
-                          agentSessionId={s.agentSessionId}
-                          isReopen={shouldResume}
-                          onSpawned={() => {
-                            log(`TerminalTab spawn resolved for session: ${s.id}. Removing from newSessionIds...`);
-                            setNewSessionIds((prev) => prev.filter((nid) => nid !== s.id));
-                          }}
-                          onCaptureSessionId={handleCaptureSessionId}
-                          busy={sessionBusy[s.id] || false}
-                          onStateChange={(busy) => {
-                            setSessionBusy(prev => ({ ...prev, [s.id]: busy }));
-                          }}
-                          isActive={isActive}
-                          onCommandComplete={() => handleCommandComplete(s.id)}
-                          onUserSubmittedInput={handleUserSubmittedInputWithRenameReset}
-                          onRenameSession={handleRenameSession}
-                        />
-                      )}
-                      {sessionBusy[s.id] && (
-                        <div className="terminal-thinking-badge">
-                          <span className="thinking-dot-pulse"></span>
-                          <span className="thinking-text">AI 正在思考...</span>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })
+                      className="terminal-split-resizer orientation-horizontal"
+                      style={resizerStyle}
+                      onPointerDown={startSplitResize}
+                      onDoubleClick={resetSplitRatio}
+                      title="拖拽调整比例 · 双击均分"
+                      role="separator"
+                      aria-orientation="vertical"
+                    />
+                  )}
+                </>
               )}
             </div>
 
@@ -784,37 +1161,62 @@ function App() {
           </div>
         </main>
 
-        {showProjectTree && !activeSession?.isTemp && (
+        {showProjectTree && !treeBoundSession?.isTemp && (
           <>
             <div 
               className={`project-tree-resizer ${isResizingProjectTree ? "dragging" : ""}`} 
               onMouseDown={startProjectTreeResize} 
-              data-agent-type={activeSession?.type || "claude"}
+              data-agent-type={treeBoundSession?.type || activeSession?.type || "claude"}
             />
             <aside
               ref={projectTreeAsideRef}
-              className="project-tree-aside"
+              className={`project-tree-aside ${
+                isDualSplit ? `binding-${projectTreeBindingMode}` : ""
+              }`}
               style={{ width: `${projectTreeWidth}px` }}
             >
-              <div className="project-tree-aside-header">
-                <span className="aside-header-title">项目文件</span>
-                {activeSession && activeSession.path && (
-                  <span className="aside-header-path" title={activeSession.path}>
-                    {activeSession.path.split(/[/\\]/).pop()}
-                  </span>
-                )}
-              </div>
-              {activeSession && activeSession.path ? (
+              <ProjectTreeBindingBar
+                isDualSplit={isDualSplit}
+                bindingMode={projectTreeBindingMode}
+                onBindingModeChange={setProjectTreeBindingMode}
+                primaryLabel={
+                  primarySplitSession?.name ||
+                  primarySplitSession?.project ||
+                  "左侧会话"
+                }
+                secondaryLabel={
+                  secondarySplitSession?.name ||
+                  secondarySplitSession?.project ||
+                  "右侧会话"
+                }
+                boundFolderName={
+                  treeBoundSession?.path
+                    ? getFolderName(treeBoundSession.path)
+                    : ""
+                }
+                boundPath={treeBoundSession?.path || ""}
+                sameProject={splitSameProject}
+              />
+              {treeBoundSession && treeBoundSession.path ? (
                 <ProjectTree
-                  projectPath={activeSession.path}
+                  projectPath={treeBoundSession.path}
                   onFileClick={handleFileClick}
                   onInsertPathToTerminal={handleInsertPathToTerminal}
+                  onInsertPathToOtherSide={
+                    otherSplitSessionId ? handleInsertPathToOtherSide : undefined
+                  }
+                  otherSideInsertLabel={
+                    otherSplitSessionId === splitPair?.primaryId
+                      ? "添加到左侧对话"
+                      : otherSplitSessionId === splitPair?.secondaryId
+                        ? "添加到右侧对话"
+                        : "添加到另一侧对话"
+                  }
                   onEditFile={handleEditFile}
                   onPathRenamed={handlePathRenamed}
                 />
               ) : (
                 <div className="tree-placeholder-container">
-                  <div className="tree-placeholder-icon">📂</div>
                   <div className="tree-placeholder-title">未关联项目文件夹</div>
                   <div className="tree-placeholder-desc">
                     请在左侧新建或选择一个关联了本地路径的会话，以在此处浏览项目文件树。
@@ -844,22 +1246,22 @@ function App() {
         onSessionsRenamed={reloadSessions}
       />
 
-      {/* 📝 规则编辑器：默认 CLAUDE.md，保存后同步 AGENTS.md */}
-      {activeSession && (
+      {/* 规则编辑器：默认 CLAUDE.md，保存后同步 AGENTS.md（跟随项目树绑定） */}
+      {treeBoundSession && (
         <MdEditorModal
           show={showMdEditor}
           onClose={() => setShowMdEditor(false)}
-          projectPath={activeSession.path}
+          projectPath={treeBoundSession.path}
           filename="CLAUDE.md"
         />
       )}
 
       {/* 文本文件编辑器弹窗 */}
-      {activeSession && editingFilePath && (
+      {treeBoundSession && editingFilePath && (
         <FileEditorModal
           show={!!editingFilePath}
           onClose={() => setEditingFilePath(null)}
-          projectPath={activeSession.path}
+          projectPath={treeBoundSession.path}
           relativePath={editingFilePath}
         />
       )}
@@ -929,16 +1331,21 @@ function App() {
       <TabContextMenu
         menu={tabContextMenu}
         sessions={sessions}
-        onCloseTab={handleCloseTab}
+        activeSessionId={activeSessionId}
+        isDualSplit={isDualSplit}
+        openTabCount={openTabIds.length}
+        onCloseTab={handleCloseTabWithSplit}
         onCloseOtherTabs={(sessionId) => {
           setOpenTabIds([sessionId]);
-          setActiveSessionId(sessionId);
+          collapseToSingle(sessionId);
         }}
         onStartRename={(sessionId, currentName) => {
           setRenamingTabId(sessionId);
           setRenamingTabText(currentName);
         }}
         onLocateSession={handleLocateSession}
+        onOpenInSplit={enterSplitWithSession}
+        onExitSplit={exitSplit}
         onClose={() => setTabContextMenu(null)}
       />
 
@@ -964,6 +1371,21 @@ function App() {
         onRestoreAll={handleRestoreAll}
         onIgnore={handleRestoreIgnore}
       />
+
+      <AppToastHost toasts={toasts} onDismiss={dismissToast} />
+
+      {activeConfirm && (
+        <ConfirmModal
+          show
+          title={activeConfirm.title}
+          message={activeConfirm.message}
+          confirmText={activeConfirm.confirmText}
+          cancelText={activeConfirm.cancelText}
+          isDanger={activeConfirm.isDanger}
+          onConfirm={() => resolveConfirm(true)}
+          onCancel={() => resolveConfirm(false)}
+        />
+      )}
     </div>
   );
 }

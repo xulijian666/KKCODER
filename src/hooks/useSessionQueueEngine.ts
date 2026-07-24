@@ -8,6 +8,7 @@ import {
 } from "../utils/sessionQueue";
 import { generateUUID } from "../utils/uuid";
 import { log } from "../utils/log";
+import { notifyWarning } from "../utils/appFeedback";
 
 export interface UseSessionQueueEngineOptions {
   activeSessionId: string;
@@ -46,16 +47,16 @@ export function useSessionQueueEngine({
   const handleAddToQueue = useCallback(() => {
     const trimmed = queueInput.trim();
     if (!trimmed) {
-      alert("请输入要排队执行的提示词！");
+      notifyWarning("请输入要排队的提示词");
       return;
     }
     if (!queueTargetSessionId || !openTabIds.includes(queueTargetSessionId)) {
-      alert("目标会话已关闭，无法加入队列。");
+      notifyWarning("目标会话已关闭，无法加入队列");
       setShowQueueModal(false);
       return;
     }
     if (queueModalQueue.length >= 2) {
-      alert("队列已满！目前最多只允许队列中有 2 个排队任务。");
+      notifyWarning("队列已满（2/2）");
       return;
     }
     setQueueBySession((previous) =>

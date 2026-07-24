@@ -113,6 +113,27 @@ export const ClaudeIcon: React.FC<{ size?: number; color?: string }> = ({ size =
 
 ## 代码质量规范
 
+### 禁止原生系统对话框
+
+- **禁止** 在前端业务代码中调用 `window.alert` / `window.confirm` / `window.prompt`
+- **正确做法**：
+  - 信息 / 成功 / 警告 / 错误 → `notify` / `notifyInfo` / `notifySuccess` / `notifyWarning` / `notifyError`（`utils/appFeedback.ts`）
+  - 需用户明确选择的破坏性操作 → `confirmAction(...)` 或已有 `ConfirmModal`
+- 宿主：`App` 挂载 `useAppFeedback` + `AppToastHost`，Toast 不抢焦点、底部居中、带入场/退场动画
+- 文案要求：短、可行动、避免感叹号堆砌（例：`队列已满（2/2）`）
+
+### 终端焦点契约（Focus Contract）
+
+> **活动终端是默认键盘归宿。** 任何 UI 路径结束后，焦点必须回到当前活动会话终端。
+
+- **请求焦点**：`requestActiveTerminalFocus()` / `returnFocusToActiveTerminal()`（`utils/terminalFocus.ts`）
+- **事件名**：`kkcoder-focus-active-terminal`（常量 `FOCUS_ACTIVE_TERMINAL_EVENT`）
+- **监听方**：`TerminalTab` 与 `CompatibilityTerminalTab` 仅在 `isActive` 时响应
+- **叠加层关闭**：`useReturnTerminalFocusWhenUnblocked(isBlocked)` — 从 true→false 时自动归还
+- **App 级阻断态**包括：新建会话、设置、规则/文件编辑器、队列弹窗、退出确认、恢复弹窗、全局确认、标签右键、标签重命名
+- **禁止**：在 Toast 关闭按钮上抢焦点（使用 `tabIndex={-1}` + `onMouseDown preventDefault`）
+- **合并调度**：短时间内多次 `requestActiveTerminalFocus` 会合并为一次，避免连关弹窗时焦点抖动
+
 ### 源码总目录
 
 - 权威清单：`src/SOURCE_INDEX.md`

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { DirectoryPickerModal } from "./DirectoryPickerModal";
+import { formatFeedbackError, notifyError, notifyWarning } from "../utils/appFeedback";
 
 interface NewSessionModalProps {
   show: boolean;
@@ -110,7 +111,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
 
   const handleSubmit = async () => {
     if (!projectPath.trim()) {
-      alert("请输入或选择项目路径！");
+      notifyWarning("请输入或选择项目路径");
       return;
     }
 
@@ -126,7 +127,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
     try {
       const dirStatus = await invoke<string>("check_directory", { path: cleanPath });
       if (dirStatus === "not_dir") {
-        alert("项目路径指向的不是一个有效文件夹，请核对！");
+        notifyWarning("路径不是有效文件夹，请重新选择");
         return;
       } else if (dirStatus === "not_exists") {
         setConfirmDirState({
@@ -137,7 +138,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         return;
       }
     } catch (e) {
-      alert(`预检查路径异常: ${e}`);
+      notifyError(`路径检查失败：${formatFeedbackError(e)}`);
       return;
     }
 
@@ -153,7 +154,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
       setConfirmDirState(null);
       onClose();
     } catch (err) {
-      alert(`自动创建物理目录失败: ${err}`);
+      notifyError(`创建目录失败：${formatFeedbackError(err)}`);
     }
   };
 

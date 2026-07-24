@@ -14,6 +14,8 @@ import {
   type AgentType,
   type EnabledAgents,
 } from "../utils/enabledAgents";
+import { formatFeedbackError, notifyError, notifySuccess } from "../utils/appFeedback";
+import { useReturnTerminalFocusWhenUnblocked } from "../hooks/useReturnTerminalFocusWhenUnblocked";
 
 export const ClaudeIcon: React.FC<{ size?: number; color?: string }> = ({ size = 18, color }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" style={{ color, display: "inline-block", verticalAlign: "middle" }}>
@@ -141,6 +143,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     isDanger?: boolean;
   } | null>(null);
 
+  useReturnTerminalFocusWhenUnblocked(!!confirmState || showTrashModal, 56);
+
   // 记住收藏的项目状态
   const [favoriteProjects, setFavoriteProjects] = useState<Array<{ name: string; timestamp: number }>>(() => {
     try {
@@ -248,7 +252,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       }
       loadArchivedProjects();
     } catch (err) {
-      alert(`归档项目失败: ${err}`);
+      notifyError(`归档项目失败：${formatFeedbackError(err)}`);
     }
   };
 
@@ -267,7 +271,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         window.dispatchEvent(new CustomEvent("archive-sessions-restored"));
       }
     } catch (err) {
-      alert(`还原项目失败: ${err}`);
+      notifyError(`还原项目失败：${formatFeedbackError(err)}`);
     }
   };
 
@@ -485,7 +489,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     try {
       await invoke("open_project_folder", { path });
     } catch (err) {
-      alert(`无法打开文件夹: ${err}`);
+      notifyError(`无法打开文件夹：${formatFeedbackError(err)}`);
     }
   };
 
@@ -1342,9 +1346,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
             className="context-menu-item"
             onClick={() => {
               navigator.clipboard.writeText(projectContextMenu.projectPath).then(() => {
-                // 静默复制成功
+                notifySuccess("路径已复制");
               }).catch(() => {
-                alert("复制路径失败");
+                notifyError("复制路径失败");
               });
               setProjectContextMenu(null);
             }}

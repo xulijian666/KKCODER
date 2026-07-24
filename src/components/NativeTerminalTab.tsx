@@ -24,6 +24,8 @@ interface CompatibilityTerminalTabProps {
   agentSessionId: string;
   isReopen: boolean;
   isActive?: boolean;
+  /** 分屏时两格均可见；默认等同 isActive */
+  isVisible?: boolean;
   onSpawned?: () => void;
   onStateChange?: (busy: boolean) => void;
   onCommandComplete?: () => void;
@@ -59,6 +61,7 @@ export const CompatibilityTerminalTab: React.FC<CompatibilityTerminalTabProps> =
   agentSessionId,
   isReopen,
   isActive = false,
+  isVisible,
   onSpawned,
   onStateChange,
   onCommandComplete,
@@ -72,6 +75,9 @@ export const CompatibilityTerminalTab: React.FC<CompatibilityTerminalTabProps> =
   const lifecycleRef = useRef<NativeTerminalLifecycle | null>(null);
   const spawnedRef = useRef(false);
   const activeRef = useRef(isActive);
+  const isVisibleResolved = isVisible ?? isActive;
+  const isVisibleRef = useRef(isVisibleResolved);
+  isVisibleRef.current = Boolean(isVisibleResolved);
   const onSpawnedRef = useRef(onSpawned);
   onSpawnedRef.current = onSpawned;
   const onStateChangeRef = useRef(onStateChange);
@@ -95,8 +101,19 @@ export const CompatibilityTerminalTab: React.FC<CompatibilityTerminalTabProps> =
   useEffect(() => {
     activeRef.current = isActive;
     const terminal = terminalRef.current;
-    if (!terminal || !isActive) return;
+    if (!terminal) return;
 
+    if (isVisibleResolved) {
+      requestAnimationFrame(() => {
+        try {
+          fitAddonRef.current?.fit();
+        } catch (reason) {
+          console.error("Failed to fit compatibility terminal", reason);
+        }
+      });
+    }
+
+    if (!isActive) return;
     requestAnimationFrame(() => {
       try {
         fitAddonRef.current?.fit();
@@ -105,7 +122,27 @@ export const CompatibilityTerminalTab: React.FC<CompatibilityTerminalTabProps> =
         console.error("Failed to activate compatibility terminal", reason);
       }
     });
-  }, [isActive]);
+  }, [isActive, isVisibleResolved]);
+
+  // 焦点契约：与标准终端共用 kkcoder-focus-active-terminal
+  useEffect(() => {
+    const handleFocusRequest = (event: Event) => {
+      const detail = (event as CustomEvent<{ sessionId?: string }>).detail;
+      if (detail?.sessionId && detail.sessionId !== sessionId) return;
+      if (!detail?.sessionId && !activeRef.current) return;
+      if (!terminalRef.current) return;
+      try {
+        fitAddonRef.current?.fit();
+        terminalRef.current.focus();
+      } catch {
+        // 卸载竞态时忽略
+      }
+    };
+    window.addEventListener("kkcoder-focus-active-terminal", handleFocusRequest);
+    return () => {
+      window.removeEventListener("kkcoder-focus-active-terminal", handleFocusRequest);
+    };
+  }, [sessionId]);
 
   useEffect(() => {
     const container = containerRef.current;

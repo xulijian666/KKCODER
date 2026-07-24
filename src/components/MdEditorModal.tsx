@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { renderMarkdownToHtml } from "../utils/markdown";
+import { formatFeedbackError, notifyError } from "../utils/appFeedback";
 
 interface MdEditorModalProps {
   show: boolean;
@@ -95,7 +96,7 @@ export const MdEditorModal: React.FC<MdEditorModalProps> = ({
       setOriginalContent(content);
       console.log(`保存 ${primaryFile} 并同步 ${syncFile} 成功`);
     } catch (err) {
-      alert(`保存失败: ${err}`);
+      notifyError(`保存失败：${formatFeedbackError(err)}`);
     } finally {
       setIsSaving(false);
     }

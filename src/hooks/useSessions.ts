@@ -14,6 +14,7 @@ import { generateUUID } from "../utils/uuid";
 import { log } from "../utils/log";
 import { readSessionCleanupSettings } from "../utils/sessionCleanup";
 import type { AgentType } from "../utils/enabledAgents";
+import { formatFeedbackError, notifyError } from "../utils/appFeedback";
 
 const CLAUDE_VERSION_CACHE_KEY = "kkcoder_cached_claude_version";
 
@@ -294,8 +295,9 @@ export function useSessions({
       );
 
       const newId = `session-${Date.now().toString()}`;
-      const agentSessionId = generateUUID();
-      log(`Generated new session UUIDs: id=${newId}, agentSessionId=${agentSessionId}`);
+      // Codex 无法在启动前预生成 session id，留空，首句对话后从 ~/.codex/sessions 捕获
+      const agentSessionId = selectedAgent === "codex" ? "" : generateUUID();
+      log(`Generated new session UUIDs: id=${newId}, agentSessionId=${agentSessionId || "(pending codex capture)"}`);
 
       const newSession: Session = {
         id: newId,
@@ -329,7 +331,7 @@ export function useSessions({
         })
         .catch((error) => {
           log(`Failed to save session ${newId} to SQLite: ${error}`);
-          alert(`保存会话失败: ${error}`);
+          notifyError(`保存会话失败：${formatFeedbackError(error)}`);
         });
     },
     [selectedAgent, setActiveSessionId, setNewSessionIds, setOpenTabIds],
@@ -356,7 +358,7 @@ export function useSessions({
     const nextNumber = tempNumbers.length > 0 ? Math.max(...tempNumbers) + 1 : 1;
     const sessionName = `临时终端${nextNumber}`;
     const newId = `temp-session-${Date.now().toString()}`;
-    const agentSessionId = generateUUID();
+    const agentSessionId = selectedAgent === "codex" ? "" : generateUUID();
 
     const newSession: Session = {
       id: newId,
@@ -395,7 +397,7 @@ export function useSessions({
           setActiveSessionId(remaining.length > 0 ? remaining[remaining.length - 1] : "");
         }
       } catch (error) {
-        alert(`删除会话失败: ${error}`);
+        notifyError(`删除会话失败：${formatFeedbackError(error)}`);
       }
     },
     [activeSessionIdRef, clearQueueForSessionRef, openTabIdsRef, setActiveSessionId, setOpenTabIds],
@@ -410,7 +412,7 @@ export function useSessions({
         ),
       );
     } catch (error) {
-      alert(`恢复会话失败: ${error}`);
+      notifyError(`恢复会话失败：${formatFeedbackError(error)}`);
     }
   }, []);
 
@@ -422,7 +424,7 @@ export function useSessions({
         clearQueueForSessionRef.current(sessionId);
         localStorage.removeItem(`kkcoder_session_has_dialogue_${sessionId}`);
       } catch (error) {
-        alert(`彻底删除会话失败: ${error}`);
+        notifyError(`彻底删除失败：${formatFeedbackError(error)}`);
       }
     },
     [clearQueueForSessionRef],
@@ -438,7 +440,7 @@ export function useSessions({
       await invoke("empty_trash");
       setSessions((previous) => previous.filter((session) => session.deleted !== 1));
     } catch (error) {
-      alert(`清空垃圾桶失败: ${error}`);
+      notifyError(`清空回收站失败：${formatFeedbackError(error)}`);
     }
   }, [sessions]);
 
@@ -460,7 +462,7 @@ export function useSessions({
         log(`Successfully batch deleted ${sessionIds.length} sessions.`);
       } catch (error) {
         log(`Failed to batch delete sessions: ${error}`);
-        alert(`批量删除会话失败: ${error}`);
+        notifyError(`批量删除失败：${formatFeedbackError(error)}`);
       }
     },
     [activeSessionIdRef, clearQueueForSessionRef, openTabIdsRef, setActiveSessionId, setOpenTabIds],
@@ -478,7 +480,7 @@ export function useSessions({
       log(`Successfully renamed session ${sessionId} to ${newName}`);
     } catch (error) {
       log(`Failed to rename session ${sessionId}: ${error}`);
-      alert(`重命名失败: ${error}`);
+      notifyError(`重命名失败：${formatFeedbackError(error)}`);
     }
   }, []);
 
@@ -495,32 +497,37 @@ export function useSessions({
       log(`Successfully toggled favorite for session ${sessionId} to ${favoriteValue}`);
     } catch (error) {
       log(`Failed to toggle favorite for session ${sessionId}: ${error}`);
-      alert(`操作收藏失败: ${error}`);
+      notifyError(`收藏操作失败：${formatFeedbackError(error)}`);
     }
   }, []);
 
   const handleCaptureSessionId = useCallback(
     async (sessionId: string, agentSessionId: string) => {
+      const trimmedId = agentSessionId.trim();
+      if (!trimmedId) return;
       log(
-        `handleCaptureSessionId triggered: sessionId=${sessionId}, agentSessionId=${agentSessionId}`,
+        `handleCaptureSessionId triggered: sessionId=${sessionId}, agentSessionId=${trimmedId}`,
       );
       try {
-        const session = sessions.find((item) => item.id === sessionId);
-        if (session) {
-          const updatedSession = { ...session, agentSessionId };
+        let updatedSession: Session | null = null;
+        setSessions((previous) => {
+          const session = previous.find((item) => item.id === sessionId);
+          if (!session) return previous;
+          if (session.agentSessionId === trimmedId) return previous;
+          updatedSession = { ...session, agentSessionId: trimmedId };
+          return previous.map((item) => (item.id === sessionId ? updatedSession! : item));
+        });
+        if (updatedSession) {
           await invoke("add_session", { session: updatedSession });
-          setSessions((previous) =>
-            previous.map((item) => (item.id === sessionId ? updatedSession : item)),
-          );
           log(
-            `Successfully captured and updated Pi session ID in database for ${sessionId} to ${agentSessionId}`,
+            `Successfully captured and updated agent session ID in database for ${sessionId} to ${trimmedId}`,
           );
         }
       } catch (error) {
         log(`Failed to update captured session ID in database: ${error}`);
       }
     },
-    [sessions],
+    [],
   );
 
   const reloadSessions = useCallback(() => {

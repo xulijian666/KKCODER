@@ -35,4 +35,21 @@ describe("sessionResume dialogue flags", () => {
     assert.equal(shouldResumeSession("s1", [], storage), true);
     assert.equal(shouldResumeSession("s1", ["s1"], storage), false);
   });
+
+  it("requires codex agentSessionId before resume", () => {
+    const storage = {
+      getItem: (key: string) => (key === "kkcoder_session_has_dialogue_s1" ? "true" : null),
+    };
+    assert.equal(
+      shouldResumeSession("s1", [], storage, { agentType: "codex", agentSessionId: "" }),
+      false,
+    );
+    assert.equal(
+      shouldResumeSession("s1", [], storage, {
+        agentType: "codex",
+        agentSessionId: "019f8fe1-1bac-7293-b0c4-b811a5cf95ca",
+      }),
+      true,
+    );
+  });
 });
