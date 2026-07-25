@@ -1,4 +1,5 @@
 import React from "react";
+import kkcoderLogo from "../assets/brand/kkcoder-logo.svg";
 
 export interface TitleBarProps {
   currentTheme: string;
@@ -34,7 +35,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
   return (
     <div className="custom-titlebar" onMouseDown={onTitlebarMouseDown}>
       <div className="titlebar-logo">
-        <div className="titlebar-logo-icon">KK</div>
+        <img className="titlebar-logo-icon" src={kkcoderLogo} alt="KKCoder" draggable={false} />
         <span className="logo-title-text">KKCoder 极简 AI 终端管理器</span>
       </div>
 

@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="KKCoder logo variant 1 Double K">
+  <defs>
+    <linearGradient id="v1-bg" x1="96" y1="64" x2="416" y2="448" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1a1a1f"/>
+      <stop offset="100%" stop-color="#0b0b0e"/>
+    </linearGradient>
+    <linearGradient id="v1-kk" x1="140" y1="120" x2="380" y2="400" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#fb923c"/>
+      <stop offset="55%" stop-color="#f97316"/>
+      <stop offset="100%" stop-color="#ea580c"/>
+    </linearGradient>
+    <filter id="v1-glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <!-- Soft app-icon plate -->
+  <rect x="32" y="32" width="448" height="448" rx="108" fill="url(#v1-bg)"/>
+  <rect x="32" y="32" width="448" height="448" rx="108" fill="none" stroke="#f97316" stroke-opacity="0.35" stroke-width="6"/>
+  <!-- Inner bevel ring -->
+  <rect x="56" y="56" width="400" height="400" rx="92" fill="none" stroke="#ffffff" stroke-opacity="0.06" stroke-width="2"/>
+  <!-- Double K monogram -->
+  <g filter="url(#v1-glow)" fill="url(#v1-kk)">
+    <!-- Left K -->
+    <path d="M118 132h54v96.4l70.2-96.4h64.6l-84.4 112.8L312 380h-64.2l-75.8-110.2V380h-54V132z"/>
+    <!-- Right K (slightly lighter optical weight via opacity layering) -->
+    <path d="M278 132h54v96.4l70.2-96.4H467l-84.4 112.8L468 380h-64.2L328 269.8V380h-50V132z" opacity="0.92"/>
+  </g>
+  <!-- Micro terminal cursor under mark -->
+  <rect x="214" y="404" width="84" height="10" rx="5" fill="#f97316" opacity="0.9"/>
+</svg>

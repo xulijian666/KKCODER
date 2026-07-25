@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="KKCoder logo variant 4 Linked Nodes">
+  <defs>
+    <linearGradient id="v4-bg" x1="70" y1="50" x2="440" y2="460" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#020617"/>
+    </linearGradient>
+    <linearGradient id="v4-line" x1="120" y1="160" x2="400" y2="360" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#22d3ee"/>
+      <stop offset="100%" stop-color="#06b6d4"/>
+    </linearGradient>
+    <linearGradient id="v4-kk" x1="150" y1="140" x2="380" y2="380" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#e2e8f0"/>
+      <stop offset="100%" stop-color="#94a3b8"/>
+    </linearGradient>
+    <radialGradient id="v4-orb" cx="50%" cy="45%" r="55%">
+      <stop offset="0%" stop-color="#22d3ee" stop-opacity="0.22"/>
+      <stop offset="100%" stop-color="#22d3ee" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect x="32" y="32" width="448" height="448" rx="108" fill="url(#v4-bg)"/>
+  <circle cx="256" cy="250" r="180" fill="url(#v4-orb)"/>
+  <!-- Network links -->
+  <g fill="none" stroke="url(#v4-line)" stroke-width="8" stroke-linecap="round" opacity="0.85">
+    <path d="M140 180 L256 140 L372 180"/>
+    <path d="M140 180 L170 300 L256 360"/>
+    <path d="M372 180 L342 300 L256 360"/>
+    <path d="M170 300 L342 300"/>
+  </g>
+  <!-- Nodes -->
+  <g fill="#06b6d4">
+    <circle cx="140" cy="180" r="14"/>
+    <circle cx="256" cy="140" r="12"/>
+    <circle cx="372" cy="180" r="14"/>
+    <circle cx="170" cy="300" r="12"/>
+    <circle cx="342" cy="300" r="12"/>
+    <circle cx="256" cy="360" r="16"/>
+  </g>
+  <!-- KK monogram floating in center -->
+  <g fill="url(#v4-kk)">
+    <path d="M176 188h32v56l46-56h36l-54 64 58 84h-36l-48-72v72h-34V188z"/>
+    <path d="M292 188h32v56l46-56h36l-54 64 58 84h-36l-48-72v72h-34V188z"/>
+  </g>
+  <!-- Accent spark on bottom node -->
+  <circle cx="256" cy="360" r="6" fill="#f97316"/>
+</svg>

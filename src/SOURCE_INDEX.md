@@ -3,7 +3,7 @@
 > **本文件是前端源码的权威总索引。**  
 > 新增 / 删除 / 重命名 / 挪动 `src/` 下的模块时，**必须同步更新本文件**，并视情况更新对应 barrel：`components/index.ts`、`hooks/index.ts`、`utils/index.ts`。
 
-**最后人工维护核对：** 2026-07-24（分屏项目树绑定）
+**最后人工维护核对：** 2026-07-25（V3 Hex Badge 品牌全面接入）
 
 ---
 
@@ -42,6 +42,8 @@ src/
 ├── hooks/                   # 自定义 Hook + hooks/index.ts
 ├── utils/                   # 纯函数工具 + utils/index.ts
 └── assets/                  # 静态资源（图标等）
+    ├── brand/               # 品牌 Logo / App Icon SVG 草案
+    └── material-icons/      # 文件树 Material 风格图标
 ```
 
 ---
@@ -180,7 +182,30 @@ App.tsx
 
 ---
 
-## 9. 后端索引（指针）
+## 9. `assets/` — 静态资源
+
+| 路径 | 职责 | 经 barrel 导出 |
+|------|------|----------------|
+| `assets/brand/` | KKCoder 品牌 Logo / App Icon SVG 方案（v1–v6 + 标题栏小标记） | 否（按需 `import` / 静态引用） |
+| `assets/brand/kkcoder-logo.svg` | **选中主品牌 Logo**（V3 Hex Badge，已接入 TitleBar / About / EmptyState） | 否（`App.tsx` / `TitleBar.tsx` / `SettingsModal.tsx` 中 `import`） |
+| `assets/brand/kkcoder-logo-1024.png` | 1024px 透明底光栅主文件（`tauri icon` 输入源） | 否 |
+| `assets/brand/kkcoder-v1-double-k.svg` | 炭黑底板 + 橙色 Double K 字标（备选） | 否 |
+| `assets/brand/kkcoder-v2-terminal-prompt.svg` | 终端窗口 + 提示符叙事图标（备选） | 否 |
+| `assets/brand/kkcoder-v3-hex-badge.svg` | 六边形徽章 + KK（`kkcoder-logo.svg` 源） | 否 |
+| `assets/brand/kkcoder-v4-linked-nodes.svg` | 节点网络 + KK（备选） | 否 |
+| `assets/brand/kkcoder-v5-gradient-soft.svg` | 绿→橙渐变软质感（备选） | 否 |
+| `assets/brand/kkcoder-v6-minimal-mark.svg` | 双 K 抽象几何线标（备选） | 否 |
+| `assets/brand/kkcoder-titlebar-mark.svg` | 标题栏用 KK 填充标记（`currentColor`） | 否 |
+| `assets/brand/kkcoder-titlebar-minimal.svg` | 标题栏用极简线标（`currentColor`） | 否 |
+| `assets/material-icons/` | 文件/文件夹类型图标 | 否（经 `materialFileIcons` 映射） |
+| `assets/react.svg` | Vite 模板残留资源 | 否 |
+
+对比预览页（开发时）：`public/brand-preview/index.html` → 访问 `/brand-preview/`。  
+重新生成 PNG：`npm run brand:icons`。
+
+---
+
+## 10. 后端索引（指针）
 
 Rust 侧不在本文件逐文件维护；结构见：
 
@@ -191,7 +216,7 @@ Rust 侧不在本文件逐文件维护；结构见：
 
 ---
 
-## 10. 变更检查清单（提交前）
+## 11. 变更检查清单（提交前）
 
 - [ ] 本文件已更新条目
 - [ ] 对应 `index.ts` 导出已对齐

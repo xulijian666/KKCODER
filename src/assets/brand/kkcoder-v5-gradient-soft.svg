@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="KKCoder logo variant 5 Soft Gradient">
+  <defs>
+    <linearGradient id="v5-bg" x1="64" y1="48" x2="448" y2="464" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="48%" stop-color="#14b8a6"/>
+      <stop offset="100%" stop-color="#f97316"/>
+    </linearGradient>
+    <linearGradient id="v5-sheen" x1="120" y1="80" x2="360" y2="280" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.34"/>
+      <stop offset="55%" stop-color="#ffffff" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="v5-shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#0f172a" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+  <g filter="url(#v5-shadow)">
+    <rect x="40" y="40" width="432" height="432" rx="112" fill="url(#v5-bg)"/>
+  </g>
+  <!-- Glass sheen -->
+  <path d="M96 96c40-28 120-44 200-36 48 4 96 20 136 48v86c-48-36-112-56-184-56-64 0-116 16-152 40V96z" fill="url(#v5-sheen)"/>
+  <!-- White KK -->
+  <g fill="#ffffff">
+    <path d="M142 148h48v88l68-88h56L236 258l86 106h-56l-76-96v96h-48V148z"/>
+    <path d="M286 148h48v88l68-88h56L380 258l86 106h-56l-76-96v96h-48V148z"/>
+  </g>
+  <!-- Soft underline bar -->
+  <rect x="176" y="392" width="160" height="14" rx="7" fill="#ffffff" opacity="0.55"/>
+</svg>

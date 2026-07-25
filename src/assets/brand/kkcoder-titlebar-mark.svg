@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="KKCoder titlebar mark flat">
+  <!-- Use currentColor so CSS can recolor for light/dark themes -->
+  <rect x="1" y="1" width="30" height="30" rx="7" fill="currentColor" opacity="0.12"/>
+  <path fill="currentColor" d="M7 6.5h3.2v6.1L14.6 6.5H18l-5.1 6.9L18.4 25.5h-3.6L10.2 18v7.5H7V6.5z"/>
+  <path fill="currentColor" d="M17.2 6.5h3.2v6.1L24.8 6.5H28.2l-5.1 6.9 5.5 12.1h-3.6L20.4 18v7.5h-3.2V6.5z"/>
+</svg>

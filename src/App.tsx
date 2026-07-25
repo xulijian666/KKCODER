@@ -21,6 +21,8 @@ import {
   AppToastHost,
   ConfirmModal,
 } from "./components";
+import kkcoderLogo from "./assets/brand/kkcoder-logo.svg";
+
 import {
   updateSessionLastUserMessageAt,
   shouldResumeSession,
@@ -893,6 +895,7 @@ function App() {
             >
               {openTabIds.length === 0 ? (
                 <div className="empty-state">
+                  <img className="empty-state-logo" src={kkcoderLogo} alt="KKCoder" draggable={false} />
                   <div className="empty-state-title">KKCoder AI 终端管理器</div>
                   <div className="empty-state-desc">
                     当前没有处于活动状态的会话标签。

@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="KKCoder logo variant 6 Minimal Mark">
+  <defs>
+    <linearGradient id="v6-bg" x1="80" y1="60" x2="420" y2="450" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#18181b"/>
+      <stop offset="100%" stop-color="#09090b"/>
+    </linearGradient>
+    <linearGradient id="v6-stroke" x1="120" y1="140" x2="400" y2="380" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#fdba74"/>
+      <stop offset="100%" stop-color="#f97316"/>
+    </linearGradient>
+  </defs>
+  <rect x="32" y="32" width="448" height="448" rx="108" fill="url(#v6-bg)"/>
+  <!-- Abstract double-K: two verticals + two chevrons, like code brackets fused with K -->
+  <g fill="none" stroke="url(#v6-stroke)" stroke-width="36" stroke-linecap="round" stroke-linejoin="round">
+    <!-- left stem -->
+    <path d="M148 148 V364"/>
+    <!-- left chevron arms -->
+    <path d="M148 256 L248 148"/>
+    <path d="M148 256 L248 364"/>
+    <!-- right stem -->
+    <path d="M292 148 V364"/>
+    <!-- right chevron arms -->
+    <path d="M292 256 L392 148"/>
+    <path d="M292 256 L392 364"/>
+  </g>
+  <!-- Tiny AI pulse dot -->
+  <circle cx="256" cy="404" r="10" fill="#10b981"/>
+</svg>

@@ -1426,6 +1426,18 @@ body.terminal-split-resizing .terminal-pane-host {
 }
 
 /* 空状态 */
+.empty-state-logo {
+  width: 64px;
+  height: 64px;
+  border-radius: 16px;
+  display: block;
+  object-fit: contain;
+  box-shadow: 0 6px 20px rgba(249, 115, 22, 0.18), 0 2px 4px rgba(0, 0, 0, 0.1);
+  margin-bottom: 18px;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
 .empty-state {
   display: flex;
   flex-direction: column;
@@ -2115,21 +2127,15 @@ input:checked + .switch-slider:before {
 }
 
 .about-logo {
-  width: 60px;
-  height: 60px;
-  background: #111111; /* Charcoal black background */
-  border: 2px solid #f97316; /* Bright orange border */
-  border-radius: 14px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #f97316; /* Vibrant orange "KK" text */
-  font-weight: 800; /* Extra bold */
-  font-size: 26px;
-  box-shadow: 0 4px 12px rgba(249, 115, 22, 0.22); /* Glowing orange drop shadow */
+  width: 72px;
+  height: 72px;
+  border-radius: 18px;
+  display: block;
+  object-fit: contain;
+  box-shadow: 0 8px 24px rgba(249, 115, 22, 0.28), 0 2px 8px rgba(0, 0, 0, 0.25);
   margin-bottom: 20px;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
-  font-family: var(--font-main);
+  user-select: none;
+  -webkit-user-drag: none;
 }
 
 .about-title {
@@ -2218,19 +2224,14 @@ input:checked + .switch-slider:before {
 .titlebar-logo-icon {
   width: 18px;
   height: 18px;
-  background-color: #111111; /* Charcoal black */
-  border: 1px solid var(--color-orange); /* Orange border */
   border-radius: 4px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--color-orange); /* Bright orange "KK" */
-  font-size: 10px;
-  font-weight: 800;
+  display: block;
+  object-fit: contain;
   flex-shrink: 0;
-  text-shadow: 0 0.5px 1px rgba(0,0,0,0.5);
-  font-family: var(--font-main);
   margin-right: 2px;
+  box-shadow: 0 0 0 1px rgba(249, 115, 22, 0.28);
+  user-select: none;
+  -webkit-user-drag: none;
 }
 
 .logo-title-text {

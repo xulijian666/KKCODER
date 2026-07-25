@@ -28,6 +28,7 @@ import {
   saveEnabledAgents,
   type EnabledAgents,
 } from "../utils/enabledAgents";
+import kkcoderLogo from "../assets/brand/kkcoder-logo.svg";
 
 // 会话名称修正 localStorage keys
 const AUTO_RENAME_ON_STARTUP_KEY = "kkcoder_setting_auto_rename_startup";
@@ -1103,7 +1104,7 @@ return (
 
             {activeMenu === "about" && (
               <div className="settings-content about-page">
-                <div className="about-logo">KK</div>
+                <img className="about-logo" src={kkcoderLogo} alt="KKCoder" draggable={false} />
                 <div className="about-title">KKCoder AI 终端管理器</div>
                 <div className="about-version">版本 v1.2.0</div>
                 <div className="about-desc">
