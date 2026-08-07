@@ -2,16 +2,20 @@ import React, {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
+  type CSSProperties,
   type Dispatch,
   type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
   type SetStateAction,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { FileText } from "lucide-react";
+import { FileText, GripVertical, Maximize2, Minimize2, Pin, PinOff, ExternalLink } from "lucide-react";
 import { renderMarkdownToHtml } from "../utils/markdown";
 import { getHighlightedLines } from "../utils/highlighter";
 import { formatFeedbackError, notifyError } from "../utils/appFeedback";
+import { returnFocusToActiveTerminal } from "../utils/terminalFocus";
 
 export interface PreviewFileState {
   path: string;
@@ -29,6 +33,77 @@ export interface PreviewContextMenuState {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export type PreviewMode = "peek" | "dock" | "float";
+
+export interface FloatRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+const PREVIEW_MODE_STORAGE_KEY = "kkcoder_setting_preview_mode";
+const PREVIEW_WIDTH_STORAGE_KEY = "kkcoder_setting_preview_width";
+const PREVIEW_FLOAT_RECT_STORAGE_KEY = "kkcoder_setting_preview_float_rect";
+
+const PREVIEW_RATIO_DEFAULT = 0.46;
+const PREVIEW_RATIO_MIN = 0.3;
+const PREVIEW_RATIO_MAX = 0.9;
+const PREVIEW_RATIO_MAXIMIZED = 0.92;
+const PREVIEW_FLOAT_MIN_WIDTH = 320;
+const PREVIEW_FLOAT_MIN_HEIGHT = 200;
+
+function clampPreviewRatio(value: number): number {
+  return Math.max(PREVIEW_RATIO_MIN, Math.min(PREVIEW_RATIO_MAX, value));
+}
+
+function clampFloatRect(rect: FloatRect): FloatRect {
+  return {
+    x: Math.max(0, Math.min(rect.x, Math.max(0, window.innerWidth - rect.width))),
+    y: Math.max(0, Math.min(rect.y, Math.max(0, window.innerHeight - 40))),
+    width: Math.max(PREVIEW_FLOAT_MIN_WIDTH, Math.min(window.innerWidth, rect.width)),
+    height: Math.max(PREVIEW_FLOAT_MIN_HEIGHT, Math.min(window.innerHeight, rect.height)),
+  };
+}
+
+function readStoredPreviewMode(): PreviewMode {
+  const saved = localStorage.getItem(PREVIEW_MODE_STORAGE_KEY);
+  return saved === "dock" || saved === "float" ? saved : "peek";
+}
+
+function readStoredPreviewRatio(): number {
+  const saved = localStorage.getItem(PREVIEW_WIDTH_STORAGE_KEY);
+  const parsed = saved ? parseFloat(saved) : PREVIEW_RATIO_DEFAULT;
+  return Number.isFinite(parsed) ? clampPreviewRatio(parsed) : PREVIEW_RATIO_DEFAULT;
+}
+
+function readStoredFloatRect(): FloatRect | null {
+  const saved = localStorage.getItem(PREVIEW_FLOAT_RECT_STORAGE_KEY);
+  if (!saved) return null;
+  try {
+    const parsed = JSON.parse(saved) as FloatRect;
+    if (
+      parsed &&
+      Number.isFinite(parsed.x) &&
+      Number.isFinite(parsed.y) &&
+      Number.isFinite(parsed.width) &&
+      Number.isFinite(parsed.height) &&
+      parsed.width > 0 &&
+      parsed.height > 0
+    ) {
+      return clampFloatRect(parsed);
+    }
+  } catch {
+    // 忽略损坏的持久化数据
+  }
+  return null;
+}
+
+function resolvePreviewContainer(): HTMLElement | null {
+  const panel = document.querySelector(".file-preview-panel") as HTMLElement | null;
+  return panel?.parentElement ?? null;
 }
 
 function getLineNumberFromNode(node: Node | null): number | null {
@@ -111,6 +186,242 @@ export function useFilePreview({
   const [matchedLines, setMatchedLines] = useState<number[]>([]);
   const [previewContextMenu, setPreviewContextMenu] = useState<PreviewContextMenuState | null>(null);
 
+  // —— 预览表面三态：peek（瞬态浮层）/ dock（停靠分栏）/ float（自由卡片）——
+  const [previewMode, setPreviewMode] = useState<PreviewMode>(readStoredPreviewMode);
+  const [previewRatio, setPreviewRatio] = useState<number>(readStoredPreviewRatio);
+  const [previewMaximized, setPreviewMaximized] = useState(false);
+  const [floatRect, setFloatRect] = useState<FloatRect>(() => {
+    const stored = readStoredFloatRect();
+    return (
+      stored ?? {
+        x: 0,
+        y: 0,
+        width: PREVIEW_FLOAT_MIN_WIDTH,
+        height: PREVIEW_FLOAT_MIN_HEIGHT,
+      }
+    );
+  });
+  const [isResizingPreview, setIsResizingPreview] = useState(false);
+  const [isFloatDragging, setIsFloatDragging] = useState(false);
+  const floatDragRef = useRef<{
+    mode: "move" | "resize";
+    startClientX: number;
+    startClientY: number;
+    startRect: FloatRect;
+  } | null>(null);
+
+  useEffect(() => {
+    localStorage.setItem(PREVIEW_MODE_STORAGE_KEY, previewMode);
+  }, [previewMode]);
+
+  useEffect(() => {
+    localStorage.setItem(PREVIEW_WIDTH_STORAGE_KEY, previewRatio.toString());
+  }, [previewRatio]);
+
+  useEffect(() => {
+    if (floatRect.width > 0) {
+      localStorage.setItem(PREVIEW_FLOAT_RECT_STORAGE_KEY, JSON.stringify(floatRect));
+    }
+  }, [floatRect]);
+
+  const closePreview = useCallback(() => {
+    setPreviewFile(null);
+    setMarkdownMode("source");
+    returnFocusToActiveTerminal();
+  }, []);
+
+  const resetPreviewRatio = useCallback(() => {
+    setPreviewRatio(PREVIEW_RATIO_DEFAULT);
+    setPreviewMaximized(false);
+    window.setTimeout(() => window.dispatchEvent(new Event("resize")), 40);
+  }, []);
+
+  const startPreviewResize = useCallback((event: ReactMouseEvent | ReactPointerEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const target = event.currentTarget as HTMLElement;
+    const pointerEvent = event.nativeEvent as PointerEvent;
+    if (typeof pointerEvent.pointerId === "number" && target.setPointerCapture) {
+      try {
+        target.setPointerCapture(pointerEvent.pointerId);
+      } catch {
+        // 部分环境不支持 capture，仍走 document 监听
+      }
+    }
+    setPreviewMaximized(false);
+    setIsResizingPreview(true);
+  }, []);
+
+  useEffect(() => {
+    if (!isResizingPreview) return;
+
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+    document.body.classList.add("preview-resizing");
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const container = resolvePreviewContainer();
+      if (!container) return;
+      const bounds = container.getBoundingClientRect();
+      if (bounds.width <= 0) return;
+      const ratio = clampPreviewRatio((bounds.right - event.clientX) / bounds.width);
+      setPreviewRatio(ratio);
+      window.dispatchEvent(new Event("resize"));
+    };
+
+    const handlePointerUp = () => {
+      setIsResizingPreview(false);
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+      document.body.classList.remove("preview-resizing");
+      window.setTimeout(() => window.dispatchEvent(new Event("resize")), 50);
+    };
+
+    document.addEventListener("pointermove", handlePointerMove);
+    document.addEventListener("pointerup", handlePointerUp);
+    document.addEventListener("pointercancel", handlePointerUp);
+    document.addEventListener("mousemove", handlePointerMove as EventListener);
+    document.addEventListener("mouseup", handlePointerUp);
+    return () => {
+      document.removeEventListener("pointermove", handlePointerMove);
+      document.removeEventListener("pointerup", handlePointerUp);
+      document.removeEventListener("pointercancel", handlePointerUp);
+      document.removeEventListener("mousemove", handlePointerMove as EventListener);
+      document.removeEventListener("mouseup", handlePointerUp);
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+      document.body.classList.remove("preview-resizing");
+    };
+  }, [isResizingPreview]);
+
+  const startFloatDrag = useCallback((event: ReactMouseEvent | ReactPointerEvent) => {
+    const target = event.target as HTMLElement;
+    if (target.closest("button, input, textarea, select, a")) return;
+    event.preventDefault();
+    event.stopPropagation();
+    floatDragRef.current = {
+      mode: "move",
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startRect: floatRect,
+    };
+    setIsFloatDragging(true);
+  }, [floatRect]);
+
+  const startFloatResize = useCallback((event: ReactMouseEvent | ReactPointerEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    floatDragRef.current = {
+      mode: "resize",
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startRect: floatRect,
+    };
+    setIsFloatDragging(true);
+  }, [floatRect]);
+
+  useEffect(() => {
+    if (!isFloatDragging) return;
+
+    document.body.style.userSelect = "none";
+    document.body.style.cursor =
+      floatDragRef.current?.mode === "move" ? "grabbing" : "nwse-resize";
+    document.body.classList.add("preview-resizing");
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const drag = floatDragRef.current;
+      if (!drag) return;
+      const dx = event.clientX - drag.startClientX;
+      const dy = event.clientY - drag.startClientY;
+      if (drag.mode === "move") {
+        const x = Math.max(
+          0,
+          Math.min(drag.startRect.x + dx, Math.max(0, window.innerWidth - drag.startRect.width)),
+        );
+        const y = Math.max(
+          0,
+          Math.min(drag.startRect.y + dy, Math.max(0, window.innerHeight - 40)),
+        );
+        setFloatRect({ ...drag.startRect, x, y });
+      } else {
+        const width = Math.max(
+          PREVIEW_FLOAT_MIN_WIDTH,
+          Math.min(window.innerWidth - drag.startRect.x, drag.startRect.width + dx),
+        );
+        const height = Math.max(
+          PREVIEW_FLOAT_MIN_HEIGHT,
+          Math.min(window.innerHeight - drag.startRect.y, drag.startRect.height + dy),
+        );
+        setFloatRect({ x: drag.startRect.x, y: drag.startRect.y, width, height });
+      }
+    };
+
+    const handlePointerUp = () => {
+      floatDragRef.current = null;
+      setIsFloatDragging(false);
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+      document.body.classList.remove("preview-resizing");
+    };
+
+    document.addEventListener("pointermove", handlePointerMove);
+    document.addEventListener("pointerup", handlePointerUp);
+    document.addEventListener("pointercancel", handlePointerUp);
+    document.addEventListener("mousemove", handlePointerMove as EventListener);
+    document.addEventListener("mouseup", handlePointerUp);
+    return () => {
+      document.removeEventListener("pointermove", handlePointerMove);
+      document.removeEventListener("pointerup", handlePointerUp);
+      document.removeEventListener("pointercancel", handlePointerUp);
+      document.removeEventListener("mousemove", handlePointerMove as EventListener);
+      document.removeEventListener("mouseup", handlePointerUp);
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+      document.body.classList.remove("preview-resizing");
+    };
+  }, [isFloatDragging]);
+
+  const togglePin = useCallback(() => {
+    setPreviewMode((mode) => (mode === "dock" ? "peek" : "dock"));
+    window.setTimeout(() => window.dispatchEvent(new Event("resize")), 40);
+  }, []);
+
+  const toggleMaximize = useCallback(() => {
+    setPreviewMaximized((value) => !value);
+    window.setTimeout(() => window.dispatchEvent(new Event("resize")), 40);
+  }, []);
+
+  const detachToFloat = useCallback(() => {
+    const container = resolvePreviewContainer();
+    const containerWidth = container?.getBoundingClientRect().width ?? window.innerWidth;
+    const containerHeight = container?.getBoundingClientRect().height ?? window.innerHeight;
+    setFloatRect((previous) => {
+      if (previous.width > PREVIEW_FLOAT_MIN_WIDTH) return previous;
+      const width = Math.min(containerWidth * 0.5, 640);
+      const height = Math.min(containerHeight * 0.6, 520);
+      return {
+        x: Math.max(12, (window.innerWidth - width) / 2),
+        y: Math.max(12, (window.innerHeight - height) / 2),
+        width,
+        height,
+      };
+    });
+    setPreviewMaximized(false);
+    setPreviewMode("float");
+    window.setTimeout(() => window.dispatchEvent(new Event("resize")), 40);
+  }, []);
+
+  const dockFromFloat = useCallback(() => {
+    const container = resolvePreviewContainer();
+    const containerWidth = container?.getBoundingClientRect().width ?? window.innerWidth;
+    if (containerWidth > 0) {
+      setPreviewRatio(clampPreviewRatio(floatRect.width / containerWidth));
+    }
+    setPreviewMaximized(false);
+    setPreviewMode("dock");
+    window.setTimeout(() => window.dispatchEvent(new Event("resize")), 40);
+  }, [floatRect]);
+
   useEffect(() => {
     const handleFontChange = (event: Event) => {
       const customEvent = event as CustomEvent<string>;
@@ -170,8 +481,7 @@ export function useFilePreview({
           event.preventDefault();
           event.stopPropagation();
         } else if (previewFile) {
-          setPreviewFile(null);
-          setMarkdownMode("source");
+          closePreview();
           event.preventDefault();
           event.stopPropagation();
         }
@@ -225,7 +535,7 @@ export function useFilePreview({
 
     window.addEventListener("keydown", handleKeyDown, true);
     return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [insertSelectionToConversation, previewFile, showFileSearchBar, showGoToLineBar]);
+  }, [closePreview, insertSelectionToConversation, previewFile, showFileSearchBar, showGoToLineBar]);
 
   const openFile = useCallback(
     async (relativePath: string) => {
@@ -363,10 +673,11 @@ export function useFilePreview({
       activeMatchIndex,
       matchedLines,
       highlightedData,
-      onClose: () => {
-        setPreviewFile(null);
-        setMarkdownMode("source");
-      },
+      previewMode,
+      previewRatio,
+      previewMaximized,
+      floatRect,
+      onClose: closePreview,
       onContextMenu: handlePreviewContextMenu,
       onFileSearchChange: handleFileSearchChange,
       onGoToLine: handleGoToLine,
@@ -375,6 +686,14 @@ export function useFilePreview({
       setShowGoToLineBar,
       setGoToLineNumber,
       setActiveMatchIndex,
+      onTogglePin: togglePin,
+      onToggleMaximize: toggleMaximize,
+      onDetachToFloat: detachToFloat,
+      onDockFromFloat: dockFromFloat,
+      onStartPreviewResize: startPreviewResize,
+      onResetPreviewRatio: resetPreviewRatio,
+      onStartFloatDrag: startFloatDrag,
+      onStartFloatResize: startFloatResize,
     },
     contextMenuProps: {
       previewContextMenu,
@@ -399,6 +718,10 @@ export interface FilePreviewPanelProps {
   activeMatchIndex: number;
   matchedLines: number[];
   highlightedData: { tokens: unknown[][]; isPlain?: boolean };
+  previewMode: PreviewMode;
+  previewRatio: number;
+  previewMaximized: boolean;
+  floatRect: FloatRect;
   onClose: () => void;
   onContextMenu: (event: ReactMouseEvent) => void;
   onFileSearchChange: (query: string) => void;
@@ -408,6 +731,14 @@ export interface FilePreviewPanelProps {
   setShowGoToLineBar: (show: boolean) => void;
   setGoToLineNumber: (value: string) => void;
   setActiveMatchIndex: Dispatch<SetStateAction<number>>;
+  onTogglePin: () => void;
+  onToggleMaximize: () => void;
+  onDetachToFloat: () => void;
+  onDockFromFloat: () => void;
+  onStartPreviewResize: (event: ReactMouseEvent | ReactPointerEvent) => void;
+  onResetPreviewRatio: () => void;
+  onStartFloatDrag: (event: ReactMouseEvent | ReactPointerEvent) => void;
+  onStartFloatResize: (event: ReactMouseEvent | ReactPointerEvent) => void;
 }
 
 function renderHighlightedLineText(lineText: string, fileSearchQuery: string) {
@@ -469,12 +800,58 @@ export const FilePreviewPanel: React.FC<FilePreviewPanelProps> = ({
   setShowGoToLineBar,
   setGoToLineNumber,
   setActiveMatchIndex,
+  previewMode,
+  previewRatio,
+  previewMaximized,
+  floatRect,
+  onTogglePin,
+  onToggleMaximize,
+  onDetachToFloat,
+  onDockFromFloat,
+  onStartPreviewResize,
+  onResetPreviewRatio,
+  onStartFloatDrag,
+  onStartFloatResize,
 }) => {
   if (!previewFile) return null;
 
+  const panelStyle: CSSProperties =
+    previewMode === "float"
+      ? {
+          left: floatRect.x,
+          top: floatRect.y,
+          width: floatRect.width,
+          height: floatRect.height,
+        }
+      : {
+          width: `${(previewMaximized ? PREVIEW_RATIO_MAXIMIZED : previewRatio) * 100}%`,
+          flexShrink: 0,
+        };
+
   return (
-    <div className="file-preview-panel" onContextMenu={onContextMenu}>
-      <div className="preview-header">
+    <div
+      className={`file-preview-panel mode-${previewMode} ${previewMaximized ? "is-maximized" : ""}`}
+      style={panelStyle}
+      onContextMenu={onContextMenu}
+    >
+      {previewMode !== "float" && !previewMaximized && (
+        <div
+          className="preview-resize-handle"
+          onPointerDown={onStartPreviewResize}
+          onDoubleClick={onResetPreviewRatio}
+          title="拖拽调整宽度 · 双击复位"
+          role="separator"
+          aria-orientation="vertical"
+        />
+      )}
+      <div
+        className="preview-header"
+        onPointerDown={previewMode === "float" ? onStartFloatDrag : undefined}
+        onDoubleClick={previewMode === "float" ? onDockFromFloat : undefined}
+      >
+        {previewMode === "float" && (
+          <GripVertical size={14} className="preview-grip" />
+        )}
         <div className="preview-title-area">
           <FileText size={14} className="preview-file-icon" />
           <span className="preview-file-name" title={previewFile.path.split("/").pop()}>
@@ -500,6 +877,43 @@ export const FilePreviewPanel: React.FC<FilePreviewPanelProps> = ({
             </button>
           </div>
         )}
+        <div className="preview-actions">
+          {previewMode !== "float" && (
+            <button
+              className="preview-action-btn"
+              onClick={onToggleMaximize}
+              title={previewMaximized ? "还原宽度" : "最大化阅读"}
+            >
+              {previewMaximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+            </button>
+          )}
+          {previewMode === "float" ? (
+            <button
+              className="preview-action-btn"
+              onClick={onDockFromFloat}
+              title="停靠回右侧"
+            >
+              <PinOff size={14} />
+            </button>
+          ) : (
+            <button
+              className={`preview-action-btn ${previewMode === "dock" ? "active" : ""}`}
+              onClick={onTogglePin}
+              title={previewMode === "dock" ? "取消钉住（瞬态浮层）" : "钉住为停靠分栏"}
+            >
+              {previewMode === "dock" ? <PinOff size={14} /> : <Pin size={14} />}
+            </button>
+          )}
+          {previewMode !== "float" && (
+            <button
+              className="preview-action-btn"
+              onClick={onDetachToFloat}
+              title="浮出为自由卡片"
+            >
+              <ExternalLink size={14} />
+            </button>
+          )}
+        </div>
         <button className="preview-close-btn" onClick={onClose} title="关闭文件预览">
           ×
         </button>
@@ -659,6 +1073,14 @@ export const FilePreviewPanel: React.FC<FilePreviewPanelProps> = ({
             ×
           </button>
         </div>
+      )}
+
+      {previewMode === "float" && (
+        <div
+          className="preview-corner-handle"
+          onPointerDown={onStartFloatResize}
+          title="拖拽调整卡片大小"
+        />
       )}
     </div>
   );
