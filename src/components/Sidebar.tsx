@@ -101,7 +101,7 @@ interface SidebarProps {
   sessionBusy?: Record<string, boolean>;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({
+const SidebarImpl: React.FC<SidebarProps> = ({
   selectedAgent,
   onSelectAgent,
   enabledAgents,
@@ -1607,9 +1607,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
 const escapeRegExp = (str: string) => {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-};
-
-const highlightKeyword = (text: string, keyword: string) => {
+};const highlightKeyword = (text: string, keyword: string) => {
   if (!keyword) return text;
   try {
     const parts = text.split(new RegExp(`(${escapeRegExp(keyword)})`, "gi"));
@@ -1622,3 +1620,7 @@ const highlightKeyword = (text: string, keyword: string) => {
     return text;
   }
 };
+
+// 父级回调已在 App 层 useCallback 稳定化：sessions/activeSessionId 等数据不变时，
+// 跳过整棵会话列表树的重渲染（搜索输入、hover 等高频状态不再波及侧边栏）。
+export const Sidebar = React.memo(SidebarImpl);

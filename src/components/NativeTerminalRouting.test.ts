@@ -31,6 +31,6 @@ test("routes only newly opened Claude tabs through the isolated compatibility co
   assert.match(appSource, /<TerminalTab/);
   assert.match(
     appSource,
-    /shouldUseNativeTerminal\(s\.type, sessionTerminalMode\)/,
+    /shouldUseNativeTerminal\(session\.type, terminalMode\)/,
   );
 });

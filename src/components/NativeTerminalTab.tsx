@@ -55,7 +55,7 @@ const decodeBase64Bytes = (encoded: string): Uint8Array => {
   return bytes;
 };
 
-export const CompatibilityTerminalTab: React.FC<CompatibilityTerminalTabProps> = ({
+const CompatibilityTerminalTabImpl: React.FC<CompatibilityTerminalTabProps> = ({
   sessionId,
   directory,
   agentSessionId,
@@ -596,3 +596,24 @@ export const CompatibilityTerminalTab: React.FC<CompatibilityTerminalTabProps> =
     </div>
   );
 };
+
+// 数据型 props 变化才重渲染；回调已全部 ref 化（渲染期同步最新值），比较时忽略。
+// 注意：新增影响终端行为的数据 prop 时必须同步更新此比较函数。
+function compatibilityTerminalTabPropsEqual(
+  prev: Readonly<CompatibilityTerminalTabProps>,
+  next: Readonly<CompatibilityTerminalTabProps>,
+): boolean {
+  return (
+    prev.sessionId === next.sessionId &&
+    prev.directory === next.directory &&
+    prev.agentSessionId === next.agentSessionId &&
+    prev.isReopen === next.isReopen &&
+    prev.isActive === next.isActive &&
+    prev.isVisible === next.isVisible
+  );
+}
+
+export const CompatibilityTerminalTab = React.memo(
+  CompatibilityTerminalTabImpl,
+  compatibilityTerminalTabPropsEqual,
+);

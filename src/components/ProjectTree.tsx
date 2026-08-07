@@ -38,6 +38,201 @@ interface ProjectTreeProps {
   onPathRenamed?: (oldPath: string, newPath: string) => void;
 }
 
+interface TreeNodeProps {
+  node: FileNode;
+  depth: number;
+  /** 自身是否处于展开状态（仅文件夹有意义） */
+  isExpanded: boolean;
+  /** 搜索模式：默认全部展开显示匹配结果 */
+  isSearchMode: boolean;
+  /** 自身是否正在重命名 */
+  isRenaming: boolean;
+  /** 用于渲染子节点展开状态的完整映射 */
+  expandedFolders: Record<string, boolean>;
+  /** 正在重命名的节点路径（用于判断子节点 isRenaming） */
+  renamingPath: string | null;
+  renameValue: string;
+  renameSubmitting: boolean;
+  /** 重命名取消标记（Escape 后 blur 不提交），引用稳定，比较时忽略 */
+  renameCancelRef: React.MutableRefObject<boolean>;
+  onFileClick: (relativePath: string) => void;
+  onFolderExpand: (node: FileNode) => void;
+  onContextMenu: (e: React.MouseEvent, filePath: string, isDir: boolean) => void;
+  onBeginRename: (filePath: string) => void;
+  onRenameChange: (value: string) => void;
+  onCommitRename: () => void;
+  onCancelRename: () => void;
+  onNodeDragStart: (e: React.DragEvent, relativePath: string) => void;
+  onNodeDragEnd: (e: React.DragEvent) => void;
+}
+
+function treeNodePropsEqual(prev: TreeNodeProps, next: TreeNodeProps): boolean {
+  // 文件夹节点总是重渲染：children 结构可能变化，且保证收起状态能沿父链传播到子节点
+  if (prev.node.isDir) return false;
+  if (
+    prev.node !== next.node ||
+    prev.depth !== next.depth ||
+    prev.isExpanded !== next.isExpanded ||
+    prev.isSearchMode !== next.isSearchMode ||
+    prev.isRenaming !== next.isRenaming
+  ) {
+    return false;
+  }
+  // 仅在重命名节点上跟随输入值变化，避免打字时全树重渲染
+  if (prev.isRenaming || next.isRenaming) {
+    if (prev.renameValue !== next.renameValue) return false;
+    if (prev.renameSubmitting !== next.renameSubmitting) return false;
+  }
+  return true;
+}
+
+/** 单个树节点（React.memo：展开/收起时只有路径链与受影响子树重渲染，兄弟叶子节点跳过） */
+const TreeNode = React.memo(function TreeNode({
+  node,
+  depth,
+  isExpanded,
+  isSearchMode,
+  isRenaming,
+  expandedFolders,
+  renamingPath,
+  renameValue,
+  renameSubmitting,
+  renameCancelRef,
+  onFileClick,
+  onFolderExpand,
+  onContextMenu,
+  onBeginRename,
+  onRenameChange,
+  onCommitRename,
+  onCancelRename,
+  onNodeDragStart,
+  onNodeDragEnd,
+}: TreeNodeProps) {
+  const relativePath = node.path;
+  const paddingLeft = `${depth * 14 + 10}px`;
+  const renameInputRef = useRef<HTMLInputElement>(null);
+
+  // 搜索模式下默认全部展开以供匹配结果一目了然，非搜索模式根据 isExpanded 折叠/展开
+  const shouldShowChildren = node.isDir && (isSearchMode ? true : isExpanded);
+
+  useEffect(() => {
+    if (!isRenaming) return;
+    const timer = window.setTimeout(() => {
+      const input = renameInputRef.current;
+      if (!input) return;
+      input.focus();
+      const dot = input.value.lastIndexOf(".");
+      if (dot > 0) {
+        input.setSelectionRange(0, dot);
+      } else {
+        input.select();
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [isRenaming]);
+
+  const handleNodeClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (isRenaming) return;
+    if (node.isDir) {
+      onFolderExpand(node);
+    } else {
+      onFileClick(relativePath);
+    }
+  };
+
+  return (
+    <div className="tree-node-wrapper">
+      <div
+        className={`tree-node ${node.isDir ? "directory-node" : "file-node"} ${isRenaming ? "renaming" : ""}`}
+        style={{ paddingLeft }}
+        draggable={!isRenaming}
+        onDragStart={(e) => onNodeDragStart(e, relativePath)}
+        onDragEnd={onNodeDragEnd}
+        onClick={handleNodeClick}
+        onContextMenu={(e) => onContextMenu(e, relativePath, node.isDir)}
+      >
+        <span className="tree-node-arrow">
+          {node.isDir && (
+            shouldShowChildren ? <ChevronDown size={14} /> : <ChevronRight size={14} />
+          )}
+        </span>
+        <span className="tree-node-icon">
+          <img
+            className={`tree-material-icon ${node.isDir ? "folder-icon" : "file-icon"}`}
+            src={resolveMaterialIconUrl(node.name, node.isDir, shouldShowChildren)}
+            alt=""
+            width={16}
+            height={16}
+            draggable={false}
+          />
+        </span>
+        {isRenaming ? (
+          <input
+            ref={renameInputRef}
+            className="tree-rename-input"
+            value={renameValue}
+            disabled={renameSubmitting}
+            onChange={(e) => onRenameChange(e.target.value)}
+            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void onCommitRename();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                onCancelRename();
+              }
+            }}
+            onBlur={() => {
+              if (renameCancelRef.current) {
+                renameCancelRef.current = false;
+                return;
+              }
+              void onCommitRename();
+            }}
+          />
+        ) : (
+          <span className="tree-node-name" title={node.name}>
+            <span className="tree-node-name-inner">{node.name}</span>
+          </span>
+        )}
+      </div>
+
+      {shouldShowChildren && node.children && node.children.length > 0 && (
+        <div className="tree-node-children">
+          {node.children.map((child) => (
+            <TreeNode
+              key={child.path}
+              node={child}
+              depth={depth + 1}
+              isExpanded={expandedFolders[child.path] || false}
+              isSearchMode={isSearchMode}
+              isRenaming={renamingPath === child.path}
+              expandedFolders={expandedFolders}
+              renamingPath={renamingPath}
+              renameValue={renameValue}
+              renameSubmitting={renameSubmitting}
+              renameCancelRef={renameCancelRef}
+              onFileClick={onFileClick}
+              onFolderExpand={onFolderExpand}
+              onContextMenu={onContextMenu}
+              onBeginRename={onBeginRename}
+              onRenameChange={onRenameChange}
+              onCommitRename={onCommitRename}
+              onCancelRename={onCancelRename}
+              onNodeDragStart={onNodeDragStart}
+              onNodeDragEnd={onNodeDragEnd}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}, treeNodePropsEqual);
+
 // 极其简单快速的剪贴板复制辅助函数
 const copyToClipboard = async (text: string) => {
   try {
@@ -54,7 +249,7 @@ const isValidEntryName = (name: string) => {
   return true;
 };
 
-export const ProjectTree: React.FC<ProjectTreeProps> = ({
+const ProjectTreeImpl: React.FC<ProjectTreeProps> = ({
   projectPath,
   onFileClick,
   onInsertPathToTerminal,
@@ -63,8 +258,7 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
   onEditFile,
   onPathRenamed,
 }) => {
-  const [treeData, setTreeData] = useState<FileNode>({ name: "root", path: "", isDir: true, size: 0, children: [] });
-  const [loading, setLoading] = useState(false);
+  const [treeData, setTreeData] = useState<FileNode>({ name: "root", path: "", isDir: true, size: 0, children: [] });  const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<FileEntry[]>([]);
   const [searching, setSearching] = useState(false);
@@ -87,7 +281,6 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [renameSubmitting, setRenameSubmitting] = useState(false);
-  const renameInputRef = useRef<HTMLInputElement>(null);
   const renameCancelRef = useRef(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -102,20 +295,22 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
           projectPath,
           relativePath: relPath
         });
-        const childrenNodes: FileNode[] = [];
-        for (const f of subData || []) {
-          const isDir = f.is_dir;
-          const nodePath = f.path;
-          const shouldLoadSub = isDir && keepExpanded && expandedFoldersRef.current[nodePath];
-          childrenNodes.push({
-            name: f.name,
-            path: nodePath,
-            isDir,
-            size: f.size,
-            children: isDir ? (shouldLoadSub ? await loadDirectoryRecursive(nodePath) : []) : undefined,
-            isLoaded: isDir ? !!shouldLoadSub : false
-          });
-        }
+        // 同层子目录并行拉取，避免大目录刷新时逐项串行等待（Promise.all 保持结果顺序）
+        const childrenNodes = await Promise.all(
+          (subData || []).map(async (f) => {
+            const isDir = f.is_dir;
+            const nodePath = f.path;
+            const shouldLoadSub = isDir && keepExpanded && expandedFoldersRef.current[nodePath];
+            return {
+              name: f.name,
+              path: nodePath,
+              isDir,
+              size: f.size,
+              children: isDir ? (shouldLoadSub ? await loadDirectoryRecursive(nodePath) : []) : undefined,
+              isLoaded: isDir ? !!shouldLoadSub : false
+            };
+          }),
+        );
         return childrenNodes;
       };
 
@@ -318,8 +513,9 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
     }
     if (!isValidEntryName(nextName)) {
       notifyWarning("名称无效：不能为空或包含 \\ / : * ? \" < > |");
-      renameInputRef.current?.focus();
-      renameInputRef.current?.select();
+      // 重命名输入框位于 TreeNode 内部，通过 DOM 定位（重命名时全局仅此一个）
+      document.querySelector<HTMLInputElement>(".tree-rename-input")?.focus();
+      document.querySelector<HTMLInputElement>(".tree-rename-input")?.select();
       return;
     }
 
@@ -350,8 +546,8 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
           ? message
           : `重命名失败：${message}`,
       );
-      renameInputRef.current?.focus();
-      renameInputRef.current?.select();
+      document.querySelector<HTMLInputElement>(".tree-rename-input")?.focus();
+      document.querySelector<HTMLInputElement>(".tree-rename-input")?.select();
     } finally {
       setRenameSubmitting(false);
     }
@@ -363,130 +559,16 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
     return () => window.removeEventListener("click", closeMenu);
   }, []);
 
-  useEffect(() => {
-    if (!renamingPath) return;
-    const timer = window.setTimeout(() => {
-      const input = renameInputRef.current;
-      if (!input) return;
-      input.focus();
-      const dot = input.value.lastIndexOf(".");
-      if (dot > 0) {
-        input.setSelectionRange(0, dot);
-      } else {
-        input.select();
-      }
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [renamingPath]);
+  const handleNodeDragStart = (e: React.DragEvent, relativePath: string) => {
+    // 文件与文件夹都可拖入对话上下文，格式与右键「添加到对话」一致
+    e.dataTransfer.setData("text/plain", `"${relativePath}" `);
+    e.dataTransfer.effectAllowed = "copy";
+    // 拖拽时给自身加半透明效果
+    (e.currentTarget as HTMLElement).classList.add("dragging");
+  };
 
-  // 递归树节点渲染器
-  const renderNode = (node: FileNode, depth = 0) => {
-    if (node.name === "root") {
-      return (
-        <div className="project-tree-root">
-          {node.children?.map(child => renderNode(child, depth))}
-        </div>
-      );
-    }
-
-    const relativePath = node.path;
-    const isExpanded = expandedFolders[relativePath] || false;
-    const paddingLeft = `${depth * 14 + 10}px`;
-    const isRenaming = renamingPath === relativePath;
-
-    // 搜索模式下默认全部展开以供匹配结果一目了然，非搜索模式根据 expandedFolders 折叠/展开
-    const shouldShowChildren = node.isDir && (searchQuery.trim() ? true : isExpanded);
-
-    const handleNodeClick = (e: React.MouseEvent) => {
-      e.stopPropagation();
-      if (isRenaming) return;
-      if (node.isDir) {
-        handleFolderExpand(node);
-      } else {
-        onFileClick(relativePath);
-      }
-    };
-
-    const handleDragStart = (e: React.DragEvent) => {
-      if (isRenaming) return;
-      // 文件与文件夹都可拖入对话上下文，格式与右键「添加到对话」一致
-      e.dataTransfer.setData("text/plain", `"${relativePath}" `);
-      e.dataTransfer.effectAllowed = "copy";
-      // 拖拽时给自身加半透明效果
-      (e.currentTarget as HTMLElement).classList.add("dragging");
-    };
-
-    const handleDragEnd = (e: React.DragEvent) => {
-      (e.currentTarget as HTMLElement).classList.remove("dragging");
-    };
-
-    return (
-      <div key={relativePath} className="tree-node-wrapper">
-        <div
-          className={`tree-node ${node.isDir ? "directory-node" : "file-node"} ${isRenaming ? "renaming" : ""}`}
-          style={{ paddingLeft }}
-          draggable={!isRenaming}
-          onDragStart={handleDragStart}
-          onDragEnd={handleDragEnd}
-          onClick={handleNodeClick}
-          onContextMenu={(e) => handleContextMenu(e, relativePath, node.isDir)}
-        >
-          <span className="tree-node-arrow">
-            {node.isDir && (
-              shouldShowChildren ? <ChevronDown size={14} /> : <ChevronRight size={14} />
-            )}
-          </span>
-          <span className="tree-node-icon">
-            <img
-              className={`tree-material-icon ${node.isDir ? "folder-icon" : "file-icon"}`}
-              src={resolveMaterialIconUrl(node.name, node.isDir, shouldShowChildren)}
-              alt=""
-              width={16}
-              height={16}
-              draggable={false}
-            />
-          </span>
-          {isRenaming ? (
-            <input
-              ref={renameInputRef}
-              className="tree-rename-input"
-              value={renameValue}
-              disabled={renameSubmitting}
-              onChange={(e) => setRenameValue(e.target.value)}
-              onClick={(e) => e.stopPropagation()}
-              onMouseDown={(e) => e.stopPropagation()}
-              onKeyDown={(e) => {
-                e.stopPropagation();
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  void commitRename();
-                } else if (e.key === "Escape") {
-                  e.preventDefault();
-                  cancelRename();
-                }
-              }}
-              onBlur={() => {
-                if (renameCancelRef.current) {
-                  renameCancelRef.current = false;
-                  return;
-                }
-                void commitRename();
-              }}
-            />
-          ) : (
-            <span className="tree-node-name" title={node.name}>
-              <span className="tree-node-name-inner">{node.name}</span>
-            </span>
-          )}
-        </div>
-
-        {shouldShowChildren && node.children && node.children.length > 0 && (
-          <div className="tree-node-children">
-            {node.children.map(child => renderNode(child, depth + 1))}
-          </div>
-        )}
-      </div>
-    );
+  const handleNodeDragEnd = (e: React.DragEvent) => {
+    (e.currentTarget as HTMLElement).classList.remove("dragging");
   };
 
   return (
@@ -524,7 +606,32 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
         ) : !searchQuery.trim() && (!treeData.children || treeData.children.length === 0) ? (
           <div className="tree-placeholder">未在项目中发现可用文件</div>
         ) : (
-          renderNode(searchQuery.trim() ? (searchTreeData || treeData) : treeData)
+          <div className="project-tree-root">
+            {(searchQuery.trim() ? (searchTreeData || treeData) : treeData).children?.map((child) => (
+              <TreeNode
+                key={child.path}
+                node={child}
+                depth={0}
+                isExpanded={expandedFolders[child.path] || false}
+                isSearchMode={!!searchQuery.trim()}
+                isRenaming={renamingPath === child.path}
+                expandedFolders={expandedFolders}
+                renamingPath={renamingPath}
+                renameValue={renameValue}
+                renameSubmitting={renameSubmitting}
+                renameCancelRef={renameCancelRef}
+                onFileClick={onFileClick}
+                onFolderExpand={handleFolderExpand}
+                onContextMenu={handleContextMenu}
+                onBeginRename={beginRename}
+                onRenameChange={setRenameValue}
+                onCommitRename={commitRename}
+                onCancelRename={cancelRename}
+                onNodeDragStart={handleNodeDragStart}
+                onNodeDragEnd={handleNodeDragEnd}
+              />
+            ))}
+          </div>
         )}
       </div>
 
@@ -618,3 +725,7 @@ export const ProjectTree: React.FC<ProjectTreeProps> = ({
     </div>
   );
 };
+
+// 父级回调已在 App 层稳定化（useCallback）：projectPath 与回调不变时，
+// 项目树整体跳过重渲染；树内部展开/收起由 TreeNode 的 memo 按需刷新。
+export const ProjectTree = React.memo(ProjectTreeImpl);

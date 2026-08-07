@@ -62,7 +62,7 @@ const sliceTextByChars = (text: string, start: number, end?: number) => {
   return Array.from(text).slice(start, end).join("");
 };
 
-export const TerminalTab: React.FC<TerminalTabProps> = ({
+const TerminalTabImpl: React.FC<TerminalTabProps> = ({
   sessionId,
   directory,
   agentType,
@@ -86,10 +86,17 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
   const isActiveRef = useRef(Boolean(isActive));
   isActiveRef.current = Boolean(isActive);
 
+  // 回调全部走 ref（渲染期同步最新值）：配合 React.memo 忽略回调 props，父级重渲染不重建终端
   const onCommandCompleteRef = useRef(onCommandComplete);
-  useEffect(() => {
-    onCommandCompleteRef.current = onCommandComplete;
-  }, [onCommandComplete]);
+  onCommandCompleteRef.current = onCommandComplete;
+  const onSpawnedRef = useRef(onSpawned);
+  onSpawnedRef.current = onSpawned;
+  const onStateChangeRef = useRef(onStateChange);
+  onStateChangeRef.current = onStateChange;
+  const onUserSubmittedInputRef = useRef(onUserSubmittedInput);
+  onUserSubmittedInputRef.current = onUserSubmittedInput;
+  const onRenameSessionRef = useRef(onRenameSession);
+  onRenameSessionRef.current = onRenameSession;
 
   const isAnsweringRef = useRef<boolean>(false);
   const commandStartTimeRef = useRef<number>(0);
@@ -604,8 +611,8 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
 
                   isAnsweringRef.current = false;
                   debounceTimeoutRef.current = null;
-                  if (onStateChange) {
-                    onStateChange(false);
+                  if (onStateChangeRef.current) {
+                    onStateChangeRef.current(false);
                   }
                   if (onCommandCompleteRef.current) {
                     onCommandCompleteRef.current();
@@ -656,11 +663,11 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
           // 从累积的用户输入 buffer 中提取第一句提问作为会话的新名称
           try {
             const finalName = deriveSessionTitleFromInput(rawInput);
-            if (finalName && onRenameSession) {
+            if (finalName && onRenameSessionRef.current) {
               localStorage.setItem(autoTitleDoneStorageKey, "true");
               localStorage.setItem(`kkcoder_session_has_dialogue_${sessionId}`, "true");
               log(`Auto-renaming session ${sessionId} to: "${finalName}"`);
-              onRenameSession(sessionId, finalName);
+              onRenameSessionRef.current(sessionId, finalName);
             } else {
               log("Skip auto-renaming: first submitted input was empty or a terminal status prompt.");
             }
@@ -676,14 +683,14 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
         isAnsweringRef.current = true;
         commandStartTimeRef.current = Date.now();
         lastOutputTimeRef.current = Date.now();
-        if (onStateChange) {
-          onStateChange(true);
+        if (onStateChangeRef.current) {
+          onStateChangeRef.current(true);
         }
       }
       invoke("write_to_terminal", { sessionId, data })
         .then(() => {
           if (submittedAt) {
-            onUserSubmittedInput?.(sessionId, submittedAt);
+            onUserSubmittedInputRef.current?.(sessionId, submittedAt);
           }
         })
         .catch((err) => {
@@ -706,8 +713,8 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
     })
       .then(() => {
         log("Backend spawn_terminal resolved successfully.");
-        if (onSpawned) {
-          onSpawned();
+        if (onSpawnedRef.current) {
+          onSpawnedRef.current();
         }
         // PTY 成功拉起后，强制执行 fit，随后再 proposeDimensions 尺寸同步给 PTY
         try {
@@ -986,3 +993,23 @@ export const TerminalTab: React.FC<TerminalTabProps> = ({
     </div>
   );
 };
+
+// 数据型 props 变化才重渲染；回调已全部 ref 化（渲染期同步最新值），比较时忽略。
+// 注意：新增影响终端行为的数据 prop 时必须同步更新此比较函数。
+function terminalTabPropsEqual(
+  prev: Readonly<TerminalTabProps>,
+  next: Readonly<TerminalTabProps>,
+): boolean {
+  return (
+    prev.sessionId === next.sessionId &&
+    prev.directory === next.directory &&
+    prev.agentType === next.agentType &&
+    prev.agentSessionId === next.agentSessionId &&
+    prev.isReopen === next.isReopen &&
+    prev.isActive === next.isActive &&
+    prev.isVisible === next.isVisible &&
+    prev.busy === next.busy
+  );
+}
+
+export const TerminalTab = React.memo(TerminalTabImpl, terminalTabPropsEqual);

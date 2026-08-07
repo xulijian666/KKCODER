@@ -26,6 +26,10 @@ import "prismjs/components/prism-sql";
 import "prismjs/components/prism-markdown";
 import "prismjs/components/prism-diff";
 
+// 与 highlighter.ts 对齐的渲染上限：超限降级为纯文本，避免大文件解析 + Prism 高亮阻塞主线程
+const MAX_MARKDOWN_SIZE = 300 * 1024; // 300KB
+const MAX_MARKDOWN_LINES = 3000; // 3000行
+
 const LANG_ALIASES: Record<string, string> = {
   js: "javascript",
   jsx: "javascript",
@@ -245,6 +249,18 @@ export function registerMarkdownLangAlias(alias: string, prismLang: string): voi
 export function renderMarkdownToHtml(mdText: string): string {
   if (!mdText.trim()) {
     return `<p class="md-empty">文件内容为空</p>`;
+  }
+
+  // 超限时降级为纯文本预览（与 highlighter.ts 同策略），防止解析/高亮卡死主线程
+  if (
+    mdText.length > MAX_MARKDOWN_SIZE ||
+    mdText.split("\n").length > MAX_MARKDOWN_LINES
+  ) {
+    return (
+      `<pre class="md-pre md-fallback"><code class="md-code">` +
+      escapeHtml(mdText) +
+      `</code></pre>`
+    );
   }
 
   try {

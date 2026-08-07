@@ -655,6 +655,12 @@ export function useFilePreview({
     return getHighlightedLines(previewFile.content, previewFile.path);
   }, [previewFile]);
 
+  // Markdown 渲染只跟随预览文件变化：拖动宽度、文件内搜索、hover 等重渲染不再重复 parse + Prism 高亮
+  const markdownHtml = useMemo(() => {
+    if (!previewFile || previewFile.cannotPreview) return "";
+    return renderMarkdownToHtml(previewFile.content);
+  }, [previewFile]);
+
   return {
     previewFile,
     openFile,
@@ -673,6 +679,7 @@ export function useFilePreview({
       activeMatchIndex,
       matchedLines,
       highlightedData,
+      markdownHtml,
       previewMode,
       previewRatio,
       previewMaximized,
@@ -718,6 +725,7 @@ export interface FilePreviewPanelProps {
   activeMatchIndex: number;
   matchedLines: number[];
   highlightedData: { tokens: unknown[][]; isPlain?: boolean };
+  markdownHtml: string;
   previewMode: PreviewMode;
   previewRatio: number;
   previewMaximized: boolean;
@@ -791,6 +799,7 @@ export const FilePreviewPanel: React.FC<FilePreviewPanelProps> = ({
   activeMatchIndex,
   matchedLines,
   highlightedData,
+  markdownHtml,
   onClose,
   onContextMenu,
   onFileSearchChange,
@@ -943,7 +952,7 @@ export const FilePreviewPanel: React.FC<FilePreviewPanelProps> = ({
         ) : previewFile.path.endsWith(".md") && markdownMode === "preview" ? (
           <div
             className="preview-markdown-content"
-            dangerouslySetInnerHTML={{ __html: renderMarkdownToHtml(previewFile.content) }}
+            dangerouslySetInnerHTML={{ __html: markdownHtml }}
           />
         ) : (
           <div

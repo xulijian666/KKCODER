@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, type Dispatch, type MouseEvent, type SetStateAction } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback, type Dispatch, type MouseEvent, type SetStateAction } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Sidebar,
@@ -289,6 +289,15 @@ function App() {
     splitPair,
   });
 
+  const handleHighlightEnd = useCallback(() => {
+    setHighlightSessionId(null);
+  }, []);
+
+  const handleOpenNewSession = useCallback((path?: string) => {
+    setPrefilledProjectPath(path);
+    setShowModal(true);
+  }, []);
+
   const handleCloseTabWithSplit = useCallback(
     (event: MouseEvent, sessionId: string) => {
       const nextActiveFromSplit = notifySessionClosed(sessionId);
@@ -384,6 +393,11 @@ function App() {
   setSessionsRef.current = setSessions;
   handleRenameSessionRef.current = handleRenameSession;
 
+  // 依赖 useSessions 的稳定回调（供 Sidebar memo 使用）
+  const handleOpenTempSession = useCallback(() => {
+    handleCreateTempSession();
+  }, [handleCreateTempSession]);
+
   const { triggerAutoRename, clearRenameMark } = useAutoRename({ sessions, setSessions });
   triggerAutoRenameRef.current = triggerAutoRename;
 
@@ -404,15 +418,16 @@ function App() {
     }
   }, [claudeTerminalMode, sessions, terminalModeBySession]);
 
-  const handleUserSubmittedInput = (sessionId: string, submittedAt: string = new Date().toISOString()) => {
+  const handleUserSubmittedInput = useCallback((sessionId: string, submittedAt: string = new Date().toISOString()) => {
     localStorage.setItem(`kkcoder_session_has_dialogue_${sessionId}`, "true");
     setSessions((prev) => updateSessionLastUserMessageAt(prev, sessionId, submittedAt));
-    const targetSession = sessions.find((session) => session.id === sessionId);
+    // 经 ref 读取最新 sessions，避免回调被 memo 化后闭包捕获过期数组
+    const targetSession = sessionsRef.current.find((session) => session.id === sessionId);
     if (!targetSession || targetSession.isTemp) return;
     invoke("touch_session_last_user_message", { id: sessionId }).catch((err) => {
       log(`Failed to persist last user message time for ${sessionId}: ${err}`);
     });
-  };
+  }, []);
 
   /** Codex 首句后从 ~/.codex/sessions 捕获真实 session id 并绑定 */
   const tryCaptureCodexSessionId = useCallback(
@@ -449,11 +464,14 @@ function App() {
     [handleCaptureSessionId],
   );
 
-  const handleUserSubmittedInputWithRenameReset = (sessionId: string, submittedAt?: string) => {
-    clearRenameMark(sessionId);
-    handleUserSubmittedInput(sessionId, submittedAt);
-    void tryCaptureCodexSessionId(sessionId);
-  };
+  const handleUserSubmittedInputWithRenameReset = useCallback(
+    (sessionId: string, submittedAt?: string) => {
+      clearRenameMark(sessionId);
+      handleUserSubmittedInput(sessionId, submittedAt);
+      void tryCaptureCodexSessionId(sessionId);
+    },
+    [clearRenameMark, handleUserSubmittedInput, tryCaptureCodexSessionId],
+  );
 
   const {
     queueBySession,
@@ -513,6 +531,28 @@ function App() {
   const splitSameProject =
     Boolean(primarySplitSession?.path) &&
     primarySplitSession?.path === secondarySplitSession?.path;
+
+  // 每个 tab 的「恢复/终端模式」判定只随相关状态变化重算，避免 App 每次重渲染都同步读 localStorage。
+  // localStorage 写入点（has_dialogue 等）均伴随 setSessions，因此引用变化会触发本 memo 重算。
+  const tabRuntimeBySession = useMemo(() => {
+    const map = new Map<
+      string,
+      { shouldResume: boolean; useNativeTerminal: boolean; terminalMode: ClaudeTerminalMode }
+    >();
+    for (const session of sessions) {
+      if (!openTabIds.includes(session.id)) continue;
+      const terminalMode = terminalModeBySession[session.id] ?? claudeTerminalMode;
+      map.set(session.id, {
+        shouldResume: shouldResumeSession(session.id, newSessionIds, localStorage, {
+          agentType: session.type,
+          agentSessionId: session.agentSessionId,
+        }),
+        useNativeTerminal: shouldUseNativeTerminal(session.type, terminalMode),
+        terminalMode,
+      });
+    }
+    return map;
+  }, [sessions, openTabIds, newSessionIds, terminalModeBySession, claudeTerminalMode]);
 
   useEffect(() => {
     const aside = projectTreeAsideRef.current;
@@ -738,12 +778,9 @@ function App() {
           selectedAgent={selectedAgent}
           onSelectAgent={setSelectedAgent}
           enabledAgents={enabledAgents}
-          onOpenNewSession={(path) => {
-            setPrefilledProjectPath(path);
-            setShowModal(true);
-          }}
+          onOpenNewSession={handleOpenNewSession}
           onCreateSessionDirectly={handleCreateSessionDirectly}
-          onOpenTempSession={handleCreateTempSession}
+          onOpenTempSession={handleOpenTempSession}
           sessions={sessions}
           activeSessionId={activeSessionId}
           onSelectSession={handleSelectSessionWithSplit}
@@ -754,7 +791,7 @@ function App() {
           onRenameSession={handleRenameSession}
           onToggleFavorite={handleToggleFavorite}
           highlightSessionId={highlightSessionId}
-          onHighlightEnd={() => setHighlightSessionId(null)}
+          onHighlightEnd={handleHighlightEnd}
           onDeleteSessionsBatch={handleDeleteSessionsBatch}
           glowingSessionIds={glowingSessionIds}
           onRestoreSession={handleRestoreSession}
@@ -911,12 +948,10 @@ function App() {
                     const paneSlot = paneSlotFor(s.id);
                     const isVisible =
                       isActive || (isDualSplit && paneSlot !== null);
-                    const shouldResume = shouldResumeSession(s.id, newSessionIds, localStorage, {
-                      agentType: s.type,
-                      agentSessionId: s.agentSessionId,
-                    });
-                    const sessionTerminalMode = terminalModeBySession[s.id] ?? claudeTerminalMode;
-                    const useNativeTerminal = shouldUseNativeTerminal(s.type, sessionTerminalMode);
+                    const runtime = tabRuntimeBySession.get(s.id);
+                    const shouldResume = runtime?.shouldResume ?? false;
+                    const useNativeTerminal =
+                      runtime?.useNativeTerminal ?? false;
                     return (
                       <div
                         key={s.id}
