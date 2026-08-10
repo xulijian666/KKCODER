@@ -12,7 +12,7 @@ import React, {
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { FileText, GripVertical, Maximize2, Minimize2, Pin, PinOff, ExternalLink } from "lucide-react";
-import { renderMarkdownToHtml } from "../utils/markdown";
+import { renderMarkdownToHtml, buildMarkdownToc, type MarkdownTocEntry } from "../utils/markdown";
 import { getHighlightedLines } from "../utils/highlighter";
 import { formatFeedbackError, notifyError } from "../utils/appFeedback";
 import { returnFocusToActiveTerminal } from "../utils/terminalFocus";
@@ -661,6 +661,13 @@ export function useFilePreview({
     return renderMarkdownToHtml(previewFile.content);
   }, [previewFile]);
 
+  // 目录导航：仅 .md 文件在预览模式下展示
+  const tocEntries = useMemo(() => {
+    if (!previewFile || previewFile.cannotPreview) return [];
+    if (!previewFile.path.toLowerCase().endsWith(".md")) return [];
+    return buildMarkdownToc(previewFile.content);
+  }, [previewFile]);
+
   return {
     previewFile,
     openFile,
@@ -680,6 +687,7 @@ export function useFilePreview({
       matchedLines,
       highlightedData,
       markdownHtml,
+      tocEntries,
       previewMode,
       previewRatio,
       previewMaximized,
@@ -726,6 +734,7 @@ export interface FilePreviewPanelProps {
   matchedLines: number[];
   highlightedData: { tokens: unknown[][]; isPlain?: boolean };
   markdownHtml: string;
+  tocEntries: MarkdownTocEntry[];
   previewMode: PreviewMode;
   previewRatio: number;
   previewMaximized: boolean;
@@ -800,6 +809,7 @@ export const FilePreviewPanel: React.FC<FilePreviewPanelProps> = ({
   matchedLines,
   highlightedData,
   markdownHtml,
+  tocEntries,
   onClose,
   onContextMenu,
   onFileSearchChange,
@@ -950,10 +960,34 @@ export const FilePreviewPanel: React.FC<FilePreviewPanelProps> = ({
             </button>
           </div>
         ) : previewFile.path.endsWith(".md") && markdownMode === "preview" ? (
-          <div
-            className="preview-markdown-content"
-            dangerouslySetInnerHTML={{ __html: markdownHtml }}
-          />
+          <div className="preview-markdown-layout">
+            {tocEntries.length > 1 && (
+              <nav className="preview-toc" aria-label="目录">
+                <div className="preview-toc-title">目录</div>
+                <div className="preview-toc-list">
+                  {tocEntries.map((entry, index) => (
+                    <button
+                      key={`${entry.id}-${index}`}
+                      type="button"
+                      className={`preview-toc-item depth-${Math.min(entry.depth, 3)}`}
+                      title={entry.text}
+                      onClick={() => {
+                        document
+                          .getElementById(entry.id)
+                          ?.scrollIntoView({ block: "start" });
+                      }}
+                    >
+                      {entry.text}
+                    </button>
+                  ))}
+                </div>
+              </nav>
+            )}
+            <div
+              className="preview-markdown-content"
+              dangerouslySetInnerHTML={{ __html: markdownHtml }}
+            />
+          </div>
         ) : (
           <div
             className="preview-text-content"

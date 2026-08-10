@@ -33,4 +33,31 @@ export default defineConfig(async () => ({
       ],
     },
   },
+  build: {
+    // 4. 资源一律不内联为 data URL：131 个材质图标改为独立文件由 <img> 异步加载，
+    //    避免数百 KB base64 内联进主 JS 拖慢 WebView2 首屏解析
+    assetsInlineLimit: 0,
+    rollupOptions: {
+      output: {
+        // 5. 依赖库按域拆分 chunk：WebView2 解析/缓存粒度更细，
+        //    后续版本升级只影响对应 chunk。
+        //    函数形式按模块路径匹配（对象形式无法覆盖 CJS 子路径如 prismjs/components/*）
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return undefined;
+          if (id.includes("@xterm/") || id.includes("/xterm/")) return "xterm-vendor";
+          if (id.includes("/prismjs/")) return "prism-vendor";
+          if (id.includes("/lucide-react/")) return "lucide-vendor";
+          if (id.includes("/marked/")) return "marked-vendor";
+          if (
+            id.includes("/react/") ||
+            id.includes("/react-dom") ||
+            id.includes("/scheduler/")
+          ) {
+            return "react-vendor";
+          }
+          return undefined;
+        },
+      },
+    },
+  },
 }));

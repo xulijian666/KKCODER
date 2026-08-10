@@ -16,6 +16,7 @@ import {
   resolveTerminalSchemeMode,
   TERMINAL_SCHEME_MODE_KEY,
 } from "../utils/terminalScheme";
+import { formatFeedbackError, notifyError, notifySuccess } from "../utils/appFeedback";
 
 interface TerminalTabProps {
   sessionId: string;
@@ -408,6 +409,25 @@ const TerminalTabImpl: React.FC<TerminalTabProps> = ({
     };
 
     window.addEventListener("kkcoder-insert-conversation-tag", handleInsertConversationTag);
+
+    // 导出终端内容：提取整个 buffer（含 scrollback）为纯文本并保存到 ~/.kkcoder/session_logs/
+    const handleExportTerminalRequest = (event: Event) => {
+      const detail = (event as CustomEvent<{ sessionId: string }>).detail;
+      if (!detail || detail.sessionId !== sessionId) return;
+      const exportTerm = xtermRef.current;
+      if (!exportTerm) return;
+      const buffer = exportTerm.buffer.active;
+      const lines: string[] = [];
+      for (let i = 0; i < buffer.length; i++) {
+        const line = buffer.getLine(i);
+        lines.push(line ? line.translateToString() : "");
+      }
+      const content = lines.join("\n");
+      invoke("save_session_log", { sessionId, content })
+        .then((path) => notifySuccess(`终端内容已导出：${path}`))
+        .catch((err) => notifyError(`终端内容导出失败：${formatFeedbackError(err)}`));
+    };
+    window.addEventListener("kkcoder-export-terminal-request", handleExportTerminalRequest);
 
     term.attachCustomKeyEventHandler((arg) => {
       if (arg.code === "Escape" || arg.key === "Escape") {
@@ -919,6 +939,7 @@ const TerminalTabImpl: React.FC<TerminalTabProps> = ({
       window.removeEventListener("kkcoder-font-change", handleFontChange);
       window.removeEventListener("kkcoder-font-size-change", handleFontSizeChange);
       window.removeEventListener("kkcoder-insert-conversation-tag", handleInsertConversationTag);
+      window.removeEventListener("kkcoder-export-terminal-request", handleExportTerminalRequest);
       onDataDisposable.dispose();
       if (unlistenFn) {
         unlistenFn();

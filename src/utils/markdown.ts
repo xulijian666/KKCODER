@@ -7,6 +7,9 @@
 
 import { Marked, type Tokens } from "marked";
 import Prism from "prismjs";
+import { MAX_MARKDOWN_SIZE, MAX_MARKDOWN_LINES, slugify } from "./markdownToc";
+
+export { buildMarkdownToc, type MarkdownTocEntry } from "./markdownToc";
 
 // 与 highlighter.ts 对齐的常用语言（Prism 需先注册）
 import "prismjs/components/prism-markup";
@@ -25,10 +28,6 @@ import "prismjs/components/prism-bash";
 import "prismjs/components/prism-sql";
 import "prismjs/components/prism-markdown";
 import "prismjs/components/prism-diff";
-
-// 与 highlighter.ts 对齐的渲染上限：超限降级为纯文本，避免大文件解析 + Prism 高亮阻塞主线程
-const MAX_MARKDOWN_SIZE = 300 * 1024; // 300KB
-const MAX_MARKDOWN_LINES = 3000; // 3000行
 
 const LANG_ALIASES: Record<string, string> = {
   js: "javascript",
@@ -224,15 +223,6 @@ function createMarked(): Marked {
   });
 
   return marked;
-}
-
-function slugify(text: string): string {
-  return text
-    .trim()
-    .toLowerCase()
-    .replace(/[^\w一-鿿\s-]/g, "")
-    .replace(/\s+/g, "-")
-    .slice(0, 80);
 }
 
 const markedInstance = createMarked();

@@ -16,6 +16,7 @@ import {
   getActiveTerminalTheme,
   TERMINAL_SCHEME_CHANGE_EVENT,
 } from "../utils/terminalScheme";
+import { formatFeedbackError, notifyError, notifySuccess } from "../utils/appFeedback";
 import "./NativeTerminalTab.css";
 
 interface CompatibilityTerminalTabProps {
@@ -463,6 +464,22 @@ const CompatibilityTerminalTabImpl: React.FC<CompatibilityTerminalTabProps> = ({
     };
     window.addEventListener("kkcoder-insert-conversation-tag", handleInsertConversationTag);
 
+    // 导出终端内容：提取整个 buffer（含 scrollback）为纯文本并保存到 ~/.kkcoder/session_logs/
+    const handleExportTerminalRequest = (event: Event) => {
+      const detail = (event as CustomEvent<{ sessionId: string }>).detail;
+      if (!detail || detail.sessionId !== sessionId) return;
+      const buffer = terminal.buffer.active;
+      const lines: string[] = [];
+      for (let i = 0; i < buffer.length; i++) {
+        const line = buffer.getLine(i);
+        lines.push(line ? line.translateToString() : "");
+      }
+      invoke("save_session_log", { sessionId, content: lines.join("\n") })
+        .then((path) => notifySuccess(`终端内容已导出：${path}`))
+        .catch((reason) => notifyError(`终端内容导出失败：${formatFeedbackError(reason)}`));
+    };
+    window.addEventListener("kkcoder-export-terminal-request", handleExportTerminalRequest);
+
     const handleProgrammaticSubmission = (event: Event) => {
       const detail = (event as CustomEvent<{ sessionId: string }>).detail;
       if (!detail || detail.sessionId !== sessionId) return;
@@ -514,6 +531,7 @@ const CompatibilityTerminalTabImpl: React.FC<CompatibilityTerminalTabProps> = ({
       resizeObserver.disconnect();
       container.removeEventListener("paste", handleNativePaste, true);
       window.removeEventListener("kkcoder-insert-conversation-tag", handleInsertConversationTag);
+      window.removeEventListener("kkcoder-export-terminal-request", handleExportTerminalRequest);
       window.removeEventListener("kkcoder-compat-terminal-submitted", handleProgrammaticSubmission);
       window.removeEventListener("kkcoder-font-change", handleFontChange);
       window.removeEventListener(TERMINAL_SCHEME_CHANGE_EVENT, handleTerminalSchemeChange);
