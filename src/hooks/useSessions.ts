@@ -56,18 +56,6 @@ export function useSessions({
   const sessionsRef = useRef<Session[]>([]);
   sessionsRef.current = sessions;
 
-  useEffect(() => {
-    const handleArchiveRestored = () => {
-      invoke<Session[]>("get_sessions")
-        .then((data) => {
-          setSessions(data || []);
-        })
-        .catch((error) => console.error("Failed to reload sessions after archive restore:", error));
-    };
-    window.addEventListener("archive-sessions-restored", handleArchiveRestored);
-    return () => window.removeEventListener("archive-sessions-restored", handleArchiveRestored);
-  }, []);
-
   // Mount once: do not depend on parent callbacks (they change every render and re-fetch SQLite).
   useEffect(() => {
     let claudeVersionTimer: number | null = null;
@@ -114,7 +102,7 @@ export function useSessions({
     const staleCleanupPromise = cleanupSettings.enabled
       ? invoke<number>("cleanup_stale_sessions", { days: cleanupSettings.days })
           .then((count) => {
-            log(`Startup session cleanup moved ${count} stale sessions to trash.`);
+            log(`Startup session cleanup soft-deleted ${count} stale sessions.`);
           })
           .catch((error) => {
             log(`Startup session cleanup failed: ${error}`);
@@ -403,47 +391,6 @@ export function useSessions({
     [activeSessionIdRef, clearQueueForSessionRef, openTabIdsRef, setActiveSessionId, setOpenTabIds],
   );
 
-  const handleRestoreSession = useCallback(async (sessionId: string) => {
-    try {
-      await invoke("restore_session", { id: sessionId });
-      setSessions((previous) =>
-        previous.map((session) =>
-          session.id === sessionId ? { ...session, deleted: 0, deletedAt: undefined } : session,
-        ),
-      );
-    } catch (error) {
-      notifyError(`恢复会话失败：${formatFeedbackError(error)}`);
-    }
-  }, []);
-
-  const handlePermanentlyDeleteSession = useCallback(
-    async (sessionId: string) => {
-      try {
-        await invoke("delete_session_permanently", { id: sessionId });
-        setSessions((previous) => previous.filter((session) => session.id !== sessionId));
-        clearQueueForSessionRef.current(sessionId);
-        localStorage.removeItem(`kkcoder_session_has_dialogue_${sessionId}`);
-      } catch (error) {
-        notifyError(`彻底删除失败：${formatFeedbackError(error)}`);
-      }
-    },
-    [clearQueueForSessionRef],
-  );
-
-  const handleEmptyTrash = useCallback(async () => {
-    try {
-      sessions.forEach((session) => {
-        if (session.deleted === 1) {
-          localStorage.removeItem(`kkcoder_session_has_dialogue_${session.id}`);
-        }
-      });
-      await invoke("empty_trash");
-      setSessions((previous) => previous.filter((session) => session.deleted !== 1));
-    } catch (error) {
-      notifyError(`清空回收站失败：${formatFeedbackError(error)}`);
-    }
-  }, [sessions]);
-
   const handleDeleteSessionsBatch = useCallback(
     async (sessionIds: string[]) => {
       log(`handleDeleteSessionsBatch triggered: ids=[${sessionIds.join(", ")}]`);
@@ -545,9 +492,6 @@ export function useSessions({
     handleCreateSessionDirectly,
     handleCreateTempSession,
     handleDeleteSession,
-    handleRestoreSession,
-    handlePermanentlyDeleteSession,
-    handleEmptyTrash,
     handleDeleteSessionsBatch,
     handleRenameSession,
     handleToggleFavorite,

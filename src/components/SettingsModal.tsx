@@ -981,7 +981,7 @@ return (
                 <section className="settings-section">
                   <div className="settings-section-head">
                     <h3 className="settings-section-title">定时清理</h3>
-                    <p className="settings-section-desc">启动时将长期未交互会话移入回收站</p>
+                    <p className="settings-section-desc">启动时自动清理长期未交互的会话记录</p>
                   </div>
                   <div className="settings-group">
                     <div className="settings-switch-row">
@@ -1008,7 +1008,7 @@ return (
                       <span className="slider-value">{sessionCleanupDays} 天</span>
                     </div>
                     <div className="settings-helper-text">
-                      默认 {DEFAULT_SESSION_CLEANUP_DAYS} 天；仅移入回收站，可在 7 天内恢复
+                      默认 {DEFAULT_SESSION_CLEANUP_DAYS} 天；清理后的会话记录 7 天后自动永久删除
                     </div>
                   </div>
                 </section>

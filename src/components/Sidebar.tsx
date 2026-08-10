@@ -59,19 +59,10 @@ export interface Session {
   createdAt?: string; // 保存数据库创建时间戳
   lastUserMessageAt?: string;
   favorite: number;   // 0 代表普通，1 代表已收藏
-  deleted?: number;   // 0 代表活动，1 代表回收站
-  deletedAt?: string; // 保存软删除时间戳
+  deleted?: number;   // 0 代表活动，1 代表已软删除
+  deletedAt?: string; // 软删除时间戳
   isTemp?: boolean;
   matchSnippets?: string[]; // 搜索高亮的聊天记录匹配片段 (最多 3 条)
-}
-
-export interface ArchivedProject {
-  id: number;
-  project_name: string;
-  project_path: string;
-  archived_at: string;
-  archive_month: string;
-  sessions_data: string; // JSON string of sessions
 }
 
 interface SidebarProps {
@@ -94,9 +85,6 @@ interface SidebarProps {
   onHighlightEnd?: () => void;
   onDeleteSessionsBatch: (ids: string[]) => void; // 批量删除会话 callback
   glowingSessionIds?: string[];
-  onRestoreSession: (id: string) => void;
-  onPermanentlyDeleteSession: (id: string) => void;
-  onEmptyTrash: () => void;
   width?: number;
   sessionBusy?: Record<string, boolean>;
 }
@@ -121,9 +109,6 @@ const SidebarImpl: React.FC<SidebarProps> = ({
   onHighlightEnd,
   onDeleteSessionsBatch,
   glowingSessionIds = [],
-  onRestoreSession,
-  onPermanentlyDeleteSession,
-  onEmptyTrash,
   width,
   sessionBusy,
 }) => {
@@ -131,8 +116,6 @@ const SidebarImpl: React.FC<SidebarProps> = ({
   const selectedAgentIndex = Math.max(0, visibleAgents.indexOf(selectedAgent));
   // 1. 折叠项目列表的状态
   const [collapsedProjects, setCollapsedProjects] = useState<string[]>([]);
-  // 回收站 Modal 状态
-  const [showTrashModal, setShowTrashModal] = useState<boolean>(false);
   // 收藏夹折叠状态
   const [favoritesCollapsed, setFavoritesCollapsed] = useState<boolean>(false);
   const [confirmState, setConfirmState] = useState<{
@@ -143,7 +126,7 @@ const SidebarImpl: React.FC<SidebarProps> = ({
     isDanger?: boolean;
   } | null>(null);
 
-  useReturnTerminalFocusWhenUnblocked(!!confirmState || showTrashModal, 56);
+  useReturnTerminalFocusWhenUnblocked(!!confirmState, 56);
 
   // 记住收藏的项目状态
   const [favoriteProjects, setFavoriteProjects] = useState<Array<{ name: string; timestamp: number }>>(() => {
@@ -160,34 +143,6 @@ const SidebarImpl: React.FC<SidebarProps> = ({
   }, [favoriteProjects]);
 
   // 项目按最近聊天时间自动排序（无需手动拖拽）
-
-  // 归档区状态
-  const [showArchive, setShowArchive] = useState<boolean>(false);
-  const [archivedProjects, setArchivedProjects] = useState<ArchivedProject[]>([]);
-  const [archiveContextMenu, setArchiveContextMenu] = useState<{
-    x: number;
-    y: number;
-    project: ArchivedProject;
-  } | null>(null);
-  const archiveSectionRef = useRef<HTMLDivElement>(null);
-
-  // 点击归档区外部时自动收起归档区
-  useEffect(() => {
-    if (!showArchive) return;
-    const handleClickOutside = (e: MouseEvent) => {
-      if (archiveSectionRef.current && !archiveSectionRef.current.contains(e.target as Node)) {
-        setShowArchive(false);
-      }
-    };
-    // 延迟添加监听，避免当前点击事件立即触发
-    const timer = setTimeout(() => {
-      window.addEventListener("mousedown", handleClickOutside);
-    }, 0);
-    return () => {
-      clearTimeout(timer);
-      window.removeEventListener("mousedown", handleClickOutside);
-    };
-  }, [showArchive]);
 
   // 增加全局内容搜索相关的状态与防抖请求
   const [isContentSearch, setIsContentSearch] = useState<boolean>(false);
@@ -223,57 +178,6 @@ const SidebarImpl: React.FC<SidebarProps> = ({
 
     return () => clearTimeout(delayDebounceFn);
   }, [searchQuery, isContentSearch]);
-
-  // 加载归档项目列表
-  const loadArchivedProjects = async () => {
-    try {
-      const data = await invoke<ArchivedProject[]>("get_archived_projects");
-      setArchivedProjects(data);
-    } catch (err) {
-      console.error("Failed to load archived projects:", err);
-    }
-  };
-
-  useEffect(() => {
-    loadArchivedProjects();
-  }, []);
-
-  // 归档项目
-  const handleArchiveProject = async (projectName: string, projectPath: string) => {
-    try {
-      // 收集该项目下的所有会话数据用于归档保存
-      const projectSessions = sessions.filter(s => s.project === projectName);
-      const sessionsJson = JSON.stringify(projectSessions);
-      await invoke("archive_project", { projectName, projectPath, sessionsJson });
-      // 删除该项目下的所有会话
-      const sessionIds = projectSessions.map(s => s.id);
-      if (sessionIds.length > 0) {
-        onDeleteSessionsBatch(sessionIds);
-      }
-      loadArchivedProjects();
-    } catch (err) {
-      notifyError(`归档项目失败：${formatFeedbackError(err)}`);
-    }
-  };
-
-  // 还原归档项目
-  const handleRestoreArchivedProject = async (id: number) => {
-    try {
-      const sessionsJson: string = await invoke("restore_archived_project", { id });
-      // 解析归档时保存的会话数据并重建会话
-      const archivedSessions: Session[] = JSON.parse(sessionsJson || "[]");
-      for (const session of archivedSessions) {
-        await invoke("add_session", { session: { ...session, deleted: 0, deletedAt: null } });
-      }
-      loadArchivedProjects();
-      // 通知父组件重新加载会话列表
-      if (archivedSessions.length > 0) {
-        window.dispatchEvent(new CustomEvent("archive-sessions-restored"));
-      }
-    } catch (err) {
-      notifyError(`还原项目失败：${formatFeedbackError(err)}`);
-    }
-  };
 
   // 当 highlightSessionId 发生变化时，确保它隶属的项目文件夹处于展开状态
   useEffect(() => {
@@ -416,21 +320,6 @@ const SidebarImpl: React.FC<SidebarProps> = ({
       window.removeEventListener("keydown", handleKeyDown, true);
     };
   }, [confirmState]);
-
-  // 监听 ESC 键关闭回收站垃圾桶弹窗
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setShowTrashModal(false);
-      }
-    };
-    if (showTrashModal) {
-      window.addEventListener("keydown", handleKeyDown, true);
-    }
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown, true);
-    };
-  }, [showTrashModal]);
 
   // 当进入编辑状态时，自动获得焦点并选中文本
   useEffect(() => {
@@ -792,7 +681,7 @@ const SidebarImpl: React.FC<SidebarProps> = ({
           })}
         </div>
         
-        {/* 新建会话按钮、机器人按钮与回收站按钮 */}
+        {/* 新建会话按钮、机器人按钮 */}
         <div className="new-session-row" style={{ display: "flex", gap: "6px", width: "100%", marginBottom: "12px" }}>
           <button
             className="new-session-btn"
@@ -825,33 +714,6 @@ const SidebarImpl: React.FC<SidebarProps> = ({
               <rect x="3" y="11" width="18" height="10" rx="2"></rect>
               <circle cx="12" cy="5" r="2"></circle>
               <path d="M12 7v4M8 15h.01M16 15h.01"></path>
-            </svg>
-          </button>
-          <button
-            className="sidebar-action-btn trash-btn"
-            onClick={() => setShowTrashModal(true)}
-            title="回收站"
-            style={{
-              width: "28px",
-              height: "28px",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              backgroundColor: "var(--bg-active-item)",
-              border: "1px solid var(--border-color)",
-              borderRadius: "4px",
-              color: "var(--text-secondary)",
-              cursor: "pointer",
-              transition: "var(--transition-smooth)",
-              padding: 0,
-              boxShadow: "0 1px 3px rgba(0,0,0,0.05)"
-            }}
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="3 6 5 6 21 6"></polyline>
-              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-              <line x1="10" y1="11" x2="10" y2="17"></line>
-              <line x1="14" y1="11" x2="14" y2="17"></line>
             </svg>
           </button>
         </div>
@@ -1077,113 +939,6 @@ const SidebarImpl: React.FC<SidebarProps> = ({
         )}
       </div>
 
-      {/* 归档区 */}
-      <div className="archive-section" ref={archiveSectionRef}>
-        <div 
-          className="archive-header"
-          onClick={() => setShowArchive(!showArchive)}
-          style={{ cursor: "pointer", userSelect: "none", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", borderTop: "1px solid var(--border-color)", backgroundColor: "var(--bg-sidebar)" }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="21 8 21 21 3 21 3 8"></polyline>
-              <rect x="1" y="3" width="22" height="5"></rect>
-              <line x1="10" y1="12" x2="14" y2="12"></line>
-            </svg>
-            <span style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-secondary)" }}>归档区</span>
-            <span style={{ fontSize: "11px", color: "var(--text-secondary)", backgroundColor: "rgba(0,0,0,0.05)", padding: "1px 6px", borderRadius: "10px" }}>{archivedProjects.length}</span>
-          </div>
-          <span className="project-chevron" style={{ transform: showArchive ? "rotate(0deg)" : "rotate(-90deg)", fontSize: "9px", color: "var(--text-secondary)" }}>▼</span>
-        </div>
-
-        {showArchive && (
-          <div className="archive-content" style={{ maxHeight: "200px", overflowY: "auto" }}>
-            {archivedProjects.length === 0 ? (
-              <div style={{ padding: "12px", fontSize: "12px", color: "var(--text-secondary)", textAlign: "center" }}>
-                暂无归档项目
-              </div>
-            ) : (
-              Object.entries(
-                archivedProjects.reduce((acc, proj) => {
-                  if (!acc[proj.archive_month]) acc[proj.archive_month] = [];
-                  acc[proj.archive_month].push(proj);
-                  return acc;
-                }, {} as Record<string, ArchivedProject[]>)
-              ).map(([month, projects]) => (
-                <div key={month} className="archive-month-group">
-                  <div style={{ padding: "4px 12px", fontSize: "11px", fontWeight: 600, color: "var(--text-secondary)", backgroundColor: "var(--bg-active-item)", borderBottom: "1px solid var(--border-color)" }}>
-                    {month}
-                  </div>
-                  {projects.map((proj) => (
-                    <div 
-                      key={proj.id} 
-                      className="archive-item"
-                      style={{ padding: "6px 12px", display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer", transition: "var(--transition-smooth)" }}
-                      onClick={() => {
-                        setConfirmState({
-                          show: true,
-                          title: "还原项目",
-                          message: (
-                            <>
-                              确定要将项目「<strong style={{ color: "var(--color-orange)" }}>{proj.project_name}</strong>」还原到工作区吗？
-                            </>
-                          ),
-                          onConfirm: () => {
-                            handleRestoreArchivedProject(proj.id);
-                            setConfirmState(null);
-                          }
-                        });
-                      }}
-                      onContextMenu={(e) => {
-                        e.preventDefault();
-                        setArchiveContextMenu({ x: e.clientX, y: e.clientY, project: proj });
-                      }}
-                      title={proj.project_path}
-                    >
-                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
-                        </svg>
-                        <span style={{ fontSize: "12px", color: "var(--text-primary)", maxWidth: "120px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{proj.project_name}</span>
-                      </div>
-                      <span style={{ fontSize: "10px", color: "var(--text-secondary)" }} title="点击还原到工作区">还原</span>
-                    </div>
-                  ))}
-                </div>
-              ))
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* 归档项目右键菜单 */}
-      {archiveContextMenu && (
-        <div 
-          className="context-menu"
-          style={{ top: archiveContextMenu.y, left: archiveContextMenu.x }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <button 
-            className="context-menu-item"
-            onClick={() => {
-              handleRestoreArchivedProject(archiveContextMenu.project.id);
-              setArchiveContextMenu(null);
-            }}
-          >
-            还原到工作区
-          </button>
-          <button 
-            className="context-menu-item"
-            onClick={() => {
-              navigator.clipboard.writeText(archiveContextMenu.project.project_path).catch(() => {});
-              setArchiveContextMenu(null);
-            }}
-          >
-            复制路径
-          </button>
-        </div>
-      )}
-
       {/* 9. 自定义高档白天右键上下文悬浮菜单 */}
       {contextMenu && (
         <div
@@ -1355,15 +1110,6 @@ const SidebarImpl: React.FC<SidebarProps> = ({
           >
             复制路径
           </button>
-          <button 
-            className="context-menu-item"
-            onClick={() => {
-              handleArchiveProject(projectContextMenu.projectName, projectContextMenu.projectPath);
-              setProjectContextMenu(null);
-            }}
-          >
-            归档项目
-          </button>
           <div style={{ borderBottom: "1px dashed var(--border-color)", margin: "4px 6px" }} />
           <button 
             className="context-menu-item"
@@ -1420,124 +1166,6 @@ const SidebarImpl: React.FC<SidebarProps> = ({
           </div>
         </div>
       )}
-
-      {/* 🗑️ 回收站垃圾桶弹窗 */}
-      {showTrashModal && (() => {
-        const deletedSessions = sessions.filter((s) => s.deleted === 1 && s.type === selectedAgent);
-        return (
-          <div className="modal-overlay show" style={{ zIndex: 1100 }} onClick={() => setShowTrashModal(false)}>
-            <div className="modal-card trash-modal-card" style={{ maxWidth: "480px", width: "100%" }} onClick={(e) => e.stopPropagation()}>
-              <div className="modal-header">
-                <span className="modal-title" style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="3 6 5 6 21 6"></polyline>
-                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                    <line x1="10" y1="11" x2="10" y2="17"></line>
-                    <line x1="14" y1="11" x2="14" y2="17"></line>
-                  </svg>
-                  垃圾桶
-                  <span className="trash-count-badge">
-                    {deletedSessions.length} 项
-                  </span>
-                </span>
-                <button className="modal-close" onClick={() => setShowTrashModal(false)}>×</button>
-              </div>
-
-              <div className="trash-session-list">
-                {deletedSessions.length === 0 ? (
-                  <div className="trash-empty-placeholder">
-                    垃圾桶空空如也
-                  </div>
-                ) : (
-                  deletedSessions.map((s) => (
-                    <div key={s.id} className="trash-session-item">
-                      <div className="trash-item-info">
-                        <div className="trash-item-name" title={s.name}>
-                          {s.name}
-                        </div>
-                        <div className="trash-item-meta">
-                          <span className="trash-item-project">
-                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
-                            </svg>
-                            {s.project}
-                          </span>
-                          <span className="trash-item-expiry">
-                            7天后删除
-                          </span>
-                        </div>
-                      </div>
-                      <div className="trash-item-actions">
-                        <button
-                          title="恢复会话"
-                          onClick={() => onRestoreSession(s.id)}
-                          className="trash-action-btn recover"
-                        >
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path>
-                          </svg>
-                        </button>
-                        <button
-                          title="彻底删除"
-                          onClick={() => {
-                            setConfirmState({
-                              show: true,
-                              title: "彻底删除会话",
-                              message: "确定要永久删除该会话吗？此操作不可逆。",
-                              isDanger: true,
-                              onConfirm: () => {
-                                onPermanentlyDeleteSession(s.id);
-                                setConfirmState(null);
-                              }
-                            });
-                          }}
-                          className="trash-action-btn hard-delete"
-                        >
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                            <polyline points="3 6 5 6 21 6"></polyline>
-                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                            <line x1="10" y1="11" x2="10" y2="17"></line>
-                            <line x1="14" y1="11" x2="14" y2="17"></line>
-                          </svg>
-                        </button>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-
-              <div className="modal-footer trash-modal-footer">
-                <span className="trash-expiry-tip">
-                  超过 7 天自动永久删除
-                </span>
-                {deletedSessions.length > 0 && (
-                  <button 
-                    className="trash-empty-btn"
-                    onClick={() => {
-                      setConfirmState({
-                        show: true,
-                        title: "清空垃圾桶",
-                        message: "确定要清空垃圾桶中的所有已删除会话吗？此操作不可逆。",
-                        isDanger: true,
-                        onConfirm: () => {
-                          onEmptyTrash();
-                          setConfirmState(null);
-                        }
-                      });
-                    }}
-                  >
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="3 6 5 6 21 6"></polyline>
-                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                    </svg>
-                    清空垃圾桶
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-        );
-      })()}
 
       {/* 全局内容搜索悬浮卡片面板 */}
       {hoveredSession && (

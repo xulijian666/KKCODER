@@ -76,7 +76,7 @@ src/
 | 文件 | 职责 | 经 `index.ts` 导出 |
 |------|------|-------------------|
 | `index.ts` | 组件 barrel | — |
-| `Sidebar.tsx` | 会话列表、搜索、收藏、回收站、Agent 切换 | `Sidebar`, `Session`, `ClaudeIcon`, `PiIcon`, `CodexIcon` |
+| `Sidebar.tsx` | 会话列表、搜索、收藏、Agent 切换 | `Sidebar`, `Session`, `ClaudeIcon`, `PiIcon`, `CodexIcon` |
 | `TerminalTab.tsx` | xterm.js 标准 PTY 标签 | `TerminalTab` |
 | `NativeTerminalTab.tsx` | Claude 兼容/原生终端标签 | `CompatibilityTerminalTab` |
 | `SessionTabBar.tsx` | 顶部标签栏 UI（分屏时双栏对齐；左栏保序待命标签、右栏 secondary） | `SessionTabBar` |
@@ -107,7 +107,7 @@ src/
 | 文件 | 职责 | 经 `index.ts` 导出 |
 |------|------|-------------------|
 | `index.ts` | Hook barrel | — |
-| `useSessions.ts` | 会话 CRUD、启动加载、远程 spawn、回收站 | `useSessions`, `AgentType` |
+| `useSessions.ts` | 会话 CRUD、启动加载、远程 spawn | `useSessions`, `AgentType` |
 | `useSessionTabs.ts` | 标签开闭/拖拽/恢复队列/右键状态 | `useSessionTabs`, `TabContextMenuState` |
 | `useTerminalSplit.ts` | 最多 2 路左右分屏（固定右侧、拖条调比例、拖标签进右屏） | `useTerminalSplit` |
 | `useProjectTreeBinding.ts` | 分屏下项目树绑定会话解析 | `useProjectTreeBinding` |

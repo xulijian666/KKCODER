@@ -63,7 +63,7 @@ struct Session {
     #[serde(default)]
     favorite: i32, // 0 for normal, 1 for favorite
     #[serde(default)]
-    deleted: i32, // 0 for active, 1 for in trash
+    deleted: i32, // 0 for active, 1 for soft-deleted
     #[serde(rename = "deletedAt", skip_serializing_if = "Option::is_none")]
     deleted_at: Option<String>,
 }
@@ -72,16 +72,6 @@ struct Session {
 struct RecentProject {
     name: String,
     path: String,
-}
-
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
-struct ArchivedProject {
-    id: i32,
-    project_name: String,
-    project_path: String,
-    archived_at: String,
-    archive_month: String,
-    sessions_data: String,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -96,15 +86,6 @@ fn get_db_path() -> std::path::PathBuf {
     path.push("kkcoder.db");
     path
 }
-
-// 获取特定会话的缓存备份目录 (放置于系统临时目录，避免触发 Tauri 开发模式下的热重载)
-fn get_shadows_dir(session_id: &str) -> std::path::PathBuf {
-    let mut path = std::env::temp_dir();
-    path.push("kkcoder_shadows");
-    path.push(session_id);
-    path
-}
-
 
 // 初始化本地 SQLite 数据库表结构
 fn initialize_database() -> Result<(), rusqlite::Error> {
@@ -150,25 +131,6 @@ fn initialize_database() -> Result<(), rusqlite::Error> {
         )",
         [],
     )?;
-
-    // 创建归档项目表
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS archived_projects (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            project_name TEXT NOT NULL,
-            project_path TEXT NOT NULL,
-            archived_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            archive_month TEXT NOT NULL,
-            sessions_data TEXT DEFAULT '[]'
-        )",
-        [],
-    )?;
-
-    // 兼容旧表：如果 sessions_data 列不存在则自动添加
-    let _ = conn.execute(
-        "ALTER TABLE archived_projects ADD COLUMN sessions_data TEXT DEFAULT '[]'",
-        [],
-    );
 
     // 远程访问：已配对设备表
     conn.execute(
@@ -311,60 +273,6 @@ fn delete_session(id: String) -> Result<(), String> {
     let db_path = get_db_path();
     let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
     conn.execute("UPDATE sessions SET deleted = 1, deleted_at = datetime('now', 'localtime') WHERE id = ?1", [&id])
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-// 3a. 彻底删除本地持久化的会话 (物理删除)
-#[tauri::command]
-fn delete_session_permanently(id: String) -> Result<(), String> {
-    log_to_file(&format!("delete_session_permanently command called: id={}", id));
-    let db_path = get_db_path();
-    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
-    conn.execute("DELETE FROM sessions WHERE id = ?1", [&id])
-        .map_err(|e| e.to_string())?;
-    
-    // 清理对应的 shadow 文件夹
-    let shadows_dir = get_shadows_dir(&id);
-    if shadows_dir.exists() {
-        let _ = std::fs::remove_dir_all(&shadows_dir);
-    }
-    Ok(())
-}
-
-// 3b. 恢复从回收站中的会话
-#[tauri::command]
-fn restore_session(id: String) -> Result<(), String> {
-    log_to_file(&format!("restore_session command called: id={}", id));
-    let db_path = get_db_path();
-    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
-    conn.execute("UPDATE sessions SET deleted = 0, deleted_at = NULL WHERE id = ?1", [&id])
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-// 3c. 清空回收站
-#[tauri::command]
-fn empty_trash() -> Result<(), String> {
-    log_to_file("empty_trash command called.");
-    let db_path = get_db_path();
-    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
-    
-    // 获取所有待删除会话的 ID 并清理对应的 shadow 文件夹
-    if let Ok(mut stmt) = conn.prepare("SELECT id FROM sessions WHERE deleted = 1") {
-        if let Ok(deleted_ids) = stmt.query_map([], |row| row.get::<_, String>(0)) {
-            for id_res in deleted_ids {
-                if let Ok(id) = id_res {
-                    let shadows_dir = get_shadows_dir(&id);
-                    if shadows_dir.exists() {
-                        let _ = std::fs::remove_dir_all(&shadows_dir);
-                    }
-                }
-            }
-        }
-    }
-
-    conn.execute("DELETE FROM sessions WHERE deleted = 1", [])
         .map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -1516,6 +1424,30 @@ fn save_clipboard_image(bytes: Vec<u8>, filename: String) -> Result<String, Stri
     Ok(file_path.to_string_lossy().to_string())
 }
 
+/// 导出会话终端内容为文本文件，保存至 ~/.kkcoder/session_logs/ 供留档
+#[tauri::command]
+fn save_session_log(session_id: String, content: String) -> Result<String, String> {
+    use std::fs;
+    use std::io::Write;
+
+    let home_dir = dirs::home_dir().ok_or_else(|| "无法定位用户主目录".to_string())?;
+    let export_dir = home_dir.join(".kkcoder").join("session_logs");
+    fs::create_dir_all(&export_dir).map_err(|e| format!("无法创建导出目录: {}", e))?;
+
+    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+    let safe_id: String = session_id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .collect();
+    let file_path = export_dir.join(format!("{}_{}.txt", safe_id, timestamp));
+
+    let mut file = fs::File::create(&file_path).map_err(|e| format!("无法创建导出文件: {}", e))?;
+    file.write_all(content.as_bytes())
+        .map_err(|e| format!("导出写入失败: {}", e))?;
+
+    Ok(file_path.to_string_lossy().to_string())
+}
+
 #[tauri::command]
 fn check_if_paths_exist(text: String) -> bool {
     if text.is_empty() {
@@ -2485,82 +2417,6 @@ async fn llm_rename_sessions(
         Ok(all_results)
     }).await.map_err(|e| format!("Task join error: {}", e))?
 }
-
-// ==================== 归档项目 Tauri Commands ====================
-
-// 归档项目
-#[tauri::command]
-fn archive_project(project_name: String, project_path: String, sessions_json: String) -> Result<(), String> {
-    log_to_file(&format!("archive_project called: name={}, path={}", project_name, project_path));
-    let db_path = get_db_path();
-    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
-    
-    // 获取当前月份作为归档分类
-    let archive_month = chrono::Local::now().format("%Y-%m").to_string();
-    
-    conn.execute(
-        "INSERT INTO archived_projects (project_name, project_path, archive_month, sessions_data) VALUES (?1, ?2, ?3, ?4)",
-        rusqlite::params![project_name, project_path, archive_month, sessions_json],
-    ).map_err(|e| e.to_string())?;
-    
-    log_to_file(&format!("Project archived successfully: {} (month: {})", project_name, archive_month));
-    Ok(())
-}
-
-// 获取所有归档项目
-#[tauri::command]
-fn get_archived_projects() -> Result<Vec<ArchivedProject>, String> {
-    log_to_file("get_archived_projects called.");
-    let db_path = get_db_path();
-    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
-    
-    let mut stmt = conn.prepare(
-        "SELECT id, project_name, project_path, archived_at, archive_month, sessions_data FROM archived_projects ORDER BY archived_at DESC"
-    ).map_err(|e| e.to_string())?;
-    
-    let rows = stmt.query_map([], |row| {
-        Ok(ArchivedProject {
-            id: row.get(0)?,
-            project_name: row.get(1)?,
-            project_path: row.get(2)?,
-            archived_at: row.get(3)?,
-            archive_month: row.get(4)?,
-            sessions_data: row.get::<_, Option<String>>(5)?.unwrap_or_else(|| "[]".to_string()),
-        })
-    }).map_err(|e| e.to_string())?;
-    
-    let mut projects = Vec::new();
-    for row in rows {
-        projects.push(row.map_err(|e| e.to_string())?);
-    }
-    
-    log_to_file(&format!("Found {} archived projects.", projects.len()));
-    Ok(projects)
-}
-
-// 还原归档项目
-#[tauri::command]
-fn restore_archived_project(id: i32) -> Result<String, String> {
-    log_to_file(&format!("restore_archived_project called: id={}", id));
-    let db_path = get_db_path();
-    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
-    
-    // 先获取 sessions_data，再删除归档记录
-    let sessions_data: String = conn.query_row(
-        "SELECT COALESCE(sessions_data, '[]') FROM archived_projects WHERE id = ?1",
-        rusqlite::params![id],
-        |row| row.get(0),
-    ).map_err(|e| e.to_string())?;
-    
-    conn.execute(
-        "DELETE FROM archived_projects WHERE id = ?1",
-        rusqlite::params![id],
-    ).map_err(|e| e.to_string())?;
-    
-    log_to_file(&format!("Archived project restored (deleted) successfully: id={}", id));
-    Ok(sessions_data)
-}
-
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct ProjectFileEntry {
@@ -3615,9 +3471,6 @@ pub fn run() {
             get_sessions,
             add_session,
             delete_session,
-            delete_session_permanently,
-            restore_session,
-            empty_trash,
             cleanup_stale_sessions,
             cleanup_empty_sessions,
             get_recent_projects,
@@ -3641,13 +3494,11 @@ pub fn run() {
             create_directory,
             play_notification_sound,
             save_clipboard_image,
+            save_session_log,
             read_markdown_file,
             write_markdown_file,
             get_claude_version,
             check_if_paths_exist,
-            archive_project,
-            get_archived_projects,
-            restore_archived_project,
             auto_rename_sessions,
             llm_rename_sessions,
             search_session_contents,
