@@ -35,6 +35,22 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/**
+ * 目录锚点跳转：只平滑滚动正文内容列，目录列保持不动。
+ * 顶距留 12px 与 .md-h 的 scroll-margin-top 一致，避免标题贴顶。
+ */
+function scrollToMarkdownHeading(id: string): void {
+  const content = document.querySelector<HTMLElement>(".preview-markdown-content");
+  const target = document.getElementById(id);
+  if (!content || !target) return;
+  const contentRect = content.getBoundingClientRect();
+  const targetRect = target.getBoundingClientRect();
+  content.scrollTo({
+    top: content.scrollTop + (targetRect.top - contentRect.top) - 12,
+    behavior: "smooth",
+  });
+}
+
 export type PreviewMode = "peek" | "dock" | "float";
 
 export interface FloatRect {
@@ -971,11 +987,7 @@ export const FilePreviewPanel: React.FC<FilePreviewPanelProps> = ({
                       type="button"
                       className={`preview-toc-item depth-${Math.min(entry.depth, 3)}`}
                       title={entry.text}
-                      onClick={() => {
-                        document
-                          .getElementById(entry.id)
-                          ?.scrollIntoView({ block: "start" });
-                      }}
+                      onClick={() => scrollToMarkdownHeading(entry.id)}
                     >
                       {entry.text}
                     </button>

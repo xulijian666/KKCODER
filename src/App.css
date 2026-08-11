@@ -3900,19 +3900,27 @@ body.preview-resizing .preview-resize-handle::after {
 /* ========== Markdown 预览（.preview-markdown-content / .markdown-body） ========== */
 .preview-markdown-layout {
   display: flex;
-  align-items: flex-start;
+  align-items: stretch;
   gap: 16px;
+  height: 100%;
 }
 
+/* 目录是独立固定列，不随正文滚动，点击跳转后依然保持在视口内 */
 .preview-toc {
-  position: sticky;
-  top: 0;
   flex-shrink: 0;
+  align-self: flex-start;
   width: 172px;
-  max-height: 72vh;
+  max-height: 100%;
   overflow-y: auto;
   padding: 4px 14px 12px 0;
   border-right: 1px solid var(--border-color);
+}
+
+/* 正文内容在自己的滚动容器内滑动：目录点击后内容滑到对应标题，目录不消失 */
+.preview-markdown-content {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
 }
 
 .preview-toc-title {
