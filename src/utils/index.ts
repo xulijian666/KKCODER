@@ -23,12 +23,25 @@ export {
   shouldUseNativeTerminal,
   type ClaudeTerminalMode,
 } from "./terminalMode";
+export {
+  CLAUDE_INTERACTION_MODE_KEY,
+  CLAUDE_INTERACTION_MODE_CHANGE_EVENT,
+  resolveClaudeInteractionMode,
+  shouldUseGuiChat,
+  type ClaudeInteractionMode,
+} from "./interactionMode";
+export {
+  detectChatCompletionTrigger,
+  replaceChatCompletionTrigger,
+  type ChatCompletionTrigger,
+} from "./chatCompletion";
 export { resolveTerminalWriteCommand } from "./terminalTransport";
 export {
   clearSessionQueue,
   enqueueSessionTask,
   getSessionQueue,
   removeSessionTask,
+  MAX_SESSION_QUEUE_SIZE,
   type QueueBySession,
 } from "./sessionQueue";
 export {

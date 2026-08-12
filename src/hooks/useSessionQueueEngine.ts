@@ -4,6 +4,7 @@ import {
   enqueueSessionTask,
   getSessionQueue,
   removeSessionTask,
+  MAX_SESSION_QUEUE_SIZE,
   type QueueBySession,
 } from "../utils/sessionQueue";
 import { generateUUID } from "../utils/uuid";
@@ -55,8 +56,8 @@ export function useSessionQueueEngine({
       setShowQueueModal(false);
       return;
     }
-    if (queueModalQueue.length >= 2) {
-      notifyWarning("队列已满（2/2）");
+    if (queueModalQueue.length >= MAX_SESSION_QUEUE_SIZE) {
+      notifyWarning(`队列已满（${MAX_SESSION_QUEUE_SIZE}/${MAX_SESSION_QUEUE_SIZE}）`);
       return;
     }
     setQueueBySession((previous) =>

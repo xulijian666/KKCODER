@@ -7,9 +7,10 @@ use std::io::Write;
 
 mod remote;
 mod native_terminal;
+mod claude_chat;
 
 // 极其可靠的本地调试文件日志输出器，自动写入 kkcoder_debug.log 以便于闪退后追溯
-fn log_to_file(message: &str) {
+pub(crate) fn log_to_file(message: &str) {
     use std::fs::OpenOptions;
     use std::io::Write;
     if let Ok(mut file) = OpenOptions::new()
@@ -913,6 +914,10 @@ fn spawn_terminal(
 
     log_to_file(&format!("Setting slave working directory to: {}", directory));
     cmd.cwd(std::path::PathBuf::from(&directory));
+    // KKCoder owns this PTY's color capability. Do not inherit host-level
+    // opt-outs (for example Codex launches with NO_COLOR=1).
+    cmd.env_remove("NO_COLOR");
+    cmd.env_remove("NODE_DISABLE_COLORS");
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
     cmd.env("TERM_PROGRAM", "KKCoder");
@@ -3333,6 +3338,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(pty_manager)
         .manage(native_terminal::manager::NativeTerminalManager::default())
+        .manage(claude_chat::ClaudeChatManager::default())
         .manage(remote::frp::FrpManager::new())
         .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
@@ -3463,6 +3469,14 @@ pub fn run() {
             native_terminal::write_to_compat_terminal,
             native_terminal::resize_compat_terminal,
             native_terminal::close_compat_terminal,
+            claude_chat::chat_send_message,
+            claude_chat::chat_cancel,
+            claude_chat::chat_get_history,
+            claude_chat::chat_answer_question,
+            claude_chat::chat_reset_context,
+            claude_chat::chat_get_context_usage,
+            claude_chat::catalog::chat_search_project_entries,
+            claude_chat::catalog::chat_get_slash_items,
             rename_session,
             toggle_favorite,
             touch_session_last_user_message,

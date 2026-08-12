@@ -29,6 +29,8 @@ export interface PreviewContextMenuState {
   y: number;
   startLine: number;
   endLine: number;
+  /** 预览模式下的选中文本：存在时以文本形式插入对话，而非行号标签 */
+  selectedText?: string;
 }
 
 function escapeRegExp(value: string): string {
@@ -38,6 +40,7 @@ function escapeRegExp(value: string): string {
 /**
  * 目录锚点跳转：只平滑滚动正文内容列，目录列保持不动。
  * 顶距留 12px 与 .md-h 的 scroll-margin-top 一致，避免标题贴顶。
+ * 跳转后给目标标题加闪烁高亮，提示当前所在位置。
  */
 function scrollToMarkdownHeading(id: string): void {
   const content = document.querySelector<HTMLElement>(".preview-markdown-content");
@@ -49,6 +52,10 @@ function scrollToMarkdownHeading(id: string): void {
     top: content.scrollTop + (targetRect.top - contentRect.top) - 12,
     behavior: "smooth",
   });
+  // 移除后强制 reflow 再添加，重复点击同一标题也能重启动画
+  target.classList.remove("md-heading-flash");
+  void target.offsetWidth;
+  target.classList.add("md-heading-flash");
 }
 
 export type PreviewMode = "peek" | "dock" | "float";
@@ -60,6 +67,9 @@ export interface FloatRect {
   height: number;
 }
 
+/** float 卡片缩放方向：n/s/e/w 四边，ne/nw/se/sw 四角 */
+export type FloatResizeDirection = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
+
 const PREVIEW_MODE_STORAGE_KEY = "kkcoder_setting_preview_mode";
 const PREVIEW_WIDTH_STORAGE_KEY = "kkcoder_setting_preview_width";
 const PREVIEW_FLOAT_RECT_STORAGE_KEY = "kkcoder_setting_preview_float_rect";
@@ -70,6 +80,8 @@ const PREVIEW_RATIO_MAX = 0.9;
 const PREVIEW_RATIO_MAXIMIZED = 0.92;
 const PREVIEW_FLOAT_MIN_WIDTH = 320;
 const PREVIEW_FLOAT_MIN_HEIGHT = 200;
+/** 加载时至少保留这段可见边缘，避免卡片完全移出屏幕后无法找回 */
+const PREVIEW_FLOAT_SLIVER = 48;
 
 function clampPreviewRatio(value: number): number {
   return Math.max(PREVIEW_RATIO_MIN, Math.min(PREVIEW_RATIO_MAX, value));
@@ -77,11 +89,63 @@ function clampPreviewRatio(value: number): number {
 
 function clampFloatRect(rect: FloatRect): FloatRect {
   return {
-    x: Math.max(0, Math.min(rect.x, Math.max(0, window.innerWidth - rect.width))),
-    y: Math.max(0, Math.min(rect.y, Math.max(0, window.innerHeight - 40))),
-    width: Math.max(PREVIEW_FLOAT_MIN_WIDTH, Math.min(window.innerWidth, rect.width)),
-    height: Math.max(PREVIEW_FLOAT_MIN_HEIGHT, Math.min(window.innerHeight, rect.height)),
+    x: Math.max(
+      PREVIEW_FLOAT_SLIVER - rect.width,
+      Math.min(rect.x, window.innerWidth - PREVIEW_FLOAT_SLIVER),
+    ),
+    y: Math.max(
+      PREVIEW_FLOAT_SLIVER - rect.height,
+      Math.min(rect.y, window.innerHeight - PREVIEW_FLOAT_SLIVER),
+    ),
+    width: Math.max(PREVIEW_FLOAT_MIN_WIDTH, rect.width),
+    height: Math.max(PREVIEW_FLOAT_MIN_HEIGHT, rect.height),
   };
+}
+
+function floatResizeCursor(direction: FloatResizeDirection): string {
+  switch (direction) {
+    case "n":
+    case "s":
+      return "ns-resize";
+    case "e":
+    case "w":
+      return "ew-resize";
+    case "ne":
+    case "sw":
+      return "nesw-resize";
+    case "nw":
+    case "se":
+      return "nwse-resize";
+  }
+}
+
+/** 按缩放方向计算新矩形：锚定对边，只做最小尺寸钳制，允许卡片超出屏幕 */
+function computeFloatResizeRect(
+  start: FloatRect,
+  dx: number,
+  dy: number,
+  direction: FloatResizeDirection,
+): FloatRect {
+  let { x, y, width, height } = start;
+  if (direction.includes("e")) width = start.width + dx;
+  if (direction.includes("w")) {
+    width = start.width - dx;
+    x = start.x + dx;
+  }
+  if (direction.includes("s")) height = start.height + dy;
+  if (direction.includes("n")) {
+    height = start.height - dy;
+    y = start.y + dy;
+  }
+  if (width < PREVIEW_FLOAT_MIN_WIDTH) {
+    if (direction.includes("w")) x = start.x + start.width - PREVIEW_FLOAT_MIN_WIDTH;
+    width = PREVIEW_FLOAT_MIN_WIDTH;
+  }
+  if (height < PREVIEW_FLOAT_MIN_HEIGHT) {
+    if (direction.includes("n")) y = start.y + start.height - PREVIEW_FLOAT_MIN_HEIGHT;
+    height = PREVIEW_FLOAT_MIN_HEIGHT;
+  }
+  return { x, y, width, height };
 }
 
 function readStoredPreviewMode(): PreviewMode {
@@ -186,7 +250,7 @@ export function useFilePreview({
   onInsertConversationTag,
 }: UseFilePreviewOptions) {
   const [previewFile, setPreviewFile] = useState<PreviewFileState | null>(null);
-  const [markdownMode, setMarkdownMode] = useState<"preview" | "source">("source");
+  const [markdownMode, setMarkdownMode] = useState<"preview" | "source">("preview");
   const [previewFontFamily, setPreviewFontFamily] = useState<string>(() => {
     return localStorage.getItem("kkcoder_setting_preview_font_family") || "monospace";
   });
@@ -221,10 +285,13 @@ export function useFilePreview({
   const [isFloatDragging, setIsFloatDragging] = useState(false);
   const floatDragRef = useRef<{
     mode: "move" | "resize";
+    direction?: FloatResizeDirection;
     startClientX: number;
     startClientY: number;
     startRect: FloatRect;
   } | null>(null);
+  // 右键打开菜单时保存选区，稍后重新应用，保证选区高亮在菜单打开期间不消失
+  const previewMenuSelectionRef = useRef<Range | null>(null);
 
   useEffect(() => {
     localStorage.setItem(PREVIEW_MODE_STORAGE_KEY, previewMode);
@@ -242,7 +309,7 @@ export function useFilePreview({
 
   const closePreview = useCallback(() => {
     setPreviewFile(null);
-    setMarkdownMode("source");
+    setMarkdownMode("preview");
     returnFocusToActiveTerminal();
   }, []);
 
@@ -324,24 +391,31 @@ export function useFilePreview({
     setIsFloatDragging(true);
   }, [floatRect]);
 
-  const startFloatResize = useCallback((event: ReactMouseEvent | ReactPointerEvent) => {
-    event.preventDefault();
-    event.stopPropagation();
-    floatDragRef.current = {
-      mode: "resize",
-      startClientX: event.clientX,
-      startClientY: event.clientY,
-      startRect: floatRect,
-    };
-    setIsFloatDragging(true);
-  }, [floatRect]);
+  const startFloatResize = useCallback(
+    (event: ReactMouseEvent | ReactPointerEvent, direction: FloatResizeDirection) => {
+      event.preventDefault();
+      event.stopPropagation();
+      floatDragRef.current = {
+        mode: "resize",
+        direction,
+        startClientX: event.clientX,
+        startClientY: event.clientY,
+        startRect: floatRect,
+      };
+      setIsFloatDragging(true);
+    },
+    [floatRect],
+  );
 
   useEffect(() => {
     if (!isFloatDragging) return;
 
     document.body.style.userSelect = "none";
+    const dragStart = floatDragRef.current;
     document.body.style.cursor =
-      floatDragRef.current?.mode === "move" ? "grabbing" : "nwse-resize";
+      dragStart?.mode === "move"
+        ? "grabbing"
+        : floatResizeCursor(dragStart?.direction ?? "se");
     document.body.classList.add("preview-resizing");
 
     const handlePointerMove = (event: PointerEvent) => {
@@ -350,25 +424,14 @@ export function useFilePreview({
       const dx = event.clientX - drag.startClientX;
       const dy = event.clientY - drag.startClientY;
       if (drag.mode === "move") {
-        const x = Math.max(
-          0,
-          Math.min(drag.startRect.x + dx, Math.max(0, window.innerWidth - drag.startRect.width)),
-        );
-        const y = Math.max(
-          0,
-          Math.min(drag.startRect.y + dy, Math.max(0, window.innerHeight - 40)),
-        );
-        setFloatRect({ ...drag.startRect, x, y });
+        // 移动不限制在屏幕内，允许卡片拖出屏幕
+        setFloatRect({
+          ...drag.startRect,
+          x: drag.startRect.x + dx,
+          y: drag.startRect.y + dy,
+        });
       } else {
-        const width = Math.max(
-          PREVIEW_FLOAT_MIN_WIDTH,
-          Math.min(window.innerWidth - drag.startRect.x, drag.startRect.width + dx),
-        );
-        const height = Math.max(
-          PREVIEW_FLOAT_MIN_HEIGHT,
-          Math.min(window.innerHeight - drag.startRect.y, drag.startRect.height + dy),
-        );
-        setFloatRect({ x: drag.startRect.x, y: drag.startRect.y, width, height });
+        setFloatRect(computeFloatResizeRect(drag.startRect, dx, dy, drag.direction ?? "se"));
       }
     };
 
@@ -465,6 +528,22 @@ export function useFilePreview({
     return () => window.removeEventListener("click", closeMenu);
   }, []);
 
+  // 菜单打开时重新应用右键时保存的选区，保证选区高亮不因打开菜单而消失
+  useEffect(() => {
+    if (!previewContextMenu) return;
+    const range = previewMenuSelectionRef.current;
+    if (!range) return;
+    const selection = window.getSelection();
+    if (!selection) return;
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }, [previewContextMenu]);
+
+  const clearPreviewSelection = useCallback(() => {
+    previewMenuSelectionRef.current = null;
+    window.getSelection()?.removeAllRanges();
+  }, []);
+
   useEffect(() => {
     if (matchedLines.length > 0 && activeMatchIndex >= 0 && activeMatchIndex < matchedLines.length) {
       const lineNumber = matchedLines[activeMatchIndex];
@@ -476,11 +555,18 @@ export function useFilePreview({
   const insertSelectionToConversation = useCallback(
     (selection: Selection) => {
       if (!previewFile || !activeSessionId) return;
+      // 预览模式渲染结果与源码行号并不一一对应，直接以选中文本加入对话（等价复制粘贴）
+      if (markdownMode === "preview" && previewFile.path.toLowerCase().endsWith(".md")) {
+        const text = selection.toString().trim();
+        if (!text) return;
+        onInsertConversationTag(text);
+        return;
+      }
       const range = getSelectionLineRange(selection);
       if (!range) return;
       onInsertConversationTag(buildConversationTag(previewFile.path, range.startLine, range.endLine));
     },
-    [activeSessionId, onInsertConversationTag, previewFile],
+    [activeSessionId, markdownMode, onInsertConversationTag, previewFile],
   );
 
   useEffect(() => {
@@ -556,7 +642,7 @@ export function useFilePreview({
   const openFile = useCallback(
     async (relativePath: string) => {
       if (!projectPath) return;
-      setMarkdownMode("source");
+      setMarkdownMode("preview");
 
       if (relativePath.toLowerCase().endsWith(".svg")) {
         setPreviewFile({
@@ -649,13 +735,29 @@ export function useFilePreview({
       event.preventDefault();
       event.stopPropagation();
 
-      const lineRange = getSelectionLineRange(selection);
-      if (!lineRange) return;
+      // 保存选区快照，菜单打开期间重新应用，避免选区高亮消失
+      previewMenuSelectionRef.current = range.cloneRange();
 
       let menuX = event.clientX;
       let menuY = event.clientY;
       if (menuX + 160 > window.innerWidth) menuX = Math.max(0, menuX - 160);
 
+      // 预览模式：渲染结果与源码行号不一一对应，菜单携带选中文本而非行号
+      if (markdownMode === "preview" && previewFile.path.toLowerCase().endsWith(".md")) {
+        const selectedText = selection.toString().trim();
+        if (!selectedText) return;
+        setPreviewContextMenu({
+          x: menuX,
+          y: menuY,
+          startLine: 0,
+          endLine: 0,
+          selectedText,
+        });
+        return;
+      }
+
+      const lineRange = getSelectionLineRange(selection);
+      if (!lineRange) return;
       setPreviewContextMenu({
         x: menuX,
         y: menuY,
@@ -663,7 +765,7 @@ export function useFilePreview({
         endLine: lineRange.endLine,
       });
     },
-    [previewFile],
+    [markdownMode, previewFile],
   );
 
   const highlightedData = useMemo(() => {
@@ -731,6 +833,7 @@ export function useFilePreview({
       previewFile,
       onInsertConversationTag,
       onClose: () => setPreviewContextMenu(null),
+      onClearSelection: clearPreviewSelection,
     },
   };
 }
@@ -771,7 +874,7 @@ export interface FilePreviewPanelProps {
   onStartPreviewResize: (event: ReactMouseEvent | ReactPointerEvent) => void;
   onResetPreviewRatio: () => void;
   onStartFloatDrag: (event: ReactMouseEvent | ReactPointerEvent) => void;
-  onStartFloatResize: (event: ReactMouseEvent | ReactPointerEvent) => void;
+  onStartFloatResize: (event: ReactMouseEvent | ReactPointerEvent, direction: FloatResizeDirection) => void;
 }
 
 function renderHighlightedLineText(lineText: string, fileSearchQuery: string) {
@@ -1131,11 +1234,45 @@ export const FilePreviewPanel: React.FC<FilePreviewPanelProps> = ({
       )}
 
       {previewMode === "float" && (
-        <div
-          className="preview-corner-handle"
-          onPointerDown={onStartFloatResize}
-          title="拖拽调整卡片大小"
-        />
+        <>
+          <div
+            className="preview-float-handle preview-float-handle-n"
+            onPointerDown={(event) => onStartFloatResize(event, "n")}
+            title="拖拽调整高度"
+          />
+          <div
+            className="preview-float-handle preview-float-handle-s"
+            onPointerDown={(event) => onStartFloatResize(event, "s")}
+            title="拖拽调整高度"
+          />
+          <div
+            className="preview-float-handle preview-float-handle-e"
+            onPointerDown={(event) => onStartFloatResize(event, "e")}
+            title="拖拽调整宽度"
+          />
+          <div
+            className="preview-float-handle preview-float-handle-w"
+            onPointerDown={(event) => onStartFloatResize(event, "w")}
+            title="拖拽调整宽度"
+          />
+          <div
+            className="preview-float-corner preview-float-corner-ne"
+            onPointerDown={(event) => onStartFloatResize(event, "ne")}
+          />
+          <div
+            className="preview-float-corner preview-float-corner-nw"
+            onPointerDown={(event) => onStartFloatResize(event, "nw")}
+          />
+          <div
+            className="preview-corner-handle"
+            onPointerDown={(event) => onStartFloatResize(event, "se")}
+            title="拖拽调整卡片大小"
+          />
+          <div
+            className="preview-float-corner preview-float-corner-sw"
+            onPointerDown={(event) => onStartFloatResize(event, "sw")}
+          />
+        </>
       )}
     </div>
   );
@@ -1146,6 +1283,7 @@ export interface FilePreviewContextMenuProps {
   previewFile: PreviewFileState | null;
   onInsertConversationTag: (text: string) => void;
   onClose: () => void;
+  onClearSelection: () => void;
 }
 
 export const FilePreviewContextMenu: React.FC<FilePreviewContextMenuProps> = ({
@@ -1153,6 +1291,7 @@ export const FilePreviewContextMenu: React.FC<FilePreviewContextMenuProps> = ({
   previewFile,
   onInsertConversationTag,
   onClose,
+  onClearSelection,
 }) => {
   if (!previewContextMenu || !previewFile) return null;
 
@@ -1169,13 +1308,18 @@ export const FilePreviewContextMenu: React.FC<FilePreviewContextMenuProps> = ({
     >
       <button
         onClick={() => {
-          onInsertConversationTag(
-            buildConversationTag(
-              previewFile.path,
-              previewContextMenu.startLine,
-              previewContextMenu.endLine,
-            ),
-          );
+          if (previewContextMenu.selectedText) {
+            onInsertConversationTag(previewContextMenu.selectedText);
+          } else {
+            onInsertConversationTag(
+              buildConversationTag(
+                previewFile.path,
+                previewContextMenu.startLine,
+                previewContextMenu.endLine,
+              ),
+            );
+          }
+          onClearSelection();
           onClose();
         }}
       >

@@ -5,6 +5,9 @@ export interface QueueTask {
 
 export type QueueBySession = Record<string, QueueTask[]>;
 
+/** 每个会话的任务队列上限 */
+export const MAX_SESSION_QUEUE_SIZE = 10;
+
 export function getSessionQueue(state: QueueBySession, sessionId: string): QueueTask[] {
   return state[sessionId] ?? [];
 }
@@ -13,7 +16,7 @@ export function enqueueSessionTask(
   state: QueueBySession,
   sessionId: string,
   task: QueueTask,
-  limit = 2,
+  limit = MAX_SESSION_QUEUE_SIZE,
 ): QueueBySession {
   const queue = getSessionQueue(state, sessionId);
   if (queue.length >= limit) return state;

@@ -5,6 +5,7 @@ import {
   type Session,
   TerminalTab,
   CompatibilityTerminalTab,
+  ChatTab,
   NewSessionModal,
   SettingsModal,
   MdEditorModal,
@@ -31,7 +32,13 @@ import {
   shouldUseNativeTerminal,
   type ClaudeTerminalMode,
   resolveTerminalWriteCommand,
+  CLAUDE_INTERACTION_MODE_KEY,
+  CLAUDE_INTERACTION_MODE_CHANGE_EVENT,
+  resolveClaudeInteractionMode,
+  shouldUseGuiChat,
+  type ClaudeInteractionMode,
   getSessionQueue,
+  MAX_SESSION_QUEUE_SIZE,
   log,
   getFolderName,
   ENABLED_AGENTS_CHANGE_EVENT,
@@ -115,6 +122,10 @@ function App() {
     return resolveClaudeTerminalMode(localStorage.getItem(CLAUDE_TERMINAL_MODE_KEY));
   });
   const [terminalModeBySession, setTerminalModeBySession] = useState<Record<string, ClaudeTerminalMode>>({});
+  const [claudeInteractionMode, setClaudeInteractionMode] = useState<ClaudeInteractionMode>(() => {
+    return resolveClaudeInteractionMode(localStorage.getItem(CLAUDE_INTERACTION_MODE_KEY));
+  });
+  const [interactionModeBySession, setInteractionModeBySession] = useState<Record<string, ClaudeInteractionMode>>({});
   const [isDragOverWorkspace, setIsDragOverWorkspace] = useState(false);
   const [showProjectTree, setShowProjectTree] = useState<boolean>(() => {
     return localStorage.getItem("kkcoder_show_project_tree") === "true";
@@ -375,6 +386,17 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const handleInteractionModeChange = (event: Event) => {
+      const mode = resolveClaudeInteractionMode((event as CustomEvent<string>).detail);
+      setClaudeInteractionMode(mode);
+    };
+    window.addEventListener(CLAUDE_INTERACTION_MODE_CHANGE_EVENT, handleInteractionModeChange);
+    return () => {
+      window.removeEventListener(CLAUDE_INTERACTION_MODE_CHANGE_EVENT, handleInteractionModeChange);
+    };
+  }, []);
+
+  useEffect(() => {
     setTerminalModeBySession((previous) => {
       const next: Record<string, ClaudeTerminalMode> = {};
       for (const sessionId of openTabIds) {
@@ -383,6 +405,16 @@ function App() {
       return next;
     });
   }, [openTabIds, claudeTerminalMode]);
+
+  useEffect(() => {
+    setInteractionModeBySession((previous) => {
+      const next: Record<string, ClaudeInteractionMode> = {};
+      for (const sessionId of openTabIds) {
+        next[sessionId] = previous[sessionId] ?? claudeInteractionMode;
+      }
+      return next;
+    });
+  }, [openTabIds, claudeInteractionMode]);
 
   const triggerAutoRenameRef = useRef<(source: string) => void>(() => {});
 
@@ -527,8 +559,8 @@ function App() {
     if (!activeSessionId) return;
     const isBusy = sessionBusy[activeSessionId] || false;
     if (isBusy) {
-      if (getSessionQueue(queueBySession, activeSessionId).length >= 2) {
-        notifyWarning("队列已满（2/2），请先清空或等待执行");
+      if (getSessionQueue(queueBySession, activeSessionId).length >= MAX_SESSION_QUEUE_SIZE) {
+        notifyWarning(`队列已满（${MAX_SESSION_QUEUE_SIZE}/${MAX_SESSION_QUEUE_SIZE}），请先清空或等待执行`);
         return;
       }
       enqueuePrompt(activeSessionId, content);
@@ -562,11 +594,17 @@ function App() {
   const tabRuntimeBySession = useMemo(() => {
     const map = new Map<
       string,
-      { shouldResume: boolean; useNativeTerminal: boolean; terminalMode: ClaudeTerminalMode }
+      {
+        shouldResume: boolean;
+        useNativeTerminal: boolean;
+        terminalMode: ClaudeTerminalMode;
+        useGuiChat: boolean;
+      }
     >();
     for (const session of sessions) {
       if (!openTabIds.includes(session.id)) continue;
       const terminalMode = terminalModeBySession[session.id] ?? claudeTerminalMode;
+      const interactionMode = interactionModeBySession[session.id] ?? claudeInteractionMode;
       map.set(session.id, {
         shouldResume: shouldResumeSession(session.id, newSessionIds, localStorage, {
           agentType: session.type,
@@ -574,10 +612,11 @@ function App() {
         }),
         useNativeTerminal: shouldUseNativeTerminal(session.type, terminalMode),
         terminalMode,
+        useGuiChat: shouldUseGuiChat(session.type, interactionMode),
       });
     }
     return map;
-  }, [sessions, openTabIds, newSessionIds, terminalModeBySession, claudeTerminalMode]);
+  }, [sessions, openTabIds, newSessionIds, terminalModeBySession, claudeTerminalMode, interactionModeBySession, claudeInteractionMode]);
 
   useEffect(() => {
     const aside = projectTreeAsideRef.current;
@@ -990,6 +1029,7 @@ function App() {
                     const shouldResume = runtime?.shouldResume ?? false;
                     const useNativeTerminal =
                       runtime?.useNativeTerminal ?? false;
+                    const useGuiChat = runtime?.useGuiChat ?? false;
                     return (
                       <div
                         key={s.id}
@@ -1034,7 +1074,23 @@ function App() {
                           }
                         }}
                       >
-                        {useNativeTerminal ? (
+                        {useGuiChat ? (
+                          <ChatTab
+                            sessionId={s.id}
+                            directory={s.path}
+                            agentSessionId={s.agentSessionId}
+                            isActive={isActive}
+                            onSpawned={() => {
+                              log(`ChatTab spawn resolved for session: ${s.id}. Removing from newSessionIds...`);
+                              setNewSessionIds((prev) => prev.filter((nid) => nid !== s.id));
+                            }}
+                            onStateChange={(busy) => {
+                              setSessionBusy(prev => ({ ...prev, [s.id]: busy }));
+                            }}
+                            onCommandComplete={() => handleCommandComplete(s.id)}
+                            onUserSubmittedInput={handleUserSubmittedInputWithRenameReset}
+                          />
+                        ) : useNativeTerminal ? (
                           <CompatibilityTerminalTab
                             sessionId={s.id}
                             directory={s.path}
@@ -1076,7 +1132,7 @@ function App() {
                             onRenameSession={handleRenameSession}
                           />
                         )}
-                        {sessionBusy[s.id] && (
+                        {!useGuiChat && sessionBusy[s.id] && (
                           <div className="terminal-thinking-badge">
                             <span className="thinking-dot-pulse"></span>
                             <span className="thinking-text">AI 正在思考...</span>

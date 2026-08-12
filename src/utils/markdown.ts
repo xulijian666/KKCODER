@@ -7,27 +7,27 @@
 
 import { Marked, type Tokens } from "marked";
 import Prism from "prismjs";
-import { MAX_MARKDOWN_SIZE, MAX_MARKDOWN_LINES, slugify } from "./markdownToc";
+import { MAX_MARKDOWN_SIZE, MAX_MARKDOWN_LINES, slugify } from "./markdownToc.ts";
 
-export { buildMarkdownToc, type MarkdownTocEntry } from "./markdownToc";
+export { buildMarkdownToc, type MarkdownTocEntry } from "./markdownToc.ts";
 
 // 与 highlighter.ts 对齐的常用语言（Prism 需先注册）
-import "prismjs/components/prism-markup";
-import "prismjs/components/prism-css";
-import "prismjs/components/prism-clike";
-import "prismjs/components/prism-javascript";
-import "prismjs/components/prism-typescript";
-import "prismjs/components/prism-java";
-import "prismjs/components/prism-python";
-import "prismjs/components/prism-go";
-import "prismjs/components/prism-rust";
-import "prismjs/components/prism-json";
-import "prismjs/components/prism-yaml";
-import "prismjs/components/prism-toml";
-import "prismjs/components/prism-bash";
-import "prismjs/components/prism-sql";
-import "prismjs/components/prism-markdown";
-import "prismjs/components/prism-diff";
+import "prismjs/components/prism-markup.js";
+import "prismjs/components/prism-css.js";
+import "prismjs/components/prism-clike.js";
+import "prismjs/components/prism-javascript.js";
+import "prismjs/components/prism-typescript.js";
+import "prismjs/components/prism-java.js";
+import "prismjs/components/prism-python.js";
+import "prismjs/components/prism-go.js";
+import "prismjs/components/prism-rust.js";
+import "prismjs/components/prism-json.js";
+import "prismjs/components/prism-yaml.js";
+import "prismjs/components/prism-toml.js";
+import "prismjs/components/prism-bash.js";
+import "prismjs/components/prism-sql.js";
+import "prismjs/components/prism-markdown.js";
+import "prismjs/components/prism-diff.js";
 
 const LANG_ALIASES: Record<string, string> = {
   js: "javascript",
@@ -58,6 +58,14 @@ function escapeHtml(text: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function sanitizeChatUrl(rawUrl: string): string | null {
+  const value = rawUrl.trim();
+  if (/^(https?:|mailto:)/i.test(value) || value.startsWith("#")) {
+    return value;
+  }
+  return null;
 }
 
 function resolveLang(raw?: string): string {
@@ -258,6 +266,64 @@ export function renderMarkdownToHtml(mdText: string): string {
     return html;
   } catch (err) {
     console.error("Markdown 渲染失败:", err);
+    return (
+      `<pre class="md-pre md-fallback"><code class="md-code">` +
+      escapeHtml(mdText) +
+      `</code></pre>`
+    );
+  }
+}
+
+/**
+ * 聊天场景专用渲染：把 Markdown 中的**原始 HTML** 转义为纯文本，
+ * 防止 LLM 输出（可能含 prompt injection）注入可执行脚本。
+ * 相比 renderMarkdownToHtml，唯一差异是 renderer.html 被覆盖为转义输出。
+ */
+const chatMarkedInstance = (() => {
+  const marked = createMarked();
+  marked.use({
+    renderer: {
+      html(token: Tokens.HTML | Tokens.Tag): string {
+        const text = "text" in token ? String(token.text ?? "") : "";
+        return `<p class="md-p">${escapeHtml(text)}</p>\n`;
+      },
+      link({ href, title, tokens }: Tokens.Link): string {
+        const text = this.parser.parseInline(tokens);
+        const safeUrl = sanitizeChatUrl(href || "");
+        if (!safeUrl) return text;
+        const titleAttr = title ? ` title="${escapeHtml(title)}"` : "";
+        return `<a class="md-link" href="${escapeHtml(safeUrl)}"${titleAttr} target="_blank" rel="noopener noreferrer">${text}</a>`;
+      },
+      image({ href, text }: Tokens.Image): string {
+        const safeUrl = sanitizeChatUrl(href || "");
+        if (!safeUrl || !/^https?:/i.test(safeUrl)) {
+          return escapeHtml(text || "");
+        }
+        return `<img class="md-img" src="${escapeHtml(safeUrl)}" alt="${escapeHtml(text || "")}" loading="lazy" />`;
+      },
+    },
+  });
+  return marked;
+})();
+
+export function renderChatMarkdownToHtml(mdText: string): string {
+  if (!mdText.trim()) {
+    return "";
+  }
+  if (
+    mdText.length > MAX_MARKDOWN_SIZE ||
+    mdText.split("\n").length > MAX_MARKDOWN_LINES
+  ) {
+    return (
+      `<pre class="md-pre md-fallback"><code class="md-code">` +
+      escapeHtml(mdText) +
+      `</code></pre>`
+    );
+  }
+  try {
+    return chatMarkedInstance.parse(mdText, { async: false }) as string;
+  } catch (err) {
+    console.error("Chat Markdown 渲染失败:", err);
     return (
       `<pre class="md-pre md-fallback"><code class="md-code">` +
       escapeHtml(mdText) +

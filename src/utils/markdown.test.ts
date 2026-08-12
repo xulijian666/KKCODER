@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildMarkdownToc, slugify } from "./markdownToc.ts";
+import { renderChatMarkdownToHtml } from "./markdown.ts";
 
 test("builds TOC entries with depth and slug ids", () => {
   const md = [
@@ -42,4 +43,22 @@ test("returns empty TOC for empty or oversized documents", () => {
   // 超过 3000 行上限 → 空目录（与渲染降级策略一致）
   const oversized = "# 标题\n\n" + "内容行\n".repeat(3100);
   assert.deepEqual(buildMarkdownToc(oversized), []);
+});
+
+test("chat markdown escapes raw HTML and blocks unsafe URL protocols", () => {
+  const html = renderChatMarkdownToHtml(
+    '<script>alert("x")</script> [bad](javascript:alert(1)) ![local](file:///secret)',
+  );
+
+  assert.doesNotMatch(html, /<script>/i);
+  assert.doesNotMatch(html, /href="javascript:/i);
+  assert.doesNotMatch(html, /src="file:\/\//i);
+  assert.match(html, /&lt;script&gt;/i);
+});
+
+test("chat markdown keeps safe web links", () => {
+  const html = renderChatMarkdownToHtml("[docs](https://example.com/docs)");
+
+  assert.match(html, /href="https:\/\/example\.com\/docs"/);
+  assert.match(html, /rel="noopener noreferrer"/);
 });

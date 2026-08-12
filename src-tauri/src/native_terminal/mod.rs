@@ -63,6 +63,10 @@ pub fn spawn_compat_terminal(
     let mut command = CommandBuilder::new("bash");
 
     command.cwd(std::path::PathBuf::from(&directory));
+    // The embedded PTY supports ANSI colors even when KKCoder's parent
+    // process was launched with a host-level color opt-out.
+    command.env_remove("NO_COLOR");
+    command.env_remove("NODE_DISABLE_COLORS");
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
     command.env("TERM_PROGRAM", "KKCoder-Compatibility");

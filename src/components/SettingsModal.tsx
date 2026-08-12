@@ -13,6 +13,12 @@ import {
   resolveClaudeTerminalMode,
   type ClaudeTerminalMode,
 } from "../utils/terminalMode";
+import {
+  CLAUDE_INTERACTION_MODE_KEY,
+  CLAUDE_INTERACTION_MODE_CHANGE_EVENT,
+  resolveClaudeInteractionMode,
+  type ClaudeInteractionMode,
+} from "../utils/interactionMode";
 import { RemoteSettingsPanel } from "./RemoteSettingsPanel";
 import {
   TERMINAL_SCHEME_MODE_KEY,
@@ -144,6 +150,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
   });
   const [claudeTerminalMode, setClaudeTerminalMode] = useState<ClaudeTerminalMode>(() => {
     return resolveClaudeTerminalMode(localStorage.getItem(CLAUDE_TERMINAL_MODE_KEY));
+  });
+  const [claudeInteractionMode, setClaudeInteractionMode] = useState<ClaudeInteractionMode>(() => {
+    return resolveClaudeInteractionMode(localStorage.getItem(CLAUDE_INTERACTION_MODE_KEY));
   });
   const [terminalSchemeMode, setTerminalSchemeMode] = useState<TerminalSchemeMode>(() => {
     return resolveTerminalSchemeMode(localStorage.getItem(TERMINAL_SCHEME_MODE_KEY));
@@ -318,6 +327,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
       detail: claudeTerminalMode,
     }));
   }, [claudeTerminalMode]);
+
+  useEffect(() => {
+    localStorage.setItem(CLAUDE_INTERACTION_MODE_KEY, claudeInteractionMode);
+    window.dispatchEvent(new CustomEvent(CLAUDE_INTERACTION_MODE_CHANGE_EVENT, {
+      detail: claudeInteractionMode,
+    }));
+  }, [claudeInteractionMode]);
 
   useEffect(() => {
     localStorage.setItem(TERMINAL_SCHEME_MODE_KEY, terminalSchemeMode);
@@ -637,6 +653,31 @@ return (
                         <span className="switch-slider" />
                       </label>
                       <span className="switch-label">启用 Codex</span>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="settings-section">
+                  <div className="settings-section-head">
+                    <h3 className="settings-section-title">Claude 交互模式</h3>
+                    <p className="settings-section-desc">CLI 为原始终端界面；GUI 为聊天式界面，仅影响新打开的 Claude 标签</p>
+                  </div>
+                  <div className="settings-group">
+                    <div className="settings-btn-group">
+                      <button
+                        type="button"
+                        className={`settings-toggle-btn ${claudeInteractionMode === "cli" ? "active" : ""}`}
+                        onClick={() => setClaudeInteractionMode("cli")}
+                      >
+                        CLI 终端
+                      </button>
+                      <button
+                        type="button"
+                        className={`settings-toggle-btn ${claudeInteractionMode === "gui" ? "active" : ""}`}
+                        onClick={() => setClaudeInteractionMode("gui")}
+                      >
+                        GUI 聊天
+                      </button>
                     </div>
                   </div>
                 </section>

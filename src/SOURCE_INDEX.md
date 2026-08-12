@@ -3,7 +3,7 @@
 > **本文件是前端源码的权威总索引。**  
 > 新增 / 删除 / 重命名 / 挪动 `src/` 下的模块时，**必须同步更新本文件**，并视情况更新对应 barrel：`components/index.ts`、`hooks/index.ts`、`utils/index.ts`。
 
-**最后人工维护核对：** 2026-07-25（V3 Hex Badge 品牌全面接入）
+**最后人工维护核对：** 2026-08-12（Claude GUI 聊天模式）
 
 ---
 
@@ -79,6 +79,7 @@ src/
 | `Sidebar.tsx` | 会话列表、搜索、收藏、Agent 切换 | `Sidebar`, `Session`, `ClaudeIcon`, `PiIcon`, `CodexIcon` |
 | `TerminalTab.tsx` | xterm.js 标准 PTY 标签 | `TerminalTab` |
 | `NativeTerminalTab.tsx` | Claude 兼容/原生终端标签 | `CompatibilityTerminalTab` |
+| `ChatTab.tsx` | Claude GUI 聊天标签（历史、流式文本、推理与工具调用） | `ChatTab` |
 | `SessionTabBar.tsx` | 顶部标签栏 UI（分屏时双栏对齐；左栏保序待命标签、右栏 secondary） | `SessionTabBar` |
 | `TabContextMenu.tsx` | 标签右键菜单（含分屏进出） | `TabContextMenu` |
 | `SessionRestorePrompt.tsx` | 启动恢复 Toast + 弹窗 | `SessionRestorePrompt` |
@@ -147,6 +148,8 @@ src/
 | `unreadCompletions.ts` | 未读完成集合 | `addUnreadCompletion`, `getUnreadCompletionCount`, `markSessionRead` |
 | `taskbarBadge.ts` | 任务栏角标 | `syncTaskbarUnreadBadge` |
 | `terminalMode.ts` | standard / native 模式 | `CLAUDE_TERMINAL_MODE_KEY`, `resolveClaudeTerminalMode`, `shouldUseNativeTerminal`, `ClaudeTerminalMode` |
+| `interactionMode.ts` | Claude CLI / GUI 交互模式解析与 Agent 路由 | `CLAUDE_INTERACTION_MODE_KEY`, `resolveClaudeInteractionMode`, `shouldUseGuiChat`, `ClaudeInteractionMode` |
+| `chatCompletion.ts` | GUI 聊天输入框的 `@` / `/` 触发检测与 token 替换 | `detectChatCompletionTrigger`, `replaceChatCompletionTrigger`, `ChatCompletionTrigger` |
 | `terminalTransport.ts` | 写入命令路由 | `resolveTerminalWriteCommand` |
 | `terminalKeyPolicy.ts` | Ctrl+C 等策略 | 按需 |
 | `terminalScheme.ts` | 终端配色方案 | 按需（Settings 使用） |

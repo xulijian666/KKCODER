@@ -276,12 +276,13 @@ const ProjectTreeImpl: React.FC<ProjectTreeProps> = ({
     isDir: boolean;
   } | null>(null);
 
-  useReturnTerminalFocusWhenUnblocked(!!contextMenu, 40);
-
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [renameSubmitting, setRenameSubmitting] = useState(false);
   const renameCancelRef = useRef(false);
+
+  // 重命名输入框激活期间同样视为焦点阻断，避免菜单关闭后终端抢走焦点导致输入框被 blur 取消
+  useReturnTerminalFocusWhenUnblocked(!!contextMenu || !!renamingPath, 40);
 
   const containerRef = useRef<HTMLDivElement>(null);
 
