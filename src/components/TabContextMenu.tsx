@@ -146,6 +146,19 @@ export const TabContextMenu: React.FC<TabContextMenuProps> = ({
           <button
             className="context-menu-item"
             onClick={() => {
+              window.dispatchEvent(
+                new CustomEvent("kkcoder-export-terminal-request", {
+                  detail: { sessionId: menu.sessionId },
+                }),
+              );
+              onClose();
+            }}
+          >
+            复制终端内容
+          </button>
+          <button
+            className="context-menu-item"
+            onClick={() => {
               if (session) {
                 invoke("open_project_folder", { path: session.path }).catch(() => {});
               }

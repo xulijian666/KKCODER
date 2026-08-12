@@ -464,7 +464,7 @@ const CompatibilityTerminalTabImpl: React.FC<CompatibilityTerminalTabProps> = ({
     };
     window.addEventListener("kkcoder-insert-conversation-tag", handleInsertConversationTag);
 
-    // 导出终端内容：提取整个 buffer（含 scrollback）为纯文本并保存到 ~/.kkcoder/session_logs/
+    // 复制终端内容：提取整个 buffer（含 scrollback）为纯文本并写入剪切板
     const handleExportTerminalRequest = (event: Event) => {
       const detail = (event as CustomEvent<{ sessionId: string }>).detail;
       if (!detail || detail.sessionId !== sessionId) return;
@@ -474,9 +474,10 @@ const CompatibilityTerminalTabImpl: React.FC<CompatibilityTerminalTabProps> = ({
         const line = buffer.getLine(i);
         lines.push(line ? line.translateToString() : "");
       }
-      invoke("save_session_log", { sessionId, content: lines.join("\n") })
-        .then((path) => notifySuccess(`终端内容已导出：${path}`))
-        .catch((reason) => notifyError(`终端内容导出失败：${formatFeedbackError(reason)}`));
+      navigator.clipboard
+        .writeText(lines.join("\n"))
+        .then(() => notifySuccess("终端内容已复制到剪切板"))
+        .catch((reason) => notifyError(`复制终端内容失败：${formatFeedbackError(reason)}`));
     };
     window.addEventListener("kkcoder-export-terminal-request", handleExportTerminalRequest);
 

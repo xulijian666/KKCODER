@@ -1424,30 +1424,6 @@ fn save_clipboard_image(bytes: Vec<u8>, filename: String) -> Result<String, Stri
     Ok(file_path.to_string_lossy().to_string())
 }
 
-/// 导出会话终端内容为文本文件，保存至 ~/.kkcoder/session_logs/ 供留档
-#[tauri::command]
-fn save_session_log(session_id: String, content: String) -> Result<String, String> {
-    use std::fs;
-    use std::io::Write;
-
-    let home_dir = dirs::home_dir().ok_or_else(|| "无法定位用户主目录".to_string())?;
-    let export_dir = home_dir.join(".kkcoder").join("session_logs");
-    fs::create_dir_all(&export_dir).map_err(|e| format!("无法创建导出目录: {}", e))?;
-
-    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-    let safe_id: String = session_id
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
-        .collect();
-    let file_path = export_dir.join(format!("{}_{}.txt", safe_id, timestamp));
-
-    let mut file = fs::File::create(&file_path).map_err(|e| format!("无法创建导出文件: {}", e))?;
-    file.write_all(content.as_bytes())
-        .map_err(|e| format!("导出写入失败: {}", e))?;
-
-    Ok(file_path.to_string_lossy().to_string())
-}
-
 #[tauri::command]
 fn check_if_paths_exist(text: String) -> bool {
     if text.is_empty() {
@@ -3494,7 +3470,6 @@ pub fn run() {
             create_directory,
             play_notification_sound,
             save_clipboard_image,
-            save_session_log,
             read_markdown_file,
             write_markdown_file,
             get_claude_version,
