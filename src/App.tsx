@@ -139,6 +139,34 @@ function App() {
     maxWidth: 450,
   });
 
+  // 左侧栏显示模式：fixed = 固定分栏（当前默认）；hover = 悬停边缘浮出（覆盖层，不挤占终端）
+  const [sidebarMode, setSidebarMode] = useState<"fixed" | "hover">(() =>
+    localStorage.getItem("kkcoder_sidebar_mode") === "hover" ? "hover" : "fixed",
+  );
+  const [sidebarRevealed, setSidebarRevealed] = useState(false);
+  const sidebarHideTimerRef = useRef<number | null>(null);
+  const cancelSidebarHide = useCallback(() => {
+    if (sidebarHideTimerRef.current !== null) {
+      window.clearTimeout(sidebarHideTimerRef.current);
+      sidebarHideTimerRef.current = null;
+    }
+  }, []);
+  const scheduleSidebarHide = useCallback(() => {
+    cancelSidebarHide();
+    // 略留延迟，避免鼠标划过面板边缘时误收起
+    sidebarHideTimerRef.current = window.setTimeout(() => setSidebarRevealed(false), 150);
+  }, [cancelSidebarHide]);
+  const revealSidebar = useCallback(() => {
+    cancelSidebarHide();
+    setSidebarRevealed(true);
+  }, [cancelSidebarHide]);
+  const handleToggleSidebarMode = useCallback(() => {
+    const next = sidebarMode === "fixed" ? "hover" : "fixed";
+    setSidebarMode(next);
+    localStorage.setItem("kkcoder_sidebar_mode", next);
+    if (next === "hover") setSidebarRevealed(false); // 切到悬停即收起为边缘条
+  }, [sidebarMode]);
+
   const {
     width: projectTreeWidth,
     setWidth: setProjectTreeWidth,
@@ -760,6 +788,8 @@ function App() {
           setShowProjectTree(newVal);
           localStorage.setItem("kkcoder_show_project_tree", String(newVal));
         }}
+        sidebarMode={sidebarMode}
+        onToggleSidebarMode={handleToggleSidebarMode}
         onLaunchCcswitch={handleLaunchCcswitch}
         onOpenSettings={() => setShowSettings(true)}
         onMinimize={handleMinimize}
@@ -769,7 +799,15 @@ function App() {
       />
 
       {/* 主布局 */}
-      <div className="app-container">
+      <div className={`app-container sidebar-mode-${sidebarMode}`}>
+        {/* 悬停模式：最左边缘保留一条细窄提示条，鼠标碰上即浮出侧栏 */}
+        {sidebarMode === "hover" && (
+          <div
+            className={`sidebar-hover-strip ${sidebarRevealed ? "is-revealed" : ""}`}
+            onMouseEnter={revealSidebar}
+            title="悬停展开会话栏"
+          />
+        )}
         {/* 左边栏 - 专注于会话与项目管理 */}
         <Sidebar
           selectedAgent={selectedAgent}
@@ -793,8 +831,14 @@ function App() {
           glowingSessionIds={glowingSessionIds}
           width={sidebarWidth}
           sessionBusy={sessionBusy}
+          hoverMode={sidebarMode === "hover"}
+          revealed={sidebarRevealed}
+          onHoverEnter={revealSidebar}
+          onHoverLeave={scheduleSidebarHide}
         />
-        <div className={`sidebar-resizer ${isResizing ? "dragging" : ""}`} onMouseDown={startResize} />
+        {sidebarMode === "fixed" && (
+          <div className={`sidebar-resizer ${isResizing ? "dragging" : ""}`} onMouseDown={startResize} />
+        )}
 
         {/* 右侧主工作区 */}
         <main

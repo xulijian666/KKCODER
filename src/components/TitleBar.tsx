@@ -9,6 +9,8 @@ export interface TitleBarProps {
   showProjectTree: boolean;
   isTempSession: boolean;
   onToggleProjectTree: () => void;
+  sidebarMode: "fixed" | "hover";
+  onToggleSidebarMode: () => void;
   onLaunchCcswitch: () => void;
   onOpenSettings: () => void;
   onMinimize: () => void;
@@ -25,6 +27,8 @@ export const TitleBar: React.FC<TitleBarProps> = ({
   showProjectTree,
   isTempSession,
   onToggleProjectTree,
+  sidebarMode,
+  onToggleSidebarMode,
   onLaunchCcswitch,
   onOpenSettings,
   onMinimize,
@@ -166,6 +170,22 @@ export const TitleBar: React.FC<TitleBarProps> = ({
             </svg>
           </button>
         )}
+
+        <button
+          className={`titlebar-btn toggle-sidebar-mode-btn ${sidebarMode === "hover" ? "active" : ""}`}
+          onClick={onToggleSidebarMode}
+          title={
+            sidebarMode === "hover"
+              ? "侧栏悬停浮出中 · 点击切换为固定分栏"
+              : "侧栏固定分栏 · 点击切换为悬停浮出（回收屏幕空间）"
+          }
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+            <line x1="10" y1="3" x2="10" y2="21"></line>
+            <path d="M5.5 9.5 7.5 11.5 5.5 13.5"></path>
+          </svg>
+        </button>
 
         <button className="titlebar-btn settings-gear-btn" onClick={onOpenSettings} title="打开设置">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">

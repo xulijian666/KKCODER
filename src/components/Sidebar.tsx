@@ -87,6 +87,12 @@ interface SidebarProps {
   glowingSessionIds?: string[];
   width?: number;
   sessionBusy?: Record<string, boolean>;
+  /** 悬停浮出模式：侧栏作为覆盖层，不参与布局 */
+  hoverMode?: boolean;
+  /** 悬停模式下是否已展开 */
+  revealed?: boolean;
+  onHoverEnter?: () => void;
+  onHoverLeave?: () => void;
 }
 
 const SidebarImpl: React.FC<SidebarProps> = ({
@@ -111,6 +117,10 @@ const SidebarImpl: React.FC<SidebarProps> = ({
   glowingSessionIds = [],
   width,
   sessionBusy,
+  hoverMode = false,
+  revealed = false,
+  onHoverEnter,
+  onHoverLeave,
 }) => {
   const visibleAgents = useMemo(() => getVisibleAgents(enabledAgents), [enabledAgents]);
   const selectedAgentIndex = Math.max(0, visibleAgents.indexOf(selectedAgent));
@@ -643,7 +653,12 @@ const SidebarImpl: React.FC<SidebarProps> = ({
   };
 
   return (
-    <aside className="sidebar-aside" style={width !== undefined ? { width: `${width}px` } : undefined}>
+    <aside
+      className={`sidebar-aside ${hoverMode ? "sidebar-floating" : ""} ${revealed ? "is-revealed" : ""}`}
+      style={width !== undefined ? { width: `${width}px` } : undefined}
+      onMouseEnter={hoverMode ? onHoverEnter : undefined}
+      onMouseLeave={hoverMode ? onHoverLeave : undefined}
+    >
       {/* 新建 AI 会话头部区域 */}
       <div className="sidebar-header">
         {/* Agent 标识 / 切换：始终显示已启用助手；仅 Claude 时保留 Claude Code 标志 */}
