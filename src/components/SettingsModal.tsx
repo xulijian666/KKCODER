@@ -1,4 +1,17 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
+import {
+  ArrowLeft,
+  Bell,
+  Bot,
+  Bug,
+  FolderKanban,
+  Globe,
+  Info,
+  Keyboard,
+  Palette,
+  TerminalSquare,
+  type LucideIcon,
+} from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { DirectoryPickerModal } from "./DirectoryPickerModal";
 import {
@@ -62,17 +75,39 @@ type SettingsMenuId =
   | "debug"
   | "about";
 
-const SETTINGS_MENU: { id: SettingsMenuId; label: string; group: string }[] = [
-  { id: "appearance", label: "外观", group: "体验" },
-  { id: "agents", label: "AI 助手", group: "体验" },
-  { id: "terminal", label: "终端", group: "工作区" },
-  { id: "notifications", label: "通知", group: "工作区" },
-  { id: "shortcuts", label: "快捷短语", group: "工作区" },
-  { id: "sessions", label: "会话", group: "管理" },
-  { id: "remote", label: "远程", group: "管理" },
-  { id: "debug", label: "调试", group: "其他" },
-  { id: "about", label: "关于", group: "其他" },
+interface SettingsMenuEntry {
+  id: SettingsMenuId;
+  label: string;
+  group: string;
+  description: string;
+}
+
+const SETTINGS_MENU: SettingsMenuEntry[] = [
+  { id: "appearance", label: "外观", group: "基础设置", description: "主题、语言与窗口行为" },
+  { id: "agents", label: "AI 助手", group: "基础设置", description: "启用的助手与交互模式" },
+  { id: "terminal", label: "终端", group: "基础设置", description: "终端外观与运行行为" },
+  { id: "notifications", label: "通知", group: "基础设置", description: "回答完成提醒与提示音" },
+  { id: "shortcuts", label: "快捷短语", group: "工作区", description: "常用短语一键发送" },
+  { id: "sessions", label: "会话", group: "管理", description: "会话清理、自动命名与远程管理入口" },
+  { id: "remote", label: "远程", group: "管理", description: "远程访问 / FRP / 设备配对" },
+  { id: "debug", label: "调试", group: "其他", description: "调试日志开关与一键清理" },
+  { id: "about", label: "关于", group: "其他", description: "版本信息与致谢" },
 ];
+
+const SETTINGS_GROUPS = ["基础设置", "工作区", "管理", "其他"] as const;
+
+/** 左侧菜单项图标（对齐 CC-GUI settings-nav 带图标样式） */
+const SETTINGS_NAV_ICONS: Record<SettingsMenuId, LucideIcon> = {
+  appearance: Palette,
+  agents: Bot,
+  terminal: TerminalSquare,
+  notifications: Bell,
+  shortcuts: Keyboard,
+  sessions: FolderKanban,
+  remote: Globe,
+  debug: Bug,
+  about: Info,
+};
 
 interface SettingsModalProps {
   show: boolean;
@@ -84,6 +119,17 @@ interface SettingsModalProps {
 export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onSessionsRenamed }) => {
   const [activeMenu, setActiveMenu] = useState<SettingsMenuId>("appearance");
   const [showFilePicker, setShowFilePicker] = useState(false);
+  // 返回应用：先播放退场动画再真正关闭（丝滑返回）
+  const [closing, setClosing] = useState(false);
+
+  const handleClose = useCallback(() => {
+    if (closing) return;
+    setClosing(true);
+    window.setTimeout(() => {
+      setClosing(false);
+      onClose();
+    }, 180);
+  }, [closing, onClose]);
 
   useEffect(() => {
     if (show) {
@@ -163,6 +209,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
   });
   const [claudeInteractionMode, setClaudeInteractionMode] = useState<ClaudeInteractionMode>(() => {
     return resolveClaudeInteractionMode(localStorage.getItem(CLAUDE_INTERACTION_MODE_KEY));
+  });
+  // 命令记录自动折叠（GUI 聊天多条命令时折叠为一行摘要）
+  const COLLAPSE_TOOLS_KEY = "kkcoder_setting_collapse_tool_cards";
+  const [collapseToolCards, setCollapseToolCards] = useState<boolean>(() => {
+    const val = localStorage.getItem(COLLAPSE_TOOLS_KEY);
+    return val === null ? true : val === "true";
   });
   const [terminalSchemeMode, setTerminalSchemeMode] = useState<TerminalSchemeMode>(() => {
     return resolveTerminalSchemeMode(localStorage.getItem(TERMINAL_SCHEME_MODE_KEY));
@@ -376,6 +428,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
   }, [claudeInteractionMode]);
 
   useEffect(() => {
+    localStorage.setItem(COLLAPSE_TOOLS_KEY, String(collapseToolCards));
+  }, [collapseToolCards]);
+
+  useEffect(() => {
     localStorage.setItem(TERMINAL_SCHEME_MODE_KEY, terminalSchemeMode);
     dispatchTerminalSchemeChange();
   }, [terminalSchemeMode]);
@@ -476,7 +532,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
         if (showFilePicker) {
           setShowFilePicker(false);
         } else {
-          onClose();
+          handleClose();
         }
       }
     };
@@ -486,12 +542,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [show, onClose, showFilePicker]);
+  }, [show, handleClose, showFilePicker]);
 
   if (!show) return null;
 
-  const menuTitle =
-    SETTINGS_MENU.find((item) => item.id === activeMenu)?.label ?? "设置";
+  const activeMenuEntry = SETTINGS_MENU.find((item) => item.id === activeMenu);
+  const menuTitle = activeMenuEntry?.label ?? "设置";
+  const menuDescription = activeMenuEntry?.description ?? "";
 
   // 手动触发修正
   const handleManualRename = async () => {
@@ -545,42 +602,57 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
     }
   };
 return (
-    <div className="modal-overlay show" onClick={onClose}>
-      <div className="settings-card" onClick={(e) => e.stopPropagation()}>
-        <div className="settings-sidebar">
-          <div className="settings-sidebar-header">设置</div>
+    <div className={`settings-embedded ${closing ? "is-closing" : "is-open"}`}>
+      <div className="settings-body">
+        <aside className="settings-sidebar">
+          <div className="settings-sidebar-drag" data-tauri-drag-region="true" />
+          <button
+            type="button"
+            className="settings-nav settings-nav-return"
+            onClick={handleClose}
+            aria-label="返回应用"
+            title="返回应用"
+          >
+            <ArrowLeft size={13} aria-hidden />
+            <span className="settings-nav-label">返回应用</span>
+          </button>
           <nav className="settings-sidebar-nav" aria-label="设置分类">
-            {(["体验", "工作区", "管理", "其他"] as const).map((groupName) => {
+            {SETTINGS_GROUPS.map((groupName) => {
               const items = SETTINGS_MENU.filter((item) => item.group === groupName);
               if (items.length === 0) return null;
               return (
                 <div key={groupName} className="settings-nav-group">
                   <div className="settings-nav-group-label">{groupName}</div>
-                  {items.map((item) => (
-                    <button
-                      key={item.id}
-                      type="button"
-                      className={`settings-menu-item ${activeMenu === item.id ? "active" : ""}`}
-                      onClick={() => setActiveMenu(item.id)}
-                    >
-                      {item.label}
-                    </button>
-                  ))}
+                  {items.map((item) => {
+                    const NavIcon = SETTINGS_NAV_ICONS[item.id];
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        className={`settings-nav ${activeMenu === item.id ? "active" : ""}`}
+                        onClick={() => setActiveMenu(item.id)}
+                        title={item.label}
+                      >
+                        <NavIcon size={17} aria-hidden />
+                        <span className="settings-nav-label">{item.label}</span>
+                      </button>
+                    );
+                  })}
                 </div>
               );
             })}
           </nav>
-        </div>
+        </aside>
 
-        <div className="settings-main">
-          <div className="settings-header">
-            <span className="settings-title">{menuTitle}</span>
-            <button type="button" className="settings-close" onClick={onClose} aria-label="关闭设置">
-              ×
-            </button>
+        <div className="settings-content-wrap">
+          <div className="settings-page-head" data-tauri-drag-region="true">
+            <div className="settings-page-head-inner">
+              <h1 className="settings-page-title">{menuTitle}</h1>
+              <p className="settings-page-description">{menuDescription}</p>
+            </div>
           </div>
 
-          <div className="settings-body">
+          <div className="settings-scroll">
             {activeMenu === "appearance" && (
               <div className="settings-content">
                 <section className="settings-section">
@@ -693,6 +765,17 @@ return (
                         GUI 聊天
                       </button>
                     </div>
+                  </div>
+                  <div className="settings-switch-row">
+                    <label className="switch-container">
+                      <input
+                        type="checkbox"
+                        checked={collapseToolCards}
+                        onChange={(e) => setCollapseToolCards(e.target.checked)}
+                      />
+                      <span className="switch-slider" />
+                    </label>
+                    <span className="switch-label">命令记录自动折叠（多条命令时折叠为一行摘要）</span>
                   </div>
                 </section>
               </div>

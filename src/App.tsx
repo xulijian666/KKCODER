@@ -595,6 +595,30 @@ function App() {
     [clearRenameMark, handleUserSubmittedInput],
   );
 
+  // 队列任务投递：按会话交互模式路由——GUI 聊天走 chat 发送事件，CLI 终端写 PTY
+  const dispatchQueueTask = useCallback(
+    (sessionId: string, prompt: string) => {
+      const session = sessionsRef.current.find((s) => s.id === sessionId);
+      const mode = interactionModeBySession[sessionId] ?? claudeInteractionMode;
+      const useGuiChat = !!session && shouldUseGuiChat(session.type, mode);
+      if (useGuiChat) {
+        log(`[Queue] Dispatching queued task to GUI chat session ${sessionId}: "${prompt}"`);
+        // 延迟 400ms：等后端 turn 收尾（turns map 清理）完成，避免「正在生成中」拒绝；
+        // 若仍失败，ChatTab 侧会静默重试
+        window.setTimeout(() => {
+          window.dispatchEvent(
+            new CustomEvent("kkcoder-chat-send-queued", {
+              detail: { sessionId, prompt },
+            }),
+          );
+        }, 400);
+        return Promise.resolve();
+      }
+      return writeToSessionTerminal(sessionId, `${prompt}\r\n`, true);
+    },
+    [claudeInteractionMode, interactionModeBySession, writeToSessionTerminal],
+  );
+
   const {
     queueBySession,
     showQueueModal,
@@ -613,12 +637,15 @@ function App() {
   } = useSessionQueueEngine({
     activeSessionId,
     openTabIds,
-    writeToSessionTerminal,
+    dispatchTask: dispatchQueueTask,
     onTaskSubmitted: handleUserSubmittedInputWithRenameReset,
   });
 
   clearQueueForSessionRef.current = clearQueueForSession;
   setSessionBusyRef.current = setSessionBusy;
+
+  // 浮动队列面板展开状态（不占布局，点击丝滑展开）
+  const [queuePanelOpen, setQueuePanelOpen] = useState(false);
 
   const handleTriggerShortcut = (content: string) => {
     if (!activeSessionId) return;
@@ -631,7 +658,7 @@ function App() {
       enqueuePrompt(activeSessionId, content);
     } else {
       setSessionBusy((prev) => ({ ...prev, [activeSessionId]: true }));
-      writeToSessionTerminal(activeSessionId, content + "\r\n", true)
+      dispatchQueueTask(activeSessionId, content)
         .then(() => {
           handleUserSubmittedInputWithRenameReset(activeSessionId);
         })
@@ -1141,6 +1168,12 @@ function App() {
                             }}
                             onCommandComplete={() => handleCommandComplete(s.id)}
                             onUserSubmittedInput={handleUserSubmittedInputWithRenameReset}
+                            onEnqueuePrompt={enqueuePrompt}
+                            queueTasks={s.id === activeSessionId ? activeQueue : []}
+                            queuePanelOpen={queuePanelOpen}
+                            onToggleQueuePanel={() => setQueuePanelOpen((v) => !v)}
+                            onRemoveQueueTask={removeQueuedTask}
+                            onClearQueue={clearQueueForSession}
                           />
                         ) : useNativeTerminal ? (
                           <CompatibilityTerminalTab
@@ -1210,52 +1243,6 @@ function App() {
 
             <FilePreviewPanel {...filePreviewPanelProps} />
           </div>
-
-          {/* 新增的队列列表面板 */}
-          {activeQueue.length > 0 && (
-            <div className="queue-list-panel">
-              <div className="queue-panel-header">
-                <div className="queue-panel-title">
-                  <svg className="queue-title-svg-icon" xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.8, marginRight: "6px" }}>
-                    <line x1="8" y1="6" x2="21" y2="6"></line>
-                    <line x1="8" y1="12" x2="21" y2="12"></line>
-                    <line x1="8" y1="18" x2="21" y2="18"></line>
-                    <line x1="3" y1="6" x2="3.01" y2="6"></line>
-                    <line x1="3" y1="12" x2="3.01" y2="12"></line>
-                    <line x1="3" y1="18" x2="3.01" y2="18"></line>
-                  </svg>
-                  <span>任务队列 ({activeQueue.length})</span>
-                </div>
-                <button 
-                  className="queue-clear-btn"
-                  onClick={() => clearQueueForSession(activeSessionId)}
-                  title="全部清空队列"
-                >
-                  <svg className="trash-svg-icon" xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="3 6 5 6 21 6"></polyline>
-                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                    <line x1="10" y1="11" x2="10" y2="17"></line>
-                    <line x1="14" y1="11" x2="14" y2="17"></line>
-                  </svg>
-                </button>
-              </div>
-              <div className="queue-panel-body">
-                {activeQueue.map((task, index) => (
-                  <div key={task.id} className="queue-item">
-                    <span className="queue-item-index">{index + 1}</span>
-                    <span className="queue-item-text">{task.prompt}</span>
-                    <button
-                      className="queue-item-delete"
-                      onClick={() => removeQueuedTask(activeSessionId, task.id)}
-                      title="删除排队任务"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
 
           {/* 底部控制状态条 */}
           <div className="bottom-panel">

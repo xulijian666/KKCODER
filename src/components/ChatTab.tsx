@@ -23,7 +23,7 @@ import {
   X,
 } from "lucide-react";
 import { renderChatMarkdownToHtml } from "../utils/markdown";
-import { formatFeedbackError } from "../utils/appFeedback";
+import { formatFeedbackError, notifyInfo, notifyWarning } from "../utils/appFeedback";
 import { isEditableFocusTarget } from "../utils/terminalFocus";
 import { generateUUID } from "../utils/uuid";
 import { log } from "../utils/log";
@@ -51,6 +51,14 @@ interface ChatTabProps {
   onStateChange?: (busy: boolean) => void;
   onCommandComplete?: () => void;
   onUserSubmittedInput?: (sessionId: string, submittedAt?: string) => void;
+  /** AI 思考中发送的消息自动加入队列（App 层队列引擎），空闲后自动投递回来 */
+  onEnqueuePrompt?: (sessionId: string, prompt: string) => void;
+  /** 浮动队列：当前会话的排队任务（聊天区右下角，不占布局） */
+  queueTasks?: Array<{ id: string; prompt: string }>;
+  queuePanelOpen?: boolean;
+  onToggleQueuePanel?: () => void;
+  onRemoveQueueTask?: (sessionId: string, taskId: string) => void;
+  onClearQueue?: (sessionId: string) => void;
 }
 
 interface ToolCardData {
@@ -72,6 +80,8 @@ interface ChatMessage {
   tools: ToolCardData[];
   status: "streaming" | "done" | "error";
   costUsd?: number;
+  /** 本次回答耗时（秒），完成时记录 */
+  elapsedSec?: number;
   error?: string;
   images?: ChatImageAttachment[];
   contextUsage?: ContextUsageData | null;
@@ -341,7 +351,7 @@ type ChatAction =
   | { type: "tool:started"; card: ToolCardData }
   | { type: "tool:input"; id: string; input?: unknown }
   | { type: "tool:completed"; id: string; name?: string; output?: string; error?: string }
-  | { type: "turn:finished"; costUsd?: number; isError?: boolean }
+  | { type: "turn:finished"; costUsd?: number; isError?: boolean; elapsedSec?: number }
   /** silent：用户主动取消，不把消息标红显示错误 */
   | { type: "turn:error"; message: string; silent?: boolean }
   /** 取消回退：模型尚无任何输出时，撤回最后一条用户消息（连同空的 assistant 占位） */
@@ -459,6 +469,7 @@ function messagesReducer(state: ChatMessage[], action: ChatAction): ChatMessage[
         ...m,
         status: action.isError ? "error" : "done",
         costUsd: action.costUsd,
+        elapsedSec: action.elapsedSec,
       }));
     case "turn:error":
       return patchLast(state, (m) => ({
@@ -487,6 +498,14 @@ const toolIcon = (name: string) => {
 
 const truncate = (text: string, max: number) =>
   text.length > max ? `${text.slice(0, max)}…` : text;
+
+/** 耗时格式化：42 秒 / 1 分 23 秒 / 5 分钟 */
+const formatElapsed = (sec: number): string => {
+  if (sec < 60) return `${sec} 秒`;
+  const minutes = Math.floor(sec / 60);
+  const seconds = sec % 60;
+  return seconds > 0 ? `${minutes} 分 ${seconds} 秒` : `${minutes} 分钟`;
+};
 
 const ToolCard: React.FC<{ card: ToolCardData }> = ({ card }) => {
   const [open, setOpen] = useState(false);
@@ -555,6 +574,52 @@ const ToolCard: React.FC<{ card: ToolCardData }> = ({ card }) => {
           )}
         </div>
       )}
+    </div>
+  );
+};
+
+/** 命令记录自动折叠的 localStorage key（设置 → AI 助手 可开关） */
+const COLLAPSE_TOOLS_KEY = "kkcoder_setting_collapse_tool_cards";
+
+/**
+ * 多条命令（工具调用）折叠列表：
+ * - 单条命令 → 直接平铺
+ * - 多条命令且设置开启自动折叠 → 始终折叠为一行摘要（命令总数 · 完成数），
+ *   生成过程中也保持折叠，摘要随进度实时更新；点击摘要展开/收起命令列表
+ */
+const ToolList: React.FC<{ tools: ToolCardData[] }> = ({ tools }) => {
+  const [collapsed, setCollapsed] = useState(true);
+
+  if (tools.length <= 1) {
+    return <>{tools.map((tool) => <ToolCard key={tool.id} card={tool} />)}</>;
+  }
+  // 每次渲染读取设置：设置里关闭自动折叠后直接平铺
+  if (localStorage.getItem(COLLAPSE_TOOLS_KEY) === "false") {
+    return <>{tools.map((tool) => <ToolCard key={tool.id} card={tool} />)}</>;
+  }
+
+  const doneCount = tools.filter((tool) => tool.status === "done").length;
+  const hasRunning = tools.some((tool) => tool.status === "running");
+  return (
+    <div className="chat-tool-list">
+      <button
+        type="button"
+        className="chat-tool-list-summary"
+        onClick={() => setCollapsed((value) => !value)}
+        title={collapsed ? "点击展开全部命令" : "收起命令列表"}
+      >
+        <span className="chat-tool-icon">{toolIcon("terminal")}</span>
+        <span className="chat-tool-list-label">
+          {tools.length} 个命令 · 完成 {doneCount}
+          {hasRunning && <span className="chat-tool-list-running"> · 运行中</span>}
+        </span>
+        {collapsed ? (
+          <ChevronRight className="chat-tool-chevron" size={13} />
+        ) : (
+          <ChevronDown className="chat-tool-chevron" size={13} />
+        )}
+      </button>
+      {!collapsed && tools.map((tool) => <ToolCard key={tool.id} card={tool} />)}
     </div>
   );
 };
@@ -846,9 +911,7 @@ const MessageView: React.FC<{ message: ChatMessage }> = React.memo(({ message })
           />
         </details>
       )}
-      {message.tools.map((tool) => (
-        <ToolCard key={tool.id} card={tool} />
-      ))}
+      {message.tools.length > 0 && <ToolList tools={message.tools} />}
       {message.contextUsage ? (
         <ContextUsageCard data={message.contextUsage} />
       ) : message.text ? (
@@ -868,8 +931,10 @@ const MessageView: React.FC<{ message: ChatMessage }> = React.memo(({ message })
       {message.status === "streaming" && message.text && (
         <span className="chat-cursor" />
       )}
-      {message.status === "done" && message.costUsd != null && (
-        <div className="chat-cost">≈ ${message.costUsd.toFixed(4)}</div>
+      {message.status === "done" && message.elapsedSec != null && (
+        <div className="chat-cost">
+          <span className="chat-cost-elapsed">耗时 {formatElapsed(message.elapsedSec)}</span>
+        </div>
       )}
       {message.status === "error" && message.error && (
         <div className="chat-msg-error">{message.error}</div>
@@ -893,6 +958,12 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
     onStateChange,
     onCommandComplete,
     onUserSubmittedInput,
+    onEnqueuePrompt,
+    queueTasks,
+    queuePanelOpen = false,
+    onToggleQueuePanel,
+    onRemoveQueueTask,
+    onClearQueue,
   } = props;
 
   const [messages, dispatch] = useReducer(messagesReducer, []);
@@ -903,6 +974,9 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
   const lastSentRef = useRef<{ text: string; images: ChatImageAttachment[] } | null>(null);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  // busy 的 ref 镜像：队列投递事件监听器读取最新状态，防止重复投递
+  const busyRef = useRef(false);
+  busyRef.current = busy;
   const [ready, setReady] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   // 运行中两次 ESC 终止交互：第一次按下后终止按钮显示 ESC 提示，第二次按下才终止
@@ -929,6 +1003,8 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
   const escArmTimerRef = useRef<number | null>(null);
   // 用户是否钉在消息流底部：在底部附近才自动跟随新输出，浏览上方信息时不抢滚动
   const pinnedToBottomRef = useRef(true);
+  // 本轮（turn）开始时间：完成时计算耗时
+  const turnStartTimeRef = useRef(0);
   // 用户是否主动取消（两次 ESC）：收到 turn:error 时不显示"已取消"红字
   const userCancelledRef = useRef(false);
 
@@ -1004,10 +1080,15 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
           }
           break;
         case "turn:finished": {
+          const elapsedSec =
+            turnStartTimeRef.current > 0
+              ? Math.round((Date.now() - turnStartTimeRef.current) / 1000)
+              : undefined;
           dispatch({
             type: "turn:finished",
             costUsd: payload.costUsd,
             isError: payload.isError,
+            elapsedSec,
           });
           setBusy(false);
           setCancelling(false);
@@ -1214,9 +1295,64 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
     pinnedToBottomRef.current = distanceFromBottom < 48;
   };
 
+  /** 真正发送一条消息给模型（用户手动发送与队列投递共用）。返回是否发送成功 */
+  const sendText = useCallback(
+    async (
+      text: string,
+      sendImages: ChatImageAttachment[],
+      options?: { silentFail?: boolean },
+    ): Promise<boolean> => {
+      const msgId = generateUUID();
+      // 记录该条消息实际使用的模型：手动选择优先，否则用供应商默认（旋钮映射）
+      const msgModel = selectedModel || modelInfo?.defaultModel || "默认";
+      // 发送消息：无论当前是否在浏览历史，强制钉回底部——定位到刚发出的这条消息
+      pinnedToBottomRef.current = true;
+      // 新一轮对话：清除可能残留的主动取消标记
+      userCancelledRef.current = false;
+      // 记录本次发送内容：模型无输出时被取消，可回退恢复输入框
+      lastSentRef.current = { text, images: sendImages };
+      // 记录本轮开始时间：turn:finished 时计算本次耗时
+      turnStartTimeRef.current = Date.now();
+      dispatch({ type: "user:sent", text, id: msgId, images: sendImages, model: msgModel });
+      setDraft("");
+      setImages([]);
+      setAttachmentError(null);
+      setCompletionTrigger(null);
+      setBusy(true);
+      onStateChangeRef.current?.(true);
+      try {
+        await invoke("chat_send_message", {
+          sessionId,
+          directory,
+          agentSessionId,
+          text,
+          images: sendImages.map((image) => image.dataUrl),
+        });
+        onUserSubmittedInputRef.current?.(sessionId);
+        return true;
+      } catch (err) {
+        // 队列投递失败（如后端 turn 收尾竞态）静默返回 false，由调用方重试；
+        // 手动发送失败仍标红提示
+        if (!options?.silentFail) {
+          dispatch({
+            type: "send:failed",
+            id: msgId,
+            message: formatFeedbackError(err, "发送失败"),
+          });
+        }
+        log(`[chat] send failed: ${formatFeedbackError(err, "发送失败")}`);
+        setBusy(false);
+        onStateChangeRef.current?.(false);
+        setImages(sendImages);
+        return false;
+      }
+    },
+    [agentSessionId, directory, dispatch, modelInfo, selectedModel, sessionId],
+  );
+
   const handleSend = async () => {
     const text = draft.trim();
-    if ((!text && images.length === 0) || busy || !ready || pendingQuestion) return;
+    if ((!text && images.length === 0) || !ready || pendingQuestion) return;
 
     // 内置 slash 命令本地处理：/clear /reset 只清界面，/new 再清上下文。
     // 不发给模型，避免 claude -p 返回 "(no content)"。
@@ -1259,43 +1395,47 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
       return;
     }
 
-    const msgId = generateUUID();
-    const sentImages = images;
-    // 记录该条消息实际使用的模型：手动选择优先，否则用供应商默认（旋钮映射）
-    const msgModel = selectedModel || modelInfo?.defaultModel || "默认";
-    // 发送消息：无论当前是否在浏览历史，强制钉回底部——定位到刚发出的这条消息
-    pinnedToBottomRef.current = true;
-    // 新一轮对话：清除可能残留的主动取消标记
-    userCancelledRef.current = false;
-    // 记录本次发送内容：模型无输出时被取消，可回退恢复输入框
-    lastSentRef.current = { text, images: sentImages };
-    dispatch({ type: "user:sent", text, id: msgId, images: sentImages, model: msgModel });
-    setDraft("");
-    setImages([]);
-    setAttachmentError(null);
-    setCompletionTrigger(null);
-    setBusy(true);
-    onStateChangeRef.current?.(true);
-    try {
-      await invoke("chat_send_message", {
-        sessionId,
-        directory,
-        agentSessionId,
-        text,
-        images: sentImages.map((image) => image.dataUrl),
-      });
-      onUserSubmittedInputRef.current?.(sessionId);
-    } catch (err) {
-      dispatch({
-        type: "send:failed",
-        id: msgId,
-        message: formatFeedbackError(err, "发送失败"),
-      });
-      setBusy(false);
-      onStateChangeRef.current?.(false);
-      setImages(sentImages);
+    // AI 思考中：发送的纯文本消息自动加入队列，空闲后自动投递
+    if (busy) {
+      if (images.length > 0) {
+        notifyWarning("AI 正在思考，请等待完成后发送图片消息");
+        return;
+      }
+      onEnqueuePrompt?.(sessionId, text);
+      setDraft("");
+      setCompletionTrigger(null);
+      log(`[chat] busy: queued prompt "${text}" for session ${sessionId}`);
+      notifyInfo("AI 思考中，已加入队列，完成后自动发送");
+      return;
     }
+
+    await sendText(text, images);
   };
+
+  // 队列引擎投递任务（GUI 聊天）：收到事件后自动发送，不重复进队列。
+  // 发送失败（如后端 turn 收尾竞态："正在生成中"）时静默延迟重试，最多 3 次
+  useEffect(() => {
+    const handleQueuedSend = (event: Event) => {
+      const detail = (event as CustomEvent<{ sessionId: string; prompt: string }>).detail;
+      if (!detail || detail.sessionId !== sessionId || !detail.prompt?.trim()) return;
+      if (busyRef.current) {
+        log(`[chat] queued dispatch skipped (still busy): ${detail.prompt}`);
+        return;
+      }
+      const prompt = detail.prompt.trim();
+      const trySend = async (attempt: number) => {
+        log(`[chat] queued dispatch (attempt ${attempt + 1}): "${prompt}"`);
+        const ok = await sendText(prompt, [], { silentFail: true });
+        if (!ok && attempt < 2) {
+          log(`[chat] queued dispatch failed, retrying in 800ms...`);
+          window.setTimeout(() => void trySend(attempt + 1), 800);
+        }
+      };
+      void trySend(0);
+    };
+    window.addEventListener("kkcoder-chat-send-queued", handleQueuedSend);
+    return () => window.removeEventListener("kkcoder-chat-send-queued", handleQueuedSend);
+  }, [sendText, sessionId]);
 
   const updateCompletion = (value: string, caret: number) => {
     // 输入法组合输入期间不触发补全：箭头/回车归输入法候选窗使用，
@@ -1533,6 +1673,15 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
         {messages.map((m) => (
           <MessageView key={m.id} message={m} />
         ))}
+        {/* AI 思考中：消息流末尾的转圈指示（比闪烁光标显眼） */}
+        {busy && (
+          <div className={`chat-thinking ${escArmed ? "is-esc-armed" : ""}`}>
+            <span className="chat-thinking-spinner" />
+            <span className="chat-thinking-text">
+              {escArmed ? "再按一次 ESC 终止任务" : "AI 正在思考…"}
+            </span>
+          </div>
+        )}
       </div>
       <div
         className={`chat-composer ${draggingImage ? "is-dragging" : ""}`}
@@ -1593,6 +1742,7 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
             onSelectModel={onSelectModel}
             onSelectProvider={onSelectProvider}
             onRefreshModelInfo={onRefreshModelInfo}
+            disabled={busy}
           />
           <textarea
             ref={inputRef}
@@ -1628,7 +1778,8 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
             }}
             placeholder={pendingQuestion ? "请先完成弹出的问题" : "输入消息，@ 引用文件，/ 使用技能或命令"}
             rows={1}
-            disabled={busy || !ready || !!pendingQuestion}
+            // 思考中（busy）不禁用：可继续打字，发送时自动进队列（发送按钮此时为「终止」）
+            disabled={!ready || !!pendingQuestion}
           />
           <button
             type="button"
@@ -1673,6 +1824,73 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
           onSubmit={(answers) => void answerQuestion(answers)}
           onSkip={() => void answerQuestion({})}
         />
+      )}
+
+      {/* 浮动队列：聊天区右下角，点击丝滑展开（不占布局、不顶对话） */}
+      {queueTasks && queueTasks.length > 0 && (
+        <div className="queue-floating">
+          <button
+            type="button"
+            className={`queue-float-btn ${queuePanelOpen ? "is-open" : ""}`}
+            onClick={onToggleQueuePanel}
+            title={queuePanelOpen ? "收起队列" : "展开队列"}
+          >
+            <svg className="queue-title-svg-icon" xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+              <line x1="8" y1="6" x2="21" y2="6"></line>
+              <line x1="8" y1="12" x2="21" y2="12"></line>
+              <line x1="8" y1="18" x2="21" y2="18"></line>
+              <line x1="3" y1="6" x2="3.01" y2="6"></line>
+              <line x1="3" y1="12" x2="3.01" y2="12"></line>
+              <line x1="3" y1="18" x2="3.01" y2="18"></line>
+            </svg>
+            <span>队列</span>
+            <span className="queue-float-count">{queueTasks.length}</span>
+          </button>
+          <div className={`queue-float-panel ${queuePanelOpen ? "is-open" : ""}`}>
+            <div className="queue-panel-header">
+              <div className="queue-panel-title">
+                <svg className="queue-title-svg-icon" xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.8, marginRight: "6px" }}>
+                  <line x1="8" y1="6" x2="21" y2="6"></line>
+                  <line x1="8" y1="12" x2="21" y2="12"></line>
+                  <line x1="8" y1="18" x2="21" y2="18"></line>
+                  <line x1="3" y1="6" x2="3.01" y2="6"></line>
+                  <line x1="3" y1="12" x2="3.01" y2="12"></line>
+                  <line x1="3" y1="18" x2="3.01" y2="18"></line>
+                </svg>
+                <span>任务队列 ({queueTasks.length})</span>
+              </div>
+              <button
+                type="button"
+                className="queue-clear-btn"
+                onClick={() => onClearQueue?.(sessionId)}
+                title="全部清空队列"
+              >
+                <svg className="trash-svg-icon" xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="3 6 5 6 21 6"></polyline>
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                  <line x1="10" y1="11" x2="10" y2="17"></line>
+                  <line x1="14" y1="11" x2="14" y2="17"></line>
+                </svg>
+              </button>
+            </div>
+            <div className="queue-panel-body">
+              {queueTasks.map((task, index) => (
+                <div key={task.id} className="queue-item">
+                  <span className="queue-item-index">{index + 1}</span>
+                  <span className="queue-item-text">{task.prompt}</span>
+                  <button
+                    type="button"
+                    className="queue-item-delete"
+                    onClick={() => onRemoveQueueTask?.(sessionId, task.id)}
+                    title="删除排队任务"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

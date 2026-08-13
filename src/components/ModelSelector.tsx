@@ -8,6 +8,8 @@ interface ModelSelectorProps {
   onSelectModel: (model: string | null) => void;
   onSelectProvider: (providerId: string) => void;
   onRefreshModelInfo?: () => void;
+  /** AI 思考中禁用切换（当前会话忙） */
+  disabled?: boolean;
 }
 
 /** 聊天输入框旁的模型/供应商选择器：点供应商定死默认（菜单保持打开可接着选模型），点模型或菜单外关闭 */
@@ -17,6 +19,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   onSelectModel,
   onSelectProvider,
   onRefreshModelInfo,
+  disabled = false,
 }) => {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -35,7 +38,13 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     return () => document.removeEventListener("mousedown", handleMouseDown);
   }, [open]);
 
+  // 思考中禁用：关闭可能已打开的菜单
+  useEffect(() => {
+    if (disabled) setOpen(false);
+  }, [disabled]);
+
   const toggle = () => {
+    if (disabled) return;
     const nextOpen = !open;
     setOpen(nextOpen);
     if (nextOpen) onRefreshModelInfo?.();
@@ -48,11 +57,14 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     <div className="chat-model-select" ref={containerRef}>
       <button
         type="button"
-        className={`chat-model-select-btn ${open ? "active" : ""}`}
+        className={`chat-model-select-btn ${open ? "active" : ""} ${disabled ? "is-disabled" : ""}`}
         onClick={toggle}
+        disabled={disabled}
         title={
-          `${routeEnabled ? "路由已开（走 CC Switch 代理）" : "路由已关（直连）"} · ` +
-          (selectedModel
+          disabled
+            ? "AI 思考中，暂时不能切换模型"
+            : `${routeEnabled ? "路由已开（走 CC Switch 代理）" : "路由已关（直连）"} · ` +
+              (selectedModel
             ? `当前模型：${selectedModel}`
             : modelInfo?.defaultModel
               ? `当前模型：${modelInfo.defaultModel}（该供应商默认）`

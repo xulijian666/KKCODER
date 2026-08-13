@@ -87,7 +87,7 @@ src/
 | `FilePreviewPanel.tsx` | 文件预览 + `useFilePreview` + 右键菜单组件 | `FilePreviewPanel`, `FilePreviewContextMenu`, `useFilePreview`, 相关类型 |
 | `ProjectTree.tsx` | 右侧项目文件树（支持插入另一侧） | `ProjectTree` |
 | `ProjectTreeBindingBar.tsx` | 分屏下项目树绑定顶栏（跟随/钉左/钉右） | `ProjectTreeBindingBar` |
-| `SettingsModal.tsx` | 设置中心（外观 / 助手 / 终端 / 通知 / 快捷短语 / 会话 / 远程 / 关于） | `SettingsModal` |
+| `SettingsModal.tsx` | 全屏设置中心（左侧分组菜单 + 返回应用 + 右侧内容区，布局参考 CC-GUI） | `SettingsModal` |
 | `RemoteSettingsPanel.tsx` | 远程访问 / FRP / 设备配对 | `RemoteSettingsPanel` |
 | `NewSessionModal.tsx` | 新建会话（Claude Code） | `NewSessionModal` |
 | `MdEditorModal.tsx` | CLAUDE.md / AGENTS.md 编辑 | `MdEditorModal` |
@@ -111,7 +111,7 @@ src/
 | `useSessionTabs.ts` | 标签开闭/拖拽/右键状态 | `useSessionTabs`, `TabContextMenuState` |
 | `useTerminalSplit.ts` | 最多 2 路左右分屏（固定右侧、拖条调比例、拖标签进右屏） | `useTerminalSplit` |
 | `useProjectTreeBinding.ts` | 分屏下项目树绑定会话解析 | `useProjectTreeBinding` |
-| `useSessionQueueEngine.ts` | 任务队列状态与自动调度 | `useSessionQueueEngine` |
+| `useSessionQueueEngine.ts` | 任务队列状态与自动调度（CLI 写终端 / GUI 聊天按会话模式路由） | `useSessionQueueEngine` |
 | `useUnreadCompletions.ts` | AI 完成闪烁、焦点、任务栏角标 | `useUnreadCompletions` |
 | `useAutoRename.ts` | 空闲/触发会话改名 | `useAutoRename` |
 | `useWindowChrome.ts` | 窗体尺寸、关闭策略、标题栏拖拽 | `useWindowChrome` |

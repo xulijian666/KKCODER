@@ -905,12 +905,6 @@ const SidebarImpl: React.FC<SidebarProps> = ({
                       <span className="project-star-badge" style={{ color: "#f59e0b", marginLeft: "4px" }}>★</span>
                     )}
                   </div>
-                  
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }} onClick={(e) => e.stopPropagation()}>
-                    <span className="project-session-count">
-                      {proj.sessions.length}
-                    </span>
-                  </div>
                 </div>
                 
                 {/* 会话列表（每个项目最多显示 5 个，超出折叠） */}

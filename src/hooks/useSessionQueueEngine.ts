@@ -14,18 +14,15 @@ import { notifyWarning } from "../utils/appFeedback";
 export interface UseSessionQueueEngineOptions {
   activeSessionId: string;
   openTabIds: string[];
-  writeToSessionTerminal: (
-    sessionId: string,
-    data: string,
-    announceCompatibilitySubmission?: boolean,
-  ) => Promise<void>;
+  /** 投递一条队列任务：CLI 终端写 PTY、GUI 聊天走 chat 发送（由 App 层按会话模式路由） */
+  dispatchTask: (sessionId: string, prompt: string) => Promise<void>;
   onTaskSubmitted: (sessionId: string) => void;
 }
 
 export function useSessionQueueEngine({
   activeSessionId,
   openTabIds,
-  writeToSessionTerminal,
+  dispatchTask,
   onTaskSubmitted,
 }: UseSessionQueueEngineOptions) {
   const [queueBySession, setQueueBySession] = useState<QueueBySession>({});
@@ -34,8 +31,8 @@ export function useSessionQueueEngine({
   const [queueTargetSessionId, setQueueTargetSessionId] = useState("");
   const [sessionBusy, setSessionBusy] = useState<Record<string, boolean>>({});
 
-  const writeToSessionTerminalRef = useRef(writeToSessionTerminal);
-  writeToSessionTerminalRef.current = writeToSessionTerminal;
+  const dispatchTaskRef = useRef(dispatchTask);
+  dispatchTaskRef.current = dispatchTask;
   const onTaskSubmittedRef = useRef(onTaskSubmitted);
   onTaskSubmittedRef.current = onTaskSubmitted;
   const openTabIdsRef = useRef(openTabIds);
@@ -83,8 +80,8 @@ export function useSessionQueueEngine({
       log(`[Queue] Auto-triggering queued task: "${nextTask.prompt}" for session: ${sessionId}`);
       setSessionBusy((previous) => ({ ...previous, [sessionId]: true }));
 
-      writeToSessionTerminalRef
-        .current(sessionId, `${nextTask.prompt}\r\n`, true)
+      dispatchTaskRef
+        .current(sessionId, nextTask.prompt)
         .then(() => {
           onTaskSubmittedRef.current(sessionId);
           log(
