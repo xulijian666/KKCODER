@@ -1,7 +1,7 @@
 // KKCoder Tauri 后端核心代码 - SQLite 数据库持久化及 PTY 虚拟终端控制
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
-use tauri::{State, AppHandle, Emitter};
+use tauri::{State, AppHandle, Emitter, Manager};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize, MasterPty};
 use std::io::Write;
 
@@ -10,20 +10,103 @@ mod native_terminal;
 mod claude_chat;
 mod claude_model;
 
-// 极其可靠的本地调试文件日志输出器，自动写入 kkcoder_debug.log 以便于闪退后追溯
-pub(crate) fn log_to_file(message: &str) {
+// 极其可靠的本地调试文件日志输出器。
+// 日志目录：<工作目录>/logs/（dev 下即 src-tauri/logs/）
+//   - global.log            全局日志（启动/数据库/无会话上下文事件）
+//   - sessions/<id>.log     每个 sessionId 一个独立日志文件
+//   - frontend.log          前端操作日志（经 append_frontend_log 落盘）
+// 单文件上限 MAX_LOG_BYTES，超出后滚动为 .1 重新开始。
+pub(crate) fn logs_root() -> std::path::PathBuf {
+    std::path::PathBuf::from("logs")
+}
+
+const MAX_LOG_BYTES: u64 = 20 * 1024 * 1024;
+
+/// 调试日志总开关（设置中心可开/关；默认开启）
+static DEBUG_LOG_ENABLED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(true);
+
+/// 设置中心：开/关调试日志（前端在启动与切换时调用）
+#[tauri::command]
+fn set_debug_log_enabled(enabled: bool) -> Result<(), String> {
+    let previous = DEBUG_LOG_ENABLED.swap(enabled, std::sync::atomic::Ordering::SeqCst);
+    if previous != enabled {
+        append_to_log(&logs_root().join("global.log"), &format!("[debug-log] enabled={enabled}"));
+    }
+    Ok(())
+}
+
+/// 设置中心：一键清理全部日志文件（保留 logs/ 目录结构）
+#[tauri::command]
+fn clear_log_files() -> Result<(), String> {
+    let root = logs_root();
+    if root.is_dir() {
+        for entry in std::fs::read_dir(&root).map_err(|e| e.to_string())? {
+            let path = entry.map_err(|e| e.to_string())?.path();
+            if path.is_dir() {
+                if let Ok(sub) = std::fs::read_dir(&path) {
+                    for file in sub.flatten() {
+                        let _ = std::fs::remove_file(file.path());
+                    }
+                }
+            } else {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+    }
+    // 清理动作本身留痕（开关开启时可见）
+    append_to_log(&root.join("global.log"), "[debug-log] log files cleared");
+    Ok(())
+}
+
+fn append_to_log(path: &std::path::Path, message: &str) {
     use std::fs::OpenOptions;
     use std::io::Write;
+    if !DEBUG_LOG_ENABLED.load(std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    // 超限滚动：旧文件改名为 .1（覆盖上次滚动），新内容重新开始
+    if path.metadata().map(|m| m.len()).unwrap_or(0) > MAX_LOG_BYTES {
+        let _ = std::fs::rename(path, path.with_extension("log.1"));
+    }
     if let Ok(mut file) = OpenOptions::new()
         .create(true)
         .write(true)
         .append(true)
-        .open("kkcoder_debug.log")
+        .open(path)
     {
         let now = std::time::SystemTime::now();
         let since_the_epoch = now.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
         let _ = writeln!(file, "[Timestamp: {}ms] {}", since_the_epoch.as_millis(), message);
     }
+}
+
+/// 全局日志（无会话上下文）
+pub(crate) fn log_to_file(message: &str) {
+    append_to_log(&logs_root().join("global.log"), message);
+}
+
+/// 会话日志：按 sessionId 单独一个文件（路径安全字符已过滤）
+pub(crate) fn log_session(session_id: &str, message: &str) {
+    let safe: String = session_id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    let safe = if safe.is_empty() { "unknown".to_string() } else { safe };
+    append_to_log(
+        &logs_root().join("sessions").join(format!("{safe}.log")),
+        message,
+    );
+}
+
+/// 前端操作日志落盘（前端 log() 批量调用）
+#[tauri::command]
+fn append_frontend_log(message: String) -> Result<(), String> {
+    append_to_log(&logs_root().join("frontend.log"), &message);
+    Ok(())
 }
 
 pub struct ActiveSession {
@@ -55,7 +138,7 @@ struct Session {
     project: String,
     path: String,
     #[serde(rename = "type")]
-    session_type: String, // "claude" or "pi"
+    session_type: String, // "claude"（Pi / Codex 集成已移除）
     #[serde(rename = "agentSessionId")]
     agent_session_id: String,
     #[serde(rename = "createdAt", skip_serializing_if = "Option::is_none")]
@@ -855,7 +938,7 @@ fn spawn_terminal(
     model_state: State<'_, claude_model::ClaudeModelState>,
     app_handle: AppHandle,
 ) -> Result<(), String> {
-    log_to_file(&format!(
+    log_session(&session_id, &format!(
         "spawn_terminal called: session_id={}, directory={}, agent_type={}, agent_session_id={}, is_reopen={}, initial_cols={:?}, initial_rows={:?}",
         session_id, directory, agent_type, agent_session_id, is_reopen, initial_cols, initial_rows
     ));
@@ -865,13 +948,13 @@ fn spawn_terminal(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos() as u64;
-    log_to_file(&format!("spawn_terminal generated spawn_token: {}", spawn_token));
+    log_session(&session_id, &format!("spawn_terminal generated spawn_token: {}", spawn_token));
 
     // 🎯 检查是否已经在运行中，若是则直接返回，防范 duplicate spawning 重复拉起
     {
         let sessions = state.sessions.lock().unwrap();
         if sessions.contains_key(&session_id) {
-            log_to_file(&format!("spawn_terminal: Session {} is already active in sessions map. Skipping duplicate spawn.", session_id));
+            log_session(&session_id, &format!("spawn_terminal: Session {} is already active in sessions map. Skipping duplicate spawn.", session_id));
             return Ok(());
         }
     }
@@ -880,14 +963,14 @@ fn spawn_terminal(
     let path = std::path::Path::new(&directory);
     if !path.exists() || !path.is_dir() {
         let err_msg = format!("项目目录路径不存在或不是一个有效文件夹，请核对路径: {}", directory);
-        log_to_file(&format!("spawn_terminal path error: {}", err_msg));
+        log_session(&session_id, &format!("spawn_terminal path error: {}", err_msg));
         return Err(err_msg);
     }
-    log_to_file("spawn_terminal directory exists and is a valid directory.");
+    log_session(&session_id, "spawn_terminal directory exists and is a valid directory.");
 
-    log_to_file("Obtaining native PTY system...");
+    log_session(&session_id, "Obtaining native PTY system...");
     let pty_system = native_pty_system();
-    log_to_file("PTY system obtained. Opening PTY...");
+    log_session(&session_id, "PTY system obtained. Opening PTY...");
     let pty_cols = initial_cols.unwrap_or(80).clamp(20, 300);
     let pty_rows = initial_rows.unwrap_or(24).clamp(5, 120);
     let pair = pty_system.openpty(PtySize {
@@ -897,10 +980,10 @@ fn spawn_terminal(
         pixel_height: 0,
     }).map_err(|e: anyhow::Error| {
         let err_msg = format!("openpty failed: {}", e);
-        log_to_file(&format!("spawn_terminal error: {}", err_msg));
+        log_session(&session_id, &format!("spawn_terminal error: {}", err_msg));
         err_msg
     })?;
-    log_to_file("PTY opened successfully.");
+    log_session(&session_id, "PTY opened successfully.");
 
     #[cfg(target_os = "windows")]
     let mut cmd = {
@@ -914,38 +997,38 @@ fn spawn_terminal(
     #[cfg(not(target_os = "windows"))]
     let mut cmd = CommandBuilder::new("bash");
 
-    log_to_file(&format!("Setting slave working directory to: {}", directory));
+    log_session(&session_id, &format!("Setting slave working directory to: {}", directory));
     cmd.cwd(std::path::PathBuf::from(&directory));
     // KKCoder owns this PTY's color capability. Do not inherit host-level
-    // opt-outs (for example Codex launches with NO_COLOR=1).
+    // opt-outs (for example Claude may be launched with NO_COLOR set).
     cmd.env_remove("NO_COLOR");
     cmd.env_remove("NODE_DISABLE_COLORS");
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
     cmd.env("TERM_PROGRAM", "KKCoder");
 
-    log_to_file("Spawning command in PTY slave...");
+    log_session(&session_id, "Spawning command in PTY slave...");
     let mut _child = pair.slave.spawn_command(cmd).map_err(|e: anyhow::Error| {
         let err_msg = format!("spawn_command failed: {}", e);
-        log_to_file(&format!("spawn_terminal error: {}", err_msg));
+        log_session(&session_id, &format!("spawn_terminal error: {}", err_msg));
         err_msg
     })?;
-    log_to_file("Slave process spawned successfully.");
+    log_session(&session_id, "Slave process spawned successfully.");
     
     let master = pair.master;
-    log_to_file("Taking master writer...");
+    log_session(&session_id, "Taking master writer...");
     let mut writer = master.take_writer().map_err(|e: anyhow::Error| {
         let err_msg = format!("take_writer failed: {}", e);
-        log_to_file(&format!("spawn_terminal error: {}", err_msg));
+        log_session(&session_id, &format!("spawn_terminal error: {}", err_msg));
         err_msg
     })?;
-    log_to_file("Cloning master reader...");
+    log_session(&session_id, "Cloning master reader...");
     let reader = master.try_clone_reader().map_err(|e: anyhow::Error| {
         let err_msg = format!("try_clone_reader failed: {}", e);
-        log_to_file(&format!("spawn_terminal error: {}", err_msg));
+        log_session(&session_id, &format!("spawn_terminal error: {}", err_msg));
         err_msg
     })?;
-    log_to_file("Master reader cloned.");
+    log_session(&session_id, "Master reader cloned.");
     let master_shared = Arc::new(Mutex::new(master));
 
     // 自动运行 Agent CLI 脚本
@@ -961,128 +1044,83 @@ fn spawn_terminal(
             .map(|model| format!("--model \"{}\" ", model.trim()))
             .unwrap_or_default()
     };
-    let initial_cmd = if agent_type == "claude" {
-        if is_reopen {
-            format!("claude --dangerously-skip-permissions {model_flag}\r\n")
-        } else {
-            format!(
-                "claude --dangerously-skip-permissions {model_flag}--session-id \"{}\"\r\n",
-                agent_session_id
-            )
-        }
-    } else if agent_type == "pi" {
-        if is_reopen {
-            format!("pi --session \"{}\"\r\n", agent_session_id)
-        } else {
-            "pi\r\n".to_string()
-        }
-    } else if agent_type == "codex" {
-        // Codex：首次只能 `codex` 启动；重开且已捕获真实 session id 时用 resume
-        if is_reopen && !agent_session_id.trim().is_empty() {
-            format!("codex resume {}\r\n", agent_session_id.trim())
-        } else {
-            "codex\r\n".to_string()
-        }
+    // 仅支持 Claude Code 助手（Pi / Codex 集成已移除）
+    let initial_cmd = if is_reopen {
+        format!("claude --dangerously-skip-permissions {model_flag}\r\n")
     } else {
-        "\r\n".to_string()
+        format!(
+            "claude --dangerously-skip-permissions {model_flag}--session-id \"{}\"\r\n",
+            agent_session_id
+        )
     };
-    log_to_file(&format!("initial_cmd prepared: {:?}", initial_cmd));
+    log_session(&session_id, &format!("initial_cmd prepared: {:?}", initial_cmd));
 
-    log_to_file("Sleeping 300ms before initial command write...");
+    log_session(&session_id, "Sleeping 300ms before initial command write...");
     std::thread::sleep(std::time::Duration::from_millis(300));
     
-    log_to_file("Writing initial command to PTY master writer...");
+    log_session(&session_id, "Writing initial command to PTY master writer...");
     writer.write_all(initial_cmd.as_bytes()).map_err(|e: std::io::Error| {
         let err_msg = format!("write_all initial_cmd failed: {}", e);
-        log_to_file(&format!("spawn_terminal error: {}", err_msg));
+        log_session(&session_id, &format!("spawn_terminal error: {}", err_msg));
         err_msg
     })?;
     writer.flush().map_err(|e: std::io::Error| {
         let err_msg = format!("flush initial_cmd failed: {}", e);
-        log_to_file(&format!("spawn_terminal error: {}", err_msg));
+        log_session(&session_id, &format!("spawn_terminal error: {}", err_msg));
         err_msg
     })?;
-    log_to_file("Initial command written and flushed.");
+    log_session(&session_id, "Initial command written and flushed.");
 
     // 包装 writer 为 Arc<Mutex<>> 以便远程输入共享
     let writer = Arc::new(Mutex::new(writer));
 
     // 如果是重新唤起已有的克劳德会话，则延时 2.5 秒等 Claude Banner 加载后，自动键入 /resume 还原会话
     if is_reopen && agent_type == "claude" {
-        log_to_file("is_reopen is true for Claude: spawning background thread for `/resume` writing...");
+        log_session(&session_id, "is_reopen is true for Claude: spawning background thread for `/resume` writing...");
         let sessions_clone = state.sessions.clone();
         let session_id_clone = session_id.clone();
         let agent_session_id_clone = agent_session_id.clone();
         std::thread::spawn(move || {
-            log_to_file(&format!("Background `/resume` thread spawned. spawn_token={}. Sleeping 3000ms...", spawn_token));
+            log_session(&session_id_clone, &format!("Background `/resume` thread spawned. spawn_token={}. Sleeping 3000ms...", spawn_token));
             // 等待 3 秒让 Claude 客户端完全拉起并输出提示符
             std::thread::sleep(std::time::Duration::from_millis(3000));
-            log_to_file("Background `/resume` thread sleep finished. Locking sessions map...");
+            log_session(&session_id_clone, "Background `/resume` thread sleep finished. Locking sessions map...");
             let mut sessions = sessions_clone.lock().unwrap();
             if let Some(session) = sessions.get_mut(&session_id_clone) {
                 // 校验 Token：若已被新 Spawn 实例覆盖，则放弃本次过期的键入操作，彻底杜绝重复键入
                 if session.spawn_token != spawn_token {
-                    log_to_file(&format!("Stale spawn token detected (active={}, thread={}). Safely skipping resume typing.", session.spawn_token, spawn_token));
+                    log_session(&session_id_clone, &format!("Stale spawn token detected (active={}, thread={}). Safely skipping resume typing.", session.spawn_token, spawn_token));
                     return;
                 }
 
                 // 分两步发送：先发命令，再发回车
                 let resume_cmd = format!("/resume {}", agent_session_id_clone);
-                log_to_file(&format!("Background thread: writing resume cmd: {:?}", resume_cmd));
+                log_session(&session_id_clone, &format!("Background thread: writing resume cmd: {:?}", resume_cmd));
                 {
                     let mut w = session.writer.lock().unwrap();
                     w.write_all(resume_cmd.as_bytes()).ok();
                     w.flush().ok();
                 }
-                log_to_file("Background thread: resume cmd written, sleeping 200ms before Enter...");
+                log_session(&session_id_clone, "Background thread: resume cmd written, sleeping 200ms before Enter...");
 
                 // 等待 200ms 确保命令被处理
                 std::thread::sleep(std::time::Duration::from_millis(200));
 
                 // 发送回车
-                log_to_file("Background thread: sending Enter key...");
+                log_session(&session_id_clone, "Background thread: sending Enter key...");
                 {
                     let mut w = session.writer.lock().unwrap();
                     w.write_all(b"\r").ok();
                     w.flush().ok();
                 }
-                log_to_file("Background thread: Enter key sent successfully!");
+                log_session(&session_id_clone, "Background thread: Enter key sent successfully!");
             } else {
-                log_to_file("Background thread error: active session not found inside sessions map!");
+                log_session(&session_id_clone, "Background thread error: active session not found inside sessions map!");
             }
         });
     }
 
-    // 如果是首次创建的 Pi 会话，则延时 2.0 秒等 Pi 客户端完全拉起后，自动键入 /session 获取并存储 session ID
-    if !is_reopen && agent_type == "pi" {
-        log_to_file("!is_reopen is true for Pi: spawning background thread for `/session` writing...");
-        let sessions_clone = state.sessions.clone();
-        let session_id_clone = session_id.clone();
-        std::thread::spawn(move || {
-            log_to_file(&format!("Background `/session` thread spawned. spawn_token={}. Sleeping 2000ms...", spawn_token));
-            std::thread::sleep(std::time::Duration::from_millis(2000));
-            log_to_file("Background `/session` thread sleep finished. Locking sessions map...");
-            let mut sessions = sessions_clone.lock().unwrap();
-            if let Some(session) = sessions.get_mut(&session_id_clone) {
-                if session.spawn_token != spawn_token {
-                    log_to_file(&format!("Stale spawn token detected (active={}, thread={}). Safely skipping session query.", session.spawn_token, spawn_token));
-                    return;
-                }
-
-                log_to_file("Background thread: writing /session cmd...");
-                {
-                    let mut w = session.writer.lock().unwrap();
-                    w.write_all(b"/session\r\n").ok();
-                    w.flush().ok();
-                }
-                log_to_file("Background thread: /session cmd written!");
-            }
-        });
-    }
-
-    // Codex session id 不再通过自动键入 /status 获取：
-    // 首次仅启动 `codex`；首句对话后由前端调用 capture_codex_session_id
-    // 从 ~/.codex/sessions 的 rollout 文件静默绑定真实 UUID。
+    // 首次创建的 Claude 会话：agentSessionId 由前端预生成并传入，无需自动键入获取。
 
     let session_id_clone = session_id.clone();
     let app_handle_clone = app_handle.clone();
@@ -1141,17 +1179,17 @@ fn spawn_terminal(
         None
     };
 
-    log_to_file("Spawning PTY reader listener thread...");
+    log_session(&session_id, "Spawning PTY reader listener thread...");
     let conversation_for_cleanup = state.conversation.clone();
     std::thread::spawn(move || {
-        log_to_file("PTY reader listener thread spawned.");
+        log_session(&session_id_clone, "PTY reader listener thread spawned.");
         let mut reader = reader;
         let mut buffer = [0u8; 4096];
         let mut leftover = Vec::new();
         let mut seq: u64 = 0;
         while let Ok(n) = reader.read(&mut buffer) {
             if n == 0 {
-                log_to_file("PTY reader thread: read EOF (0 bytes). Exiting reader loop.");
+                log_session(&session_id_clone, "PTY reader thread: read EOF (0 bytes). Exiting reader loop.");
                 break;
             }
             let mut current = leftover;
@@ -1199,7 +1237,7 @@ fn spawn_terminal(
                 let _ = output_tx.send(frame);
             }
         }
-        log_to_file("PTY reader listener thread exited.");
+        log_session(&session_id_clone, "PTY reader listener thread exited.");
         // 当进程退出时，自动从 sessions map 中清理，以防下一次无法重新拉起
         let mut sessions = sessions_map_clone.lock().unwrap();
         sessions.remove(&session_id_clone);
@@ -1207,13 +1245,13 @@ fn spawn_terminal(
         if let Some(ref conv) = conversation_for_cleanup {
             conv.unregister_session(&session_id_clone);
         }
-        log_to_file(&format!(
+        log_session(&session_id_clone, &format!(
             "Session {} cleaned up from sessions map after PTY EOF.",
             session_id_clone
         ));
     });
 
-    log_to_file("Locking sessions map to insert active session...");
+    log_session(&session_id, "Locking sessions map to insert active session...");
     let mut sessions = state.sessions.lock().unwrap();
     sessions.insert(
         session_id.clone(),
@@ -1227,7 +1265,7 @@ fn spawn_terminal(
     // 将 writer 注册到远程状态（用于远程 WebSocket 输入写入）
     // 通过 SessionRegistry 的 SessionHandle 存储 writer 引用
     // 实际上，远程输入通过共享的 writer Arc<Mutex<>> 直接写入
-    log_to_file(&format!(
+    log_session(&session_id, &format!(
         "Session inserted into sessions map with spawn_token {}. spawn_terminal finished successfully!",
         spawn_token
     ));
@@ -1342,25 +1380,28 @@ fn close_terminal(
     session_id: String,
     state: State<'_, PtyManager>,
 ) -> Result<(), String> {
-    log_to_file(&format!("close_terminal called: session_id={}", session_id));
+    log_session(&session_id, &format!("close_terminal called: session_id={}", session_id));
     let mut sessions = state.sessions.lock().unwrap();
     if sessions.remove(&session_id).is_some() {
-        log_to_file(&format!("Session {} successfully removed and dropped.", session_id));
+        log_session(&session_id, &format!("Session {} successfully removed and dropped.", session_id));
         // 从远程 session_registry 中移除（同步更新手机端状态）
         if let Some(ref registry) = state.session_registry {
             registry.remove(&session_id);
-            log_to_file(&format!("Session {} removed from remote registry.", session_id));
+            log_session(&session_id, &format!("Session {} removed from remote registry.", session_id));
         }
         Ok(())
     } else {
-        log_to_file(&format!("Session {} not found in active sessions map.", session_id));
+        log_session(&session_id, &format!("Session {} not found in active sessions map.", session_id));
         Ok(())
     }
 }
 
 // 15. 播放本地通知音效与系统气泡通知（极其可靠，不受浏览器沙盒和后台静音限制）
+// 音色以 desktop-cc-gui 为准（src-tauri/assets/sounds/，打包后经 bundle.resources 带入）：
+//   default→success.wav  chime→chime.wav  bell→bell.wav  ding→ding.wav  success→task-complete.wav
 #[tauri::command]
 fn play_notification_sound(
+    app: AppHandle,
     tone: String,
     volume: f64,
     title: Option<String>,
@@ -1371,32 +1412,43 @@ fn play_notification_sound(
         tone, volume, title, message
     ));
 
+    // 新 id（CC GUI 体系）；旧 id 兼容映射到最接近的新音色；未知回退 default
     let file_name = match tone.as_str() {
-        "dingdong" => "ding.wav",
-        "bell" => "chimes.wav",
-        "success" => "tada.wav",
-        "alarm" => "Alarm01.wav",
-        "bubble" => "Windows Balloon.wav",
-        "crystal" => "chord.wav",
-        "dream" => "Windows Notify.wav",
-        "water" => "Windows Default.wav",
-        _ => "ding.wav",
+        "default" | "alarm" | "bubble" | "water" => "success.wav",
+        "chime" | "crystal" => "chime.wav",
+        "bell" => "bell.wav",
+        "ding" | "dingdong" => "ding.wav",
+        "success" | "dream" => "task-complete.wav",
+        _ => "success.wav",
     };
 
-    let wav_path = format!("C:/Windows/Media/{}", file_name);
+    // 解析声音文件路径：dev 工作目录(src-tauri)/assets/sounds → 打包 resources/assets/sounds → Windows Media 回退
+    let wav_path = resolve_sound_path(&app, file_name);
+
     let vol_scaled = volume / 100.0;
 
     std::thread::spawn(move || {
         #[cfg(target_os = "windows")]
         {
             use std::os::windows::process::CommandExt;
+            // MediaPlayer.Open 是异步的：PowerShell 5.1(MTA) 下 MediaOpened 事件不可靠，
+            // 用 HasAudio 轮询等待媒体加载完成后再 Play，否则会无声。
+            // 播放完成后等足时长再退出进程（进程退出会中断播放）。
             let mut ps_script = format!(
                 "Add-Type -AssemblyName PresentationCore; \
                  $p = New-Object System.Windows.Media.MediaPlayer; \
-                 $p.Open('{}'); \
                  $p.Volume = {}; \
-                 $p.Play();",
-                wav_path, vol_scaled
+                 $p.Open('{}'); \
+                 $deadline = (Get-Date).AddSeconds(4); \
+                 while ((Get-Date) -lt $deadline) {{ Start-Sleep -Milliseconds 50; if ($p.HasAudio) {{ break }} }}; \
+                 if ($p.HasAudio) {{ \
+                   $p.Play(); \
+                   $dur = $p.NaturalDuration.TimeSpan.TotalMilliseconds; \
+                   if ($dur -gt 0) {{ Start-Sleep -Milliseconds ([Math]::Min($dur + 300, 15000)) }} \
+                   else {{ Start-Sleep -Seconds 2 }}; \
+                   Write-Output 'SOUND_PLAYED' \
+                 }} else {{ Write-Output 'SOUND_FAILED' }}",
+                vol_scaled, wav_path
             );
 
             if let (Some(t), Some(m)) = (title, message) {
@@ -1413,12 +1465,19 @@ fn play_notification_sound(
                 ));
             }
 
-            ps_script.push_str(" Start-Sleep -s 3;");
-
-            let _ = std::process::Command::new("powershell")
+            let output = std::process::Command::new("powershell")
                 .args(["-Command", &ps_script])
                 .creation_flags(0x08000000) // CREATE_NO_WINDOW
                 .output();
+            // 播放结果留痕：SOUND_FAILED 表示媒体加载失败（便于定位无声问题）
+            if let Ok(out) = output {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                if stdout.contains("SOUND_FAILED") {
+                    crate::log_to_file(&format!("[sound] play FAILED: path={}", wav_path));
+                } else {
+                    crate::log_to_file(&format!("[sound] play ok: path={}", wav_path));
+                }
+            }
         }
         #[cfg(not(target_os = "windows"))]
         {
@@ -1427,6 +1486,28 @@ fn play_notification_sound(
     });
 
     Ok(())
+}
+
+/// 解析声音文件绝对路径：dev 用 CARGO_MANIFEST_DIR（=src-tauri 绝对路径）→ 打包 resources 目录 → Windows 系统媒体目录回退
+fn resolve_sound_path(app: &AppHandle, file_name: &str) -> String {
+    use std::path::PathBuf;
+    // 1) dev 模式：CARGO_MANIFEST_DIR 为编译期嵌入的 src-tauri 绝对路径（不依赖运行时工作目录）
+    let dev_candidate = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("assets")
+        .join("sounds")
+        .join(file_name);
+    if dev_candidate.exists() {
+        return dev_candidate.to_string_lossy().to_string();
+    }
+    // 2) 打包模式：bundle.resources 带入的 resources/assets/sounds/
+    if let Ok(res_dir) = app.path().resource_dir() {
+        let res_candidate = res_dir.join("assets").join("sounds").join(file_name);
+        if res_candidate.exists() {
+            return res_candidate.to_string_lossy().to_string();
+        }
+    }
+    // 3) 回退：Windows 系统音效
+    format!("C:/Windows/Media/{}", file_name)
 }
 
 #[tauri::command]
@@ -1534,160 +1615,6 @@ fn encode_claude_project_path(path: &str) -> String {
     path.replace(':', "-")
         .replace('\\', "-")
         .replace('/', "-")
-}
-
-// ==================== Codex 会话 ID 捕获（~/.codex/sessions） ====================
-
-/// 归一化路径，便于 cwd 比较（盘符小写、统一 `/`、去掉尾部分隔符）
-fn normalize_path_for_compare(path: &str) -> String {
-    let mut normalized = path.replace('\\', "/");
-    while normalized.ends_with('/') && normalized.len() > 1 {
-        normalized.pop();
-    }
-    // Windows 盘符统一小写
-    if normalized.len() >= 2 && normalized.as_bytes()[1] == b':' {
-        let mut chars: Vec<char> = normalized.chars().collect();
-        chars[0] = chars[0].to_ascii_lowercase();
-        normalized = chars.into_iter().collect();
-    }
-    normalized
-}
-
-/// 从 rollout 文件名解析 session UUID
-/// 例: rollout-2026-07-24T00-48-42-019f8fe1-1bac-7293-b0c4-b811a5cf95ca.jsonl
-fn parse_codex_session_id_from_filename(file_name: &str) -> Option<String> {
-    let stem = file_name.strip_suffix(".jsonl")?;
-    let rest = stem.strip_prefix("rollout-")?;
-    // UUID 固定 36 字符，位于文件名末尾
-    if rest.len() < 36 {
-        return None;
-    }
-    let candidate = &rest[rest.len() - 36..];
-    if candidate.len() == 36
-        && candidate.as_bytes().get(8) == Some(&b'-')
-        && candidate.as_bytes().get(13) == Some(&b'-')
-        && candidate.as_bytes().get(18) == Some(&b'-')
-        && candidate.as_bytes().get(23) == Some(&b'-')
-    {
-        return Some(candidate.to_string());
-    }
-    None
-}
-
-/// 读取 rollout 首条 session_meta 中的 cwd / session_id
-fn read_codex_rollout_meta(path: &std::path::Path) -> Option<(String, String)> {
-    use std::io::{BufRead, BufReader};
-    let file = std::fs::File::open(path).ok()?;
-    let mut reader = BufReader::new(file);
-    let mut first_line = String::new();
-    reader.read_line(&mut first_line).ok()?;
-    let obj: serde_json::Value = serde_json::from_str(first_line.trim()).ok()?;
-    if obj.get("type").and_then(|v| v.as_str()) != Some("session_meta") {
-        // 仍可从文件名拿 id；cwd 可能在 payload 里
-    }
-    let payload = obj.get("payload")?;
-    let session_id = payload
-        .get("session_id")
-        .or_else(|| payload.get("id"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .or_else(|| {
-            path.file_name()
-                .and_then(|n| n.to_str())
-                .and_then(parse_codex_session_id_from_filename)
-        })?;
-    let cwd = payload
-        .get("cwd")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    Some((session_id, cwd))
-}
-
-/// 在 ~/.codex/sessions 下按项目 cwd 查找最近生成的 Codex session UUID
-pub(crate) fn find_latest_codex_session_id(
-    project_path: &str,
-    not_before_ms: Option<u64>,
-) -> Option<String> {
-    let home = dirs::home_dir()?;
-    let sessions_root = home.join(".codex").join("sessions");
-    if !sessions_root.is_dir() {
-        return None;
-    }
-
-    let target_cwd = normalize_path_for_compare(project_path);
-    let not_before = not_before_ms.unwrap_or(0);
-
-    let mut best: Option<(u64, String)> = None;
-    let mut stack = vec![sessions_root];
-
-    while let Some(dir) = stack.pop() {
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-                continue;
-            }
-            let file_name = match path.file_name().and_then(|n| n.to_str()) {
-                Some(n) => n,
-                None => continue,
-            };
-            if !file_name.starts_with("rollout-") || !file_name.ends_with(".jsonl") {
-                continue;
-            }
-
-            let modified_ms = entry
-                .metadata()
-                .ok()
-                .and_then(|m| m.modified().ok())
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_millis() as u64)
-                .unwrap_or(0);
-
-            if not_before > 0 && modified_ms + 2_000 < not_before {
-                // 允许 2s 时钟误差；过旧文件跳过
-                continue;
-            }
-
-            let (session_id, cwd) = match read_codex_rollout_meta(&path) {
-                Some(v) => v,
-                None => continue,
-            };
-            if cwd.is_empty() {
-                continue;
-            }
-            if normalize_path_for_compare(&cwd) != target_cwd {
-                continue;
-            }
-
-            match &best {
-                Some((best_ms, _)) if *best_ms >= modified_ms => {}
-                _ => best = Some((modified_ms, session_id)),
-            }
-        }
-    }
-
-    best.map(|(_, id)| id)
-}
-
-/// 捕获当前项目下最新生成的 Codex session id，供前端写回 SQLite
-#[tauri::command]
-fn capture_codex_session_id(project_path: String, not_before_ms: Option<u64>) -> Result<String, String> {
-    log_to_file(&format!(
-        "capture_codex_session_id: project_path={}, not_before_ms={:?}",
-        project_path, not_before_ms
-    ));
-    match find_latest_codex_session_id(&project_path, not_before_ms) {
-        Some(id) => {
-            log_to_file(&format!("capture_codex_session_id found: {}", id));
-            Ok(id)
-        }
-        None => Err("尚未找到匹配的 Codex 会话文件，请稍后再试".to_string()),
-    }
 }
 
 /// 在 ~/.claude/projects/ 下查找指定 session 的 JSONL 文件
@@ -3481,7 +3408,9 @@ pub fn run() {
             write_to_terminal,
             resize_terminal,
             close_terminal,
-            capture_codex_session_id,
+            append_frontend_log,
+            set_debug_log_enabled,
+            clear_log_files,
             native_terminal::spawn_compat_terminal,
             native_terminal::write_to_compat_terminal,
             native_terminal::resize_compat_terminal,

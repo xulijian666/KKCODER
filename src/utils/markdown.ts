@@ -8,6 +8,7 @@
 import { Marked, type Tokens } from "marked";
 import Prism from "prismjs";
 import { MAX_MARKDOWN_SIZE, MAX_MARKDOWN_LINES, slugify } from "./markdownToc.ts";
+import { log } from "./log.ts";
 
 export { buildMarkdownToc, type MarkdownTocEntry } from "./markdownToc.ts";
 
@@ -28,6 +29,23 @@ import "prismjs/components/prism-bash.js";
 import "prismjs/components/prism-sql.js";
 import "prismjs/components/prism-markdown.js";
 import "prismjs/components/prism-diff.js";
+
+// HTML 代码块「预览/源码」切换：仅当体积可控时启用 iframe 预览
+const MAX_HTML_PREVIEW_SIZE = 50 * 1024;
+const MAX_HTML_PREVIEW_LINES = 1000;
+// radio id 完全确定性：key = 渲染输入的内容 hash，序号 = 该次渲染内代码块序号。
+// 相同消息无论渲染多少次都生成相同的 id/name，DOM 不会因 id 变化被 React 重新注入，
+// 「源码/预览」切换状态得以保留（即使 LRU 缓存被清空也稳定）。
+let currentRenderKey = "";
+let htmlBlockSeqInRender = 0;
+
+function hashString(text: string): string {
+  let hash = 5381;
+  for (let i = 0; i < text.length; i++) {
+    hash = ((hash << 5) + hash + text.charCodeAt(i)) | 0;
+  }
+  return (hash >>> 0).toString(36);
+}
 
 const LANG_ALIASES: Record<string, string> = {
   js: "javascript",
@@ -114,9 +132,38 @@ function createMarked(): Marked {
           language !== "plain"
             ? `<span class="md-code-lang">${escapeHtml(language)}</span>`
             : "";
+        // HTML 代码块（html/xml/svg 等 markup 语言）：支持「预览/源码」右上角切换。
+        // 用 radio + label 纯 CSS 切换（点击 label 即切换 radio，无 JS 依赖）
+        if (
+          language === "markup" &&
+          raw.length <= MAX_HTML_PREVIEW_SIZE &&
+          raw.split("\n").length <= MAX_HTML_PREVIEW_LINES
+        ) {
+          const srcdoc = escapeHtml(raw);
+          const uid = `hpv-${currentRenderKey}-${++htmlBlockSeqInRender}`;
+          return (
+            `<div class="md-html-preview">` +
+            `<input type="radio" class="md-html-preview-radio md-html-preview-radio-pv" name="${uid}" id="${uid}-pv" checked />` +
+            `<input type="radio" class="md-html-preview-radio md-html-preview-radio-src" name="${uid}" id="${uid}-src" />` +
+            `<div class="md-html-preview-bar">` +
+            label +
+            `<span class="md-html-preview-tabs">` +
+            `<label class="md-html-preview-tab md-html-preview-tab-pv" for="${uid}-pv">预览</label>` +
+            `<label class="md-html-preview-tab md-html-preview-tab-src" for="${uid}-src">源码</label>` +
+            `</span>` +
+            `<button type="button" class="md-code-copy" title="复制代码">复制</button>` +
+            `</div>` +
+            `<iframe class="md-html-preview-frame" sandbox="" srcdoc="${srcdoc}" title="HTML 预览"></iframe>` +
+            `<pre class="md-pre md-html-preview-source"><code class="md-code${langClass}">${highlighted}</code></pre>` +
+            `</div>`
+          );
+        }
         return (
           `<div class="md-code-block">` +
+          `<div class="md-code-head">` +
           label +
+          `<button type="button" class="md-code-copy" title="复制代码">复制</button>` +
+          `</div>` +
           `<pre class="md-pre"><code class="md-code${langClass}">${highlighted}</code></pre>` +
           `</div>`
         );
@@ -235,6 +282,40 @@ function createMarked(): Marked {
 
 const markedInstance = createMarked();
 
+/**
+ * 渲染结果 LRU 缓存：相同输入返回完全相同的 HTML 字符串。
+ * 目的：HTML 预览块的 radio id 依赖模块级计数器，若每次渲染都重新生成，
+ * React 会因 __html 字符串变化而重新注入 DOM，导致「源码/预览」切换状态丢失、
+ * iframe 重新加载闪烁。缓存保证同一消息在重渲染时输出稳定。
+ */
+const markdownRenderCache = new Map<string, string>();
+const MARKDOWN_CACHE_MAX = 80;
+/** 已记录过 miss 的输入（去重，避免打字时日志刷屏） */
+const loggedMissKeys = new Set<string>();
+const LOGGED_MISS_MAX = 200;
+
+function cachedRender(mdText: string, render: () => string): string {
+  const hit = markdownRenderCache.get(mdText);
+  if (hit !== undefined) {
+    // LRU：命中即移到末尾
+    markdownRenderCache.delete(mdText);
+    markdownRenderCache.set(mdText, hit);
+    return hit;
+  }
+  if (!loggedMissKeys.has(mdText)) {
+    loggedMissKeys.add(mdText);
+    if (loggedMissKeys.size > LOGGED_MISS_MAX) loggedMissKeys.clear();
+    log(`[markdown] cache miss len=${mdText.length} head=${mdText.slice(0, 40).replace(/\n/g, "\\n")}`);
+  }
+  const html = render();
+  markdownRenderCache.set(mdText, html);
+  if (markdownRenderCache.size > MARKDOWN_CACHE_MAX) {
+    const oldest = markdownRenderCache.keys().next().value;
+    if (oldest !== undefined) markdownRenderCache.delete(oldest);
+  }
+  return html;
+}
+
 /** 扩展语言别名（渲染前可调用） */
 export function registerMarkdownLangAlias(alias: string, prismLang: string): void {
   LANG_ALIASES[alias.toLowerCase()] = prismLang;
@@ -245,33 +326,40 @@ export function registerMarkdownLangAlias(alias: string, prismLang: string): voi
  * 样式依赖 `.markdown-body` / `.preview-markdown-content` 下的 CSS。
  */
 export function renderMarkdownToHtml(mdText: string): string {
-  if (!mdText.trim()) {
-    return `<p class="md-empty">文件内容为空</p>`;
-  }
+  return cachedRender(mdText, () => {
+    if (!mdText.trim()) {
+      return `<p class="md-empty">文件内容为空</p>`;
+    }
 
-  // 超限时降级为纯文本预览（与 highlighter.ts 同策略），防止解析/高亮卡死主线程
-  if (
-    mdText.length > MAX_MARKDOWN_SIZE ||
-    mdText.split("\n").length > MAX_MARKDOWN_LINES
-  ) {
-    return (
-      `<pre class="md-pre md-fallback"><code class="md-code">` +
-      escapeHtml(mdText) +
-      `</code></pre>`
-    );
-  }
+    // 超限时降级为纯文本预览（与 highlighter.ts 同策略），防止解析/高亮卡死主线程
+    if (
+      mdText.length > MAX_MARKDOWN_SIZE ||
+      mdText.split("\n").length > MAX_MARKDOWN_LINES
+    ) {
+      return (
+        `<pre class="md-pre md-fallback"><code class="md-code">` +
+        escapeHtml(mdText) +
+        `</code></pre>`
+      );
+    }
 
-  try {
-    const html = markedInstance.parse(mdText, { async: false }) as string;
-    return html;
-  } catch (err) {
-    console.error("Markdown 渲染失败:", err);
-    return (
-      `<pre class="md-pre md-fallback"><code class="md-code">` +
-      escapeHtml(mdText) +
-      `</code></pre>`
-    );
-  }
+    // 确定性 id：当前渲染输入的内容 hash + 块序号（同输入永远同 id）
+    currentRenderKey = hashString(mdText);
+    htmlBlockSeqInRender = 0;
+    try {
+      const html = markedInstance.parse(mdText, { async: false }) as string;
+      return html;
+    } catch (err) {
+      console.error("Markdown 渲染失败:", err);
+      return (
+        `<pre class="md-pre md-fallback"><code class="md-code">` +
+        escapeHtml(mdText) +
+        `</code></pre>`
+      );
+    } finally {
+      currentRenderKey = "";
+    }
+  });
 }
 
 /**
@@ -307,27 +395,34 @@ const chatMarkedInstance = (() => {
 })();
 
 export function renderChatMarkdownToHtml(mdText: string): string {
-  if (!mdText.trim()) {
-    return "";
-  }
-  if (
-    mdText.length > MAX_MARKDOWN_SIZE ||
-    mdText.split("\n").length > MAX_MARKDOWN_LINES
-  ) {
-    return (
-      `<pre class="md-pre md-fallback"><code class="md-code">` +
-      escapeHtml(mdText) +
-      `</code></pre>`
-    );
-  }
-  try {
-    return chatMarkedInstance.parse(mdText, { async: false }) as string;
-  } catch (err) {
-    console.error("Chat Markdown 渲染失败:", err);
-    return (
-      `<pre class="md-pre md-fallback"><code class="md-code">` +
-      escapeHtml(mdText) +
-      `</code></pre>`
-    );
-  }
+  return cachedRender(mdText, () => {
+    if (!mdText.trim()) {
+      return "";
+    }
+    if (
+      mdText.length > MAX_MARKDOWN_SIZE ||
+      mdText.split("\n").length > MAX_MARKDOWN_LINES
+    ) {
+      return (
+        `<pre class="md-pre md-fallback"><code class="md-code">` +
+        escapeHtml(mdText) +
+        `</code></pre>`
+      );
+    }
+    // 确定性 id：当前渲染输入的内容 hash + 块序号（同输入永远同 id）
+    currentRenderKey = hashString(mdText);
+    htmlBlockSeqInRender = 0;
+    try {
+      return chatMarkedInstance.parse(mdText, { async: false }) as string;
+    } catch (err) {
+      console.error("Chat Markdown 渲染失败:", err);
+      return (
+        `<pre class="md-pre md-fallback"><code class="md-code">` +
+        escapeHtml(mdText) +
+        `</code></pre>`
+      );
+    } finally {
+      currentRenderKey = "";
+    }
+  });
 }

@@ -12,7 +12,6 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import type { Session } from "../components/Sidebar";
 import { log } from "../utils/log";
-import type { AgentType } from "./useSessions";
 
 export interface TabContextMenuState {
   x: number;
@@ -25,7 +24,6 @@ export interface UseSessionTabsOptions {
   setSessionsRef: MutableRefObject<Dispatch<SetStateAction<Session[]>>>;
   clearQueueForSessionRef: MutableRefObject<(sessionId: string) => void>;
   setSessionBusyRef: MutableRefObject<Dispatch<SetStateAction<Record<string, boolean>>>>;
-  setSelectedAgent: Dispatch<SetStateAction<AgentType>>;
   setGlowingSessionIds: Dispatch<SetStateAction<string[]>>;
   handleRenameSessionRef: MutableRefObject<
     (sessionId: string, newName: string) => Promise<void> | void
@@ -37,7 +35,6 @@ export function useSessionTabs({
   setSessionsRef,
   clearQueueForSessionRef,
   setSessionBusyRef,
-  setSelectedAgent,
   setGlowingSessionIds,
   handleRenameSessionRef,
 }: UseSessionTabsOptions) {
@@ -64,6 +61,7 @@ export function useSessionTabs({
 
   const handleSelectSession = useCallback(
     (sessionId: string) => {
+      log(`[tabs] select session=${sessionId} (wasOpen=${openTabIds.includes(sessionId)})`);
       if (!openTabIds.includes(sessionId)) {
         setOpenTabIds((previous) => [...previous, sessionId]);
       }
@@ -110,6 +108,7 @@ export function useSessionTabs({
   const handleSaveTabRename = useCallback(
     (sessionId: string) => {
       if (renamingTabText.trim()) {
+        log(`[tabs] rename session=${sessionId} -> "${renamingTabText.trim()}"`);
         handleRenameSessionRef.current(sessionId, renamingTabText.trim());
       }
       setRenamingTabId(null);
@@ -121,12 +120,11 @@ export function useSessionTabs({
     (sessionId: string) => {
       const session = sessionsRef.current.find((item) => item.id === sessionId);
       if (session) {
-        setSelectedAgent(session.type);
         setHighlightSessionId(sessionId);
-        log(`Locating session ${sessionId} in sidebar. Selected agent type: ${session.type}`);
+        log(`Locating session ${sessionId} in sidebar.`);
       }
     },
-    [sessionsRef, setSelectedAgent],
+    [sessionsRef],
   );
 
   const handleTabWheel = useCallback((event: WheelEvent<HTMLDivElement>) => {
@@ -136,6 +134,7 @@ export function useSessionTabs({
   }, []);
 
   const handleDragStart = useCallback((event: DragEvent, index: number) => {
+    log(`[tabs] drag start index=${index}`);
     event.dataTransfer.effectAllowed = "move";
     // sessionId 由 SessionTabBar 写入；这里不再用 index 覆盖 text/plain
     setTimeout(() => {
@@ -176,20 +175,23 @@ export function useSessionTabs({
   );
 
   const handleDragEnd = useCallback(() => {
+    log(`[tabs] drag end -> order=${JSON.stringify(openTabIds)}`);
     setDraggingIndex(null);
-  }, []);
+  }, [openTabIds]);
 
   const clearDragging = useCallback(() => {
     setDraggingIndex(null);
   }, []);
 
   const handleDrop = useCallback((event: DragEvent) => {
+    log("[tabs] drop");
     event.preventDefault();
     setDraggingIndex(null);
   }, []);
 
   const activateTab = useCallback(
     (sessionId: string) => {
+      log(`[tabs] activate session=${sessionId}`);
       setActiveSessionId(sessionId);
       setGlowingSessionIds((previous) => previous.filter((id) => id !== sessionId));
     },

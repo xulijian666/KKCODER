@@ -1,5 +1,5 @@
 export { generateUUID } from "./uuid";
-export { log } from "./log";
+export { log, isDebugLogEnabled, DEBUG_LOG_KEY } from "./log";
 export { getFolderName } from "./pathHelpers";
 export {
   applyTheme,
@@ -16,7 +16,6 @@ export {
 export { updateSessionLastUserMessageAt } from "./sessionActivity";
 export { readSessionCleanupSettings } from "./sessionCleanup";
 export { shouldResumeSession } from "./sessionResume";
-export { syncTaskbarUnreadBadge } from "./taskbarBadge";
 export {
   CLAUDE_TERMINAL_MODE_KEY,
   resolveClaudeTerminalMode,

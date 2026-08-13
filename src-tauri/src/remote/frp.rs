@@ -59,7 +59,7 @@ remotePort = {}
 
         // 查找 frpc 可执行文件
         let frpc_path = find_frpc_binary()?;
-        log_to_file(&format!(
+        crate::log_to_file(&format!(
             "Starting frp client: {} -c {}",
             frpc_path.display(),
             config_path.display()
@@ -71,7 +71,7 @@ remotePort = {}
             .map_err(|e| format!("Failed to start frp client: {}", e))?;
 
         *child = Some(process);
-        log_to_file("frp client started");
+        crate::log_to_file("frp client started");
         Ok(())
     }
 
@@ -81,7 +81,7 @@ remotePort = {}
 
         if let Some(ref mut proc) = *child {
             proc.kill().map_err(|e| format!("Failed to kill frp: {}", e))?;
-            log_to_file("frp client stopped");
+            crate::log_to_file("frp client stopped");
         }
 
         *child = None;
@@ -163,19 +163,4 @@ fn find_frpc_binary() -> Result<std::path::PathBuf, String> {
     Err("frpc binary not found. Please place frpc.exe in the application directory or add it to PATH.".to_string())
 }
 
-fn log_to_file(message: &str) {
-    use std::fs::OpenOptions;
-    use std::io::Write;
-    if let Ok(mut file) = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .append(true)
-        .open("kkcoder_debug.log")
-    {
-        let now = std::time::SystemTime::now();
-        let since = now
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default();
-        let _ = writeln!(file, "[Timestamp: {}ms] {}", since.as_millis(), message);
-    }
-}
+

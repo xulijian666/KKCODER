@@ -65,7 +65,7 @@ pub async fn start_remote_server(state: Arc<RemoteServerState>) -> Result<(), St
         .await
         .map_err(|e| format!("Failed to bind to {}: {}", addr, e))?;
 
-    log_to_file(&format!(
+    crate::log_to_file(&format!(
         "Remote server listening on {}",
         listener.local_addr().map_err(|e| e.to_string())?
     ));
@@ -77,19 +77,4 @@ pub async fn start_remote_server(state: Arc<RemoteServerState>) -> Result<(), St
         .map_err(|e| format!("Server error: {}", e))
 }
 
-fn log_to_file(message: &str) {
-    use std::fs::OpenOptions;
-    use std::io::Write;
-    if let Ok(mut file) = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .append(true)
-        .open("kkcoder_debug.log")
-    {
-        let now = std::time::SystemTime::now();
-        let since = now
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default();
-        let _ = writeln!(file, "[Timestamp: {}ms] {}", since.as_millis(), message);
-    }
-}
+

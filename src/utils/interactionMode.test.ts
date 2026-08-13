@@ -12,7 +12,5 @@ test("defaults Claude interaction mode to CLI", () => {
 
 test("routes only Claude sessions to GUI chat", () => {
   assert.equal(shouldUseGuiChat("claude", "gui"), true);
-  assert.equal(shouldUseGuiChat("pi", "gui"), false);
-  assert.equal(shouldUseGuiChat("codex", "gui"), false);
   assert.equal(shouldUseGuiChat("claude", "cli"), false);
 });

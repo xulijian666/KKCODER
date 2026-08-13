@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import type { ClaudeModelInfo } from "../utils/claudeModel";
+import { log } from "../utils/log";
 
 interface ModelSelectorProps {
   selectedModel: string | null;
@@ -114,6 +115,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                     title={provider.baseUrl || undefined}
                     onClick={() => {
                       // 选供应商保持菜单打开，模型清单会刷新成该供应商的，便于接着选模型
+                      log(`[model] select provider=${provider.id} (${provider.name})`);
                       onSelectProvider(provider.id);
                     }}
                   >
@@ -142,33 +144,36 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
           )}
           <div className="model-dropdown-divider" />
           <div className="model-dropdown-section-title">模型</div>
-          {modelInfo && modelInfo.models.length > 0
-            ? modelInfo.models.map((model) => {
-                const isSelected = selectedModel === model;
-                return (
-                  <div
-                    key={model}
-                    className={`model-dropdown-item ${isSelected ? "active" : ""}`}
-                    title={isSelected ? "再次点击取消，回到该供应商默认" : undefined}
-                    onClick={() => {
-                      // 再次点击已选中的模型 = 取消选择，回到该供应商默认（兜底态）
-                      onSelectModel(isSelected ? null : model);
-                      setOpen(false);
-                    }}
-                  >
-                    <span className="model-dropdown-item-label">{model}</span>
-                    {isSelected && (
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M20 6 9 17l-5-5"></path>
-                      </svg>
-                    )}
-                  </div>
-                );
-              })
-            : null}
-          {(!modelInfo || modelInfo.models.length === 0) && (
-            <div className="model-dropdown-empty">未读取到模型配置</div>
-          )}
+          <div className="model-dropdown-model-list">
+            {modelInfo && modelInfo.models.length > 0
+              ? modelInfo.models.map((model) => {
+                  const isSelected = selectedModel === model;
+                  return (
+                    <div
+                      key={model}
+                      className={`model-dropdown-item ${isSelected ? "active" : ""}`}
+                      title={isSelected ? "再次点击取消，回到该供应商默认" : undefined}
+                      onClick={() => {
+                        // 再次点击已选中的模型 = 取消选择，回到该供应商默认（兜底态）
+                        log(`[model] select model=${model} (cancel=${isSelected})`);
+                        onSelectModel(isSelected ? null : model);
+                        setOpen(false);
+                      }}
+                    >
+                      <span className="model-dropdown-item-label">{model}</span>
+                      {isSelected && (
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M20 6 9 17l-5-5"></path>
+                        </svg>
+                      )}
+                    </div>
+                  );
+                })
+              : null}
+            {(!modelInfo || modelInfo.models.length === 0) && (
+              <div className="model-dropdown-empty">未读取到模型配置</div>
+            )}
+          </div>
         </div>
       )}
     </div>

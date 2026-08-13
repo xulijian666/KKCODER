@@ -1,4 +1,4 @@
-export { Sidebar, type Session, ClaudeIcon, PiIcon, CodexIcon } from "./Sidebar";
+export { Sidebar, type Session, ClaudeIcon } from "./Sidebar";
 export { TerminalTab } from "./TerminalTab";
 export { CompatibilityTerminalTab } from "./NativeTerminalTab";
 export { ChatTab } from "./ChatTab";

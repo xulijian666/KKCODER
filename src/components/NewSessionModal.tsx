@@ -6,7 +6,6 @@ import { formatFeedbackError, notifyError, notifyWarning } from "../utils/appFee
 interface NewSessionModalProps {
   show: boolean;
   onClose: () => void;
-  selectedAgent: "claude" | "pi" | "codex";
   onCreate: (sessionName: string, projectPath: string, projectName: string) => void;
   initialProjectPath?: string;
 }
@@ -14,7 +13,6 @@ interface NewSessionModalProps {
 export const NewSessionModal: React.FC<NewSessionModalProps> = ({
   show,
   onClose,
-  selectedAgent,
   onCreate,
   initialProjectPath,
 }) => {
@@ -174,9 +172,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
     <div className={`modal-overlay ${show ? "show" : ""}`}>
       <div className="modal-card" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <span className="modal-title">
-            新建 {selectedAgent === "claude" ? "Claude Code" : (selectedAgent === "pi" ? "Pi" : "Codex")} 会话
-          </span>
+          <span className="modal-title">新建 Claude Code 会话</span>
           <button className="modal-close" onClick={onClose}>
             ×
           </button>

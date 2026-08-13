@@ -5,7 +5,7 @@ import React, {
   type WheelEvent,
 } from "react";
 import type { Session } from "./Sidebar";
-import { ClaudeIcon, PiIcon, CodexIcon } from "./Sidebar";
+import { ClaudeIcon } from "./Sidebar";
 import {
   clampSplitRatio,
   SESSION_DRAG_MIME,
@@ -123,7 +123,6 @@ export const SessionTabBar: React.FC<SessionTabBarProps> = ({
         ? session.name
         : `${session.name} (${session.project})`
       : sessionId;
-    const agentType = session?.type ?? "claude";
     const isBusy = session ? !!sessionBusy[session.id] : false;
 
     return (
@@ -137,16 +136,7 @@ export const SessionTabBar: React.FC<SessionTabBarProps> = ({
               ? "split-standby"
               : ""
         } ${
-          isActive &&
-          (agentType === "pi" ? "pi-tab" : agentType === "codex" ? "codex-tab" : "")
-        } ${
-          isGlowing
-            ? agentType === "pi"
-              ? "glowing-pi"
-              : agentType === "codex"
-                ? "glowing-codex"
-                : "glowing-claude"
-            : ""
+          isGlowing ? "glowing-claude" : ""
         } ${draggingIndex === index && index >= 0 && !isDualSplit ? "dragging" : ""}`}
         draggable={!isRenaming}
         onDragStart={(event) => {
@@ -197,12 +187,8 @@ export const SessionTabBar: React.FC<SessionTabBarProps> = ({
           <span style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
             {isBusy ? (
               <span className="tab-loading-spinner" title="思考中..." />
-            ) : agentType === "claude" ? (
-              <ClaudeIcon size={14} color="#D97757" />
-            ) : agentType === "codex" ? (
-              <CodexIcon size={14} color="var(--color-cyan)" />
             ) : (
-              <PiIcon size={14} color="var(--color-green)" />
+              <ClaudeIcon size={14} color="#D97757" />
             )}
             <span className="tab-title-text" title={tabTitle}>
               {tabTitle}

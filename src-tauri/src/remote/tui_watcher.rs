@@ -15,7 +15,7 @@ pub async fn run_tui_watcher(
     conversation: Arc<ConversationState>,
     session_registry: Arc<SessionRegistry>,
 ) {
-    log_to_file("[TUI Watcher] Started");
+    crate::log_to_file("[TUI Watcher] Started");
 
     let mut detectors: HashMap<String, TuiPromptDetector> = HashMap::new();
     let mut subscribers: HashMap<String, tokio::sync::broadcast::Receiver<super::state::OutputFrame>> = HashMap::new();
@@ -24,7 +24,7 @@ pub async fn run_tui_watcher(
         // 检查新注册的会话
         for (sid, handle) in session_registry.sessions_iter() {
             if !subscribers.contains_key(&sid) {
-                log_to_file(&format!("[TUI Watcher] Subscribing to session {}", sid));
+                crate::log_to_file(&format!("[TUI Watcher] Subscribing to session {}", sid));
                 let rx = handle.output_tx.subscribe();
                 subscribers.insert(sid.clone(), rx);
                 detectors.insert(sid.clone(), TuiPromptDetector::new(30));
@@ -42,7 +42,7 @@ pub async fn run_tui_watcher(
             while let Ok(frame) = rx.try_recv() {
                 if let Some(detector) = detectors.get_mut(sid) {
                     if let Some(card_text) = detector.feed(&frame.data) {
-                        log_to_file(&format!(
+                        crate::log_to_file(&format!(
                             "[TUI Watcher] Detected menu for session {}, sending choice card",
                             sid
                         ));
@@ -64,17 +64,4 @@ pub async fn run_tui_watcher(
     }
 }
 
-fn log_to_file(message: &str) {
-    use std::fs::OpenOptions;
-    use std::io::Write;
-    if let Ok(mut file) = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .append(true)
-        .open("kkcoder_debug.log")
-    {
-        let now = std::time::SystemTime::now();
-        let since = now.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-        let _ = writeln!(file, "[Timestamp: {}ms] {}", since.as_millis(), message);
-    }
-}
+

@@ -362,7 +362,7 @@ const CompatibilityTerminalTabImpl: React.FC<CompatibilityTerminalTabProps> = ({
         localStorage.getItem("kkcoder_setting_notify_threshold") || "2",
       );
       const playSound = localStorage.getItem("kkcoder_setting_play_sound") !== "false";
-      const tone = localStorage.getItem("kkcoder_setting_sound_tone") || "dingdong";
+      const tone = localStorage.getItem("kkcoder_setting_sound_tone") || "default";
       const volume = Number.parseInt(localStorage.getItem("kkcoder_setting_sound_volume") || "80", 10);
 
       if (notifyEnabled && elapsed >= notifyThreshold) {

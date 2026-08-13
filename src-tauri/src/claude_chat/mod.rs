@@ -17,7 +17,7 @@ use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
-use crate::{find_claude_jsonl, log_to_file, read_claude_transcript};
+use crate::{find_claude_jsonl, log_session, log_to_file, read_claude_transcript};
 
 pub const CHAT_EVENT_CHANNEL: &str = "claude-chat-event";
 
@@ -250,7 +250,7 @@ pub fn chat_send_message(
         model.as_deref(),
     )?;
     let pid = child.id();
-    log_to_file(&format!(
+    log_session(&session_id, &format!(
         "[claude_chat] send session={session_id} resume={resume} pid={pid} model={}",
         model.as_deref().unwrap_or("(默认)")
     ));
@@ -425,7 +425,7 @@ pub fn chat_reset_context(
     if let Some(jsonl) = find_claude_jsonl(&agent_session_id, &directory) {
         let _ = std::fs::remove_file(&jsonl);
     }
-    log_to_file(&format!(
+    log_session(&session_id, &format!(
         "[claude_chat] reset context session={session_id} agent={agent_session_id}"
     ));
     Ok(())
@@ -854,7 +854,7 @@ fn run_process_loop(
                             turn.pid = pid;
                         }
                     }
-                    log_to_file(&format!(
+                    log_session(&session_id, &format!(
                         "[claude_chat] resume session={session_id} pid={pid} model={}",
                         turn_model.as_deref().unwrap_or("(默认)")
                     ));
@@ -927,7 +927,7 @@ fn run_process_loop(
     let mut e = ChatStreamEvent::new(&session_id, "turn:error");
     e.message = Some(message);
     e.emit(&app);
-    log_to_file(&format!(
+    log_session(&session_id, &format!(
         "[claude_chat] turn ended session={session_id} cancelled={was_cancelled} status={status_line}"
     ));
 }

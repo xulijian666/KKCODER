@@ -2,27 +2,17 @@ export function hasSessionDialogue(sessionId: string, storage: Pick<Storage, "ge
   return storage.getItem(`kkcoder_session_has_dialogue_${sessionId}`) === "true";
 }
 
-export interface ShouldResumeSessionOptions {
-  /** Codex 必须已绑定真实 agentSessionId 才允许 resume */
-  agentType?: string;
-  agentSessionId?: string;
-}
-
 /**
- * 是否应以「恢复对话」方式打开终端。
- * Codex 与 Claude 不同：首次无法预生成 session id，仅当已捕获到真实 id 且曾有对话时才 resume。
+ * 是否应以「恢复对话」方式打开终端（Claude Code）：
+ * 仅当该会话非新建、且曾有过对话时才 resume。
  */
 export function shouldResumeSession(
   sessionId: string,
   newSessionIds: string[],
   storage: Pick<Storage, "getItem"> = localStorage,
-  options?: ShouldResumeSessionOptions,
 ): boolean {
   if (newSessionIds.includes(sessionId)) return false;
   if (!hasSessionDialogue(sessionId, storage)) return false;
-  if (options?.agentType === "codex") {
-    return Boolean(options.agentSessionId?.trim());
-  }
   return true;
 }
 

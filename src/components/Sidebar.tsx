@@ -10,9 +10,7 @@ import {
   buildPowerShellResumeCommand,
 } from "../utils/sessionResume";
 import {
-  getVisibleAgents,
   type AgentType,
-  type EnabledAgents,
 } from "../utils/enabledAgents";
 import { formatFeedbackError, notifyError, notifySuccess } from "../utils/appFeedback";
 import { useReturnTerminalFocusWhenUnblocked } from "../hooks/useReturnTerminalFocusWhenUnblocked";
@@ -25,27 +23,6 @@ export const ClaudeIcon: React.FC<{ size?: number; color?: string }> = ({ size =
       fill="currentColor" 
       fillRule="nonzero"
     />
-  </svg>
-);
-
-export const CodexIcon: React.FC<{ size?: number; color?: string }> = ({ size = 18, color }) => (
-  <svg
-    width={size}
-    height={size}
-    viewBox="0 0 24 24"
-    fill={color || "currentColor"}
-    fillRule="evenodd"
-    xmlns="http://www.w3.org/2000/svg"
-    style={{ display: "block", flex: "0 0 auto", lineHeight: 1 }}
-  >
-    <path d="M9.205 8.658v-2.26c0-.19.072-.333.238-.428l4.543-2.616c.619-.357 1.356-.523 2.117-.523 2.854 0 4.662 2.212 4.662 4.566 0 .167 0 .357-.024.547l-4.71-2.759a.797.797 0 00-.856 0l-5.97 3.473zm10.609 8.8V12.06c0-.333-.143-.57-.429-.737l-5.97-3.473 1.95-1.118a.433.433 0 01.476 0l4.543 2.617c1.309.76 2.189 2.378 2.189 3.948 0 1.808-1.07 3.473-2.76 4.163zM7.802 12.703l-1.95-1.142c-.167-.095-.239-.238-.239-.428V5.899c0-2.545 1.95-4.472 4.591-4.472 1 0 1.927.333 2.712.928L8.23 5.067c-.285.166-.428.404-.428.737v6.898zM12 15.128l-2.795-1.57v-3.33L12 8.658l2.795 1.57v3.33L12 15.128zm1.796 7.23c-1 0-1.927-.332-2.712-.927l4.686-2.712c.285-.166.428-.404.428-.737v-6.898l1.974 1.142c.167.095.238.238.238.428v5.233c0 2.545-1.974 4.472-4.614 4.472zm-5.637-5.303l-4.544-2.617c-1.308-.761-2.188-2.378-2.188-3.948A4.482 4.482 0 014.21 6.327v5.423c0 .333.143.571.428.738l5.947 3.449-1.95 1.118a.432.432 0 01-.476 0zm-.262 3.9c-2.688 0-4.662-2.021-4.662-4.519 0-.19.024-.38.047-.57l4.686 2.71c.286.167.571.167.856 0l5.97-3.448v2.26c0 .19-.07.333-.237.428l-4.543 2.616c-.619.357-1.356.523-2.117.523zm5.899 2.83a5.947 5.947 0 005.827-4.756C22.287 18.339 24 15.84 24 13.296c0-1.665-.713-3.282-1.998-4.448.119-.5.19-.999.19-1.498 0-3.401-2.759-5.947-5.946-5.947-.642 0-1.26.095-1.88.31A5.962 5.962 0 0010.205 0a5.947 5.947 0 00-5.827 4.757C1.713 5.447 0 7.945 0 10.49c0 1.666.713 3.283 1.998 4.448-.119.5-.19 1-.19 1.499 0 3.401 2.759 5.946 5.946 5.946.642 0 1.26-.095 1.88-.309a5.96 5.96 0 004.162 1.713z" />
-  </svg>
-);
-
-export const PiIcon: React.FC<{ size?: number; color?: string }> = ({ size = 18, color }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ color, display: "inline-block", verticalAlign: "middle" }}>
-    <path d="M5 6h14" />
-    <path d="M9 6v12M15 6v11a2 2 0 0 0 2 2" />
   </svg>
 );
 
@@ -66,9 +43,6 @@ export interface Session {
 }
 
 interface SidebarProps {
-  selectedAgent: AgentType;
-  onSelectAgent: (agent: AgentType) => void;
-  enabledAgents: EnabledAgents;
   onOpenNewSession: (prefilledPath?: string) => void;
   onCreateSessionDirectly?: (projectPath: string) => void;
   onOpenTempSession: () => void;
@@ -96,9 +70,6 @@ interface SidebarProps {
 }
 
 const SidebarImpl: React.FC<SidebarProps> = ({
-  selectedAgent,
-  onSelectAgent,
-  enabledAgents,
   onOpenNewSession,
   onCreateSessionDirectly,
   onOpenTempSession,
@@ -122,8 +93,6 @@ const SidebarImpl: React.FC<SidebarProps> = ({
   onHoverEnter,
   onHoverLeave,
 }) => {
-  const visibleAgents = useMemo(() => getVisibleAgents(enabledAgents), [enabledAgents]);
-  const selectedAgentIndex = Math.max(0, visibleAgents.indexOf(selectedAgent));
   // 1. 折叠项目列表的状态
   const [collapsedProjects, setCollapsedProjects] = useState<string[]>([]);
   // 收藏夹折叠状态
@@ -395,7 +364,7 @@ const SidebarImpl: React.FC<SidebarProps> = ({
   // 4. 根据项目名称动态归类会话列表
   const projectsMap: { [key: string]: { path: string; sessions: Session[] } } = {};
   
-  const filteredSessions = sessions.filter((s) => s.type === selectedAgent && s.deleted !== 1 && !s.isTemp);
+  const filteredSessions = sessions.filter((s) => s.type === "claude" && s.deleted !== 1 && !s.isTemp);
 
   filteredSessions.forEach((s) => {
     const matchesTitle = searchQuery ? (
@@ -469,6 +438,25 @@ const SidebarImpl: React.FC<SidebarProps> = ({
   }, [projectsMap, regularProjNames]);
 
   const sortedProjectNames = [...favProjNames, ...regularSortedProjNames];
+
+  // --- 每个项目分组最多显示 5 个会话，超出折叠，点击分组内「更多...」展开 ---
+  const MAX_SESSIONS_PER_GROUP = 5;
+  const FAVORITES_GROUP_KEY = "__favorites__";
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+  const toggleGroupExpand = (key: string) =>
+    setExpandedGroups((prev) => ({ ...prev, [key]: !prev[key] }));
+  // 收藏分组与各项目分组：折叠时只显示前 5 个（列表已按活动时间降序）
+  const visibleFavoriteSessions =
+    expandedGroups[FAVORITES_GROUP_KEY] || favoriteSessions.length <= MAX_SESSIONS_PER_GROUP
+      ? favoriteSessions
+      : favoriteSessions.slice(0, MAX_SESSIONS_PER_GROUP);
+  const favoriteHiddenCount = favoriteSessions.length - visibleFavoriteSessions.length;
+  const visibleSessionsOf = (projSessions: Session[], projName: string) =>
+    expandedGroups[projName] || projSessions.length <= MAX_SESSIONS_PER_GROUP
+      ? projSessions
+      : projSessions.slice(0, MAX_SESSIONS_PER_GROUP);
+  const hiddenCountOf = (projSessions: Session[]) =>
+    Math.max(0, projSessions.length - MAX_SESSIONS_PER_GROUP);
 
   // 6. 行内编辑操作
   const startEditing = (session: Session) => {
@@ -611,7 +599,7 @@ const SidebarImpl: React.FC<SidebarProps> = ({
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
-          {/* 时间标签 (如 2分钟前) */}
+          {/* 时间标签 (如 2分钟) */}
           <span className="session-time-tag">
             {formatRelativeSessionActivityTime(session)}
           </span>
@@ -661,39 +649,12 @@ const SidebarImpl: React.FC<SidebarProps> = ({
     >
       {/* 新建 AI 会话头部区域 */}
       <div className="sidebar-header">
-        {/* Agent 标识 / 切换：始终显示已启用助手；仅 Claude 时保留 Claude Code 标志 */}
-        <div className="agent-selector" data-count={visibleAgents.length}>
-          {visibleAgents.length > 1 && (
-            <div
-              className="agent-selector-slider"
-              data-index={selectedAgentIndex}
-            />
-          )}
-          {visibleAgents.map((agent) => {
-            const isActive = selectedAgent === agent;
-            const title = agent === "claude" ? "Claude Code" : agent === "pi" ? "Pi" : "Codex";
-            const activeColor =
-              agent === "claude" ? "#D97757" : agent === "pi" ? "var(--color-green)" : "var(--color-cyan)";
-            const styleClass =
-              agent === "claude" ? "claude-style" : agent === "pi" ? "pi-style" : "codex-style";
-            return (
-              <button
-                key={agent}
-                className={`agent-tab ${isActive ? `active ${styleClass}` : ""}`}
-                onClick={() => onSelectAgent(agent)}
-                title={title}
-                type="button"
-              >
-                {agent === "claude" ? (
-                  <ClaudeIcon size={18} color={isActive ? activeColor : "var(--text-secondary)"} />
-                ) : agent === "pi" ? (
-                  <PiIcon size={18} color={isActive ? activeColor : "var(--text-secondary)"} />
-                ) : (
-                  <CodexIcon size={18} color={isActive ? activeColor : "var(--text-secondary)"} />
-                )}
-              </button>
-            );
-          })}
+        {/* 助手标识：专注 Claude Code（Pi / Codex 集成已移除） */}
+        <div className="agent-selector" data-count="1">
+          <span className="agent-tab active claude-style" style={{ cursor: "default" }}>
+            <ClaudeIcon size={18} color="#D97757" />
+            <span style={{ marginLeft: "6px", fontSize: "12.5px", fontWeight: 600 }}>Claude Code</span>
+          </span>
         </div>
         
         {/* 新建会话按钮、机器人按钮 */}
@@ -751,14 +712,13 @@ const SidebarImpl: React.FC<SidebarProps> = ({
           </svg>
           <input
             type="text"
-            className={`search-input ${selectedAgent === "pi" ? "pi-focus" : ""}`}
-            style={{ paddingRight: selectedAgent === "claude" ? "34px" : "12px" }}
+            className="search-input"
+            style={{ paddingRight: "34px" }}
             placeholder={isContentSearch ? "✨ 全局搜索聊天记录内容..." : "搜索本地会话项目..."}
             value={searchQuery}
             onChange={(e) => onSearchQueryChange(e.target.value)}
           />
-          {selectedAgent === "claude" && (
-            <button
+          <button
               className={`search-enhance-btn ${isContentSearch ? "active" : ""}`}
               onClick={() => setIsContentSearch(!isContentSearch)}
               title={isContentSearch ? "切换为普通标题搜索" : "全局聊天内容搜索 (✨)"}
@@ -795,7 +755,6 @@ const SidebarImpl: React.FC<SidebarProps> = ({
                 <line x1="8" y1="13" x2="12" y2="13"></line>
               </svg>
             </button>
-          )}
         </div>
       </div>
 
@@ -847,7 +806,7 @@ const SidebarImpl: React.FC<SidebarProps> = ({
         </div>
 
         {/* 置顶 “⭐ 收藏” 分组 (如果有被收藏的会话) */}
-        {favoriteSessions.length > 0 && (
+        {visibleFavoriteSessions.length > 0 && (
           <div className="project-group favorite-group-wrapper" style={{ marginBottom: "12px" }}>
             <div 
               className="project-header favorite-group-header" 
@@ -867,8 +826,18 @@ const SidebarImpl: React.FC<SidebarProps> = ({
             
             {!favoritesCollapsed && (
               <ul className="session-list" style={{ padding: "2px" }}>
-                {favoriteSessions.map((session) => renderSessionRow(session))}
+                {visibleFavoriteSessions.map((session) => renderSessionRow(session))}
               </ul>
+            )}
+            {favoriteHiddenCount > 0 && (
+              <button
+                type="button"
+                className="sidebar-more-sessions-btn"
+                onClick={() => toggleGroupExpand(FAVORITES_GROUP_KEY)}
+                title={expandedGroups[FAVORITES_GROUP_KEY] ? "收起为前 5 个" : `展开全部 ${favoriteSessions.length} 个收藏会话`}
+              >
+                {expandedGroups[FAVORITES_GROUP_KEY] ? "收起" : `更多 (${favoriteHiddenCount})...`}
+              </button>
             )}
             <div className="favorite-divider" style={{ borderBottom: "1px dashed var(--border-color)", margin: "8px 4px 4px 4px" }} />
           </div>
@@ -885,6 +854,8 @@ const SidebarImpl: React.FC<SidebarProps> = ({
             if (!proj) return null;
             const isCollapsed = collapsedProjects.includes(projName);
             const isProjectFavorited = favoriteProjects.some((fp) => fp.name === projName);
+            const visibleSessions = visibleSessionsOf(proj.sessions, projName);
+            const hiddenCount = hiddenCountOf(proj.sessions);
             return (
               <div
                 key={projName}
@@ -942,11 +913,21 @@ const SidebarImpl: React.FC<SidebarProps> = ({
                   </div>
                 </div>
                 
-                {/* 会话列表 */}
+                {/* 会话列表（每个项目最多显示 5 个，超出折叠） */}
                 {!isCollapsed && (
                   <ul className="session-list" style={{ padding: "2px" }}>
-                    {proj.sessions.map((session) => renderSessionRow(session))}
+                    {visibleSessions.map((session) => renderSessionRow(session))}
                   </ul>
+                )}
+                {!isCollapsed && hiddenCount > 0 && (
+                  <button
+                    type="button"
+                    className="sidebar-more-sessions-btn"
+                    onClick={() => toggleGroupExpand(projName)}
+                    title={expandedGroups[projName] ? "收起为前 5 个" : `展开全部 ${proj.sessions.length} 个会话`}
+                  >
+                    {expandedGroups[projName] ? "收起" : `更多 (${hiddenCount})...`}
+                  </button>
                 )}
               </div>
             );

@@ -40,9 +40,7 @@ import {
   MAX_SESSION_QUEUE_SIZE,
   log,
   getFolderName,
-  ENABLED_AGENTS_CHANGE_EVENT,
-  isAgentEnabled,
-  loadEnabledAgents,
+  DEBUG_LOG_KEY,
   notifyError,
   notifyWarning,
   formatFeedbackError,
@@ -50,8 +48,6 @@ import {
   isEditableFocusTarget,
   isSessionDragEvent,
   readSessionIdFromDataTransfer,
-  type AgentType,
-  type EnabledAgents,
 } from "./utils";
 import {
   loadSelectedModel,
@@ -113,8 +109,6 @@ function App() {
     });
   };
 
-  const [selectedAgent, setSelectedAgent] = useState<AgentType>("claude");
-  const [enabledAgents, setEnabledAgents] = useState<EnabledAgents>(() => loadEnabledAgents());
   const [showModal, setShowModal] = useState(false);
   const [prefilledProjectPath, setPrefilledProjectPath] = useState<string | undefined>(undefined);
   const [showSettings, setShowSettings] = useState(false);
@@ -138,6 +132,40 @@ function App() {
     return localStorage.getItem("kkcoder_show_project_tree") === "true";
   });
   const projectTreeAsideRef = useRef<HTMLElement>(null);
+
+  // 启动时同步调试日志开关到后端（设置中心「调试」页可切换）
+  useEffect(() => {
+    const enabled = localStorage.getItem(DEBUG_LOG_KEY) !== "false";
+    invoke("set_debug_log_enabled", { enabled }).catch(() => {});
+  }, []);
+
+  // 代码块右上角「复制」按钮：全局事件委托（普通代码块 + HTML 预览块）
+  useEffect(() => {
+    const handleCodeCopy = (event: globalThis.MouseEvent) => {
+      const btn = (event.target as HTMLElement | null)?.closest<HTMLElement>(".md-code-copy");
+      if (!btn) return;
+      const block = btn.closest<HTMLElement>(".md-code-block, .md-html-preview");
+      if (!block) return;
+      const codeEl = block.querySelector<HTMLElement>(".md-code");
+      const text = codeEl?.textContent ?? "";
+      if (!text.trim()) return;
+      navigator.clipboard
+        .writeText(text)
+        .then(() => {
+          log(`[copy] code copied (${text.length} chars)`);
+          const original = btn.textContent;
+          btn.classList.add("is-copied");
+          btn.textContent = "已复制";
+          window.setTimeout(() => {
+            btn.textContent = original;
+            btn.classList.remove("is-copied");
+          }, 1200);
+        })
+        .catch((err) => log(`[copy] failed: ${err}`));
+    };
+    document.addEventListener("click", handleCodeCopy);
+    return () => document.removeEventListener("click", handleCodeCopy);
+  }, []);
 
   const {
     currentTheme,
@@ -180,6 +208,7 @@ function App() {
   }, [cancelSidebarHide]);
   const handleToggleSidebarMode = useCallback(() => {
     const next = sidebarMode === "fixed" ? "hover" : "fixed";
+    log(`[app] toggle sidebar mode -> ${next}`);
     setSidebarMode(next);
     localStorage.setItem("kkcoder_sidebar_mode", next);
     if (next === "hover") setSidebarRevealed(false); // 切到悬停即收起为边缘条
@@ -310,7 +339,6 @@ function App() {
     setSessionsRef,
     clearQueueForSessionRef,
     setSessionBusyRef,
-    setSelectedAgent,
     setGlowingSessionIds: ((value) => setGlowingSessionIdsRef.current(value)) as Dispatch<SetStateAction<string[]>>,
     handleRenameSessionRef,
   });
@@ -426,6 +454,7 @@ function App() {
   }, []);
 
   const handleOpenNewSession = useCallback((path?: string) => {
+    log(`[app] open new session modal${path ? ` (prefilled=${path})` : ""}`);
     setPrefilledProjectPath(path);
     setShowModal(true);
   }, []);
@@ -448,24 +477,6 @@ function App() {
     handleCommandComplete,
   } = useUnreadCompletions(activeSessionId, appWindow);
   setGlowingSessionIdsRef.current = setGlowingSessionIds;
-
-  useEffect(() => {
-    const handleEnabledAgentsChange = (event: Event) => {
-      const detail = (event as CustomEvent<EnabledAgents>).detail;
-      const next = detail ?? loadEnabledAgents();
-      setEnabledAgents(next);
-    };
-    window.addEventListener(ENABLED_AGENTS_CHANGE_EVENT, handleEnabledAgentsChange);
-    return () => {
-      window.removeEventListener(ENABLED_AGENTS_CHANGE_EVENT, handleEnabledAgentsChange);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!isAgentEnabled(selectedAgent, enabledAgents)) {
-      setSelectedAgent("claude");
-    }
-  }, [enabledAgents, selectedAgent]);
 
   useEffect(() => {
     const handleTerminalModeChange = (event: Event) => {
@@ -524,7 +535,6 @@ function App() {
     handleCaptureSessionId,
     reloadSessions,
   } = useSessions({
-    selectedAgent,
     openTabIdsRef,
     activeSessionIdRef: activeSessionIdRefForSessions,
     setOpenTabIds,
@@ -576,48 +586,13 @@ function App() {
     });
   }, []);
 
-  /** Codex 首句后从 ~/.codex/sessions 捕获真实 session id 并绑定 */
-  const tryCaptureCodexSessionId = useCallback(
-    async (sessionId: string) => {
-      const targetSession = sessionsRef.current.find((session) => session.id === sessionId);
-      if (!targetSession || targetSession.type !== "codex") return;
-      if (targetSession.agentSessionId?.trim()) return;
-      if (targetSession.isTemp) return;
-
-      const notBeforeMs = Date.now() - 120_000;
-      const delaysMs = [800, 1600, 3200, 5000];
-
-      for (const delayMs of delaysMs) {
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-        const latestSession = sessionsRef.current.find((session) => session.id === sessionId);
-        if (!latestSession || latestSession.type !== "codex") return;
-        if (latestSession.agentSessionId?.trim()) return;
-        try {
-          const capturedId = await invoke<string>("capture_codex_session_id", {
-            projectPath: latestSession.path,
-            notBeforeMs,
-          });
-          if (capturedId?.trim()) {
-            await handleCaptureSessionId(sessionId, capturedId.trim());
-            log(`Codex session id captured for ${sessionId}: ${capturedId.trim()}`);
-            return;
-          }
-        } catch (error) {
-          log(`capture_codex_session_id attempt failed for ${sessionId}: ${error}`);
-        }
-      }
-      log(`Codex session id capture exhausted for ${sessionId}`);
-    },
-    [handleCaptureSessionId],
-  );
-
+  /** 首句提交：重置自动改名标记 + 记录最后用户消息时间 */
   const handleUserSubmittedInputWithRenameReset = useCallback(
     (sessionId: string, submittedAt?: string) => {
       clearRenameMark(sessionId);
       handleUserSubmittedInput(sessionId, submittedAt);
-      void tryCaptureCodexSessionId(sessionId);
     },
-    [clearRenameMark, handleUserSubmittedInput, tryCaptureCodexSessionId],
+    [clearRenameMark, handleUserSubmittedInput],
   );
 
   const {
@@ -696,10 +671,7 @@ function App() {
       const terminalMode = terminalModeBySession[session.id] ?? claudeTerminalMode;
       const interactionMode = interactionModeBySession[session.id] ?? claudeInteractionMode;
       map.set(session.id, {
-        shouldResume: shouldResumeSession(session.id, newSessionIds, localStorage, {
-          agentType: session.type,
-          agentSessionId: session.agentSessionId,
-        }),
+        shouldResume: shouldResumeSession(session.id, newSessionIds, localStorage),
         useNativeTerminal: shouldUseNativeTerminal(session.type, terminalMode),
         terminalMode,
         useGuiChat: shouldUseGuiChat(session.type, interactionMode),
@@ -828,10 +800,13 @@ function App() {
 
   const handleSelectSessionWithSplit = useCallback(
     (sessionId: string) => {
+      log(`[app] select session=${sessionId}`);
       ensureTabOpen(sessionId);
       activateSplitSession(sessionId);
+      // 点击会话：清除该会话的未读角标
+      setGlowingSessionIds((prev) => prev.filter((id) => id !== sessionId));
     },
-    [activateSplitSession, ensureTabOpen],
+    [activateSplitSession, ensureTabOpen, setGlowingSessionIds],
   );
 
   // 分屏快捷键：Ctrl+\ 切换；Ctrl+Alt+1/2 聚焦左右（或上下）
@@ -902,7 +877,10 @@ function App() {
         sidebarMode={sidebarMode}
         onToggleSidebarMode={handleToggleSidebarMode}
         onLaunchCcswitch={handleLaunchCcswitch}
-        onOpenSettings={() => setShowSettings(true)}
+        onOpenSettings={() => {
+          log("[app] open settings");
+          setShowSettings(true);
+        }}
         onMinimize={handleMinimize}
         onMaximize={handleMaximize}
         onClose={handleClose}
@@ -921,9 +899,6 @@ function App() {
         )}
         {/* 左边栏 - 专注于会话与项目管理 */}
         <Sidebar
-          selectedAgent={selectedAgent}
-          onSelectAgent={setSelectedAgent}
-          enabledAgents={enabledAgents}
           onOpenNewSession={handleOpenNewSession}
           onCreateSessionDirectly={handleCreateSessionDirectly}
           onOpenTempSession={handleOpenTempSession}
@@ -1287,7 +1262,7 @@ function App() {
             {activeSession ? (
               <div className="bottom-panel-left">
                 <button
-                  className={`folder-button ${activeSession.type === "pi" ? "pi-hover" : ""}`}
+                  className="folder-button"
                   onClick={handleOpenFolder}
                   title={`项目物理路径: ${activeSession.path}\n点击在 Windows 资源管理器中打开`}
                 >
@@ -1298,7 +1273,7 @@ function App() {
                 </button>
 
                 <button
-                  className={`md-button ${activeSession.type === "pi" ? "pi-hover" : ""}`}
+                  className="md-button"
                   onClick={() => setShowMdEditor(true)}
                   title="编辑项目规则（默认 CLAUDE.md，保存后同步 AGENTS.md）"
                 >
@@ -1358,10 +1333,10 @@ function App() {
                 <span
                   style={{
                     fontWeight: 600,
-                    color: activeSession.type === "claude" ? "var(--color-orange)" : "var(--color-green)",
+                    color: "var(--color-orange)",
                   }}
                 >
-                  {activeSession.type === "claude" ? claudeVersion : "Pi 终端"}
+                  {claudeVersion}
                 </span>
               ) : (
                 <span>{claudeVersion} 准备就绪</span>
@@ -1443,7 +1418,6 @@ function App() {
       <NewSessionModal
         show={showModal}
         onClose={() => setShowModal(false)}
-        selectedAgent={selectedAgent}
         onCreate={handleCreateSession}
         initialProjectPath={prefilledProjectPath}
       />

@@ -1,33 +1,31 @@
-import { describe, expect, it } from "vitest";
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
 import {
   DEFAULT_ENABLED_AGENTS,
   getVisibleAgents,
   isAgentEnabled,
   resolveEnabledAgents,
-} from "./enabledAgents";
+} from "./enabledAgents.ts";
 
 describe("enabledAgents", () => {
-  it("defaults to Claude only when raw is empty", () => {
-    expect(resolveEnabledAgents(null)).toEqual(DEFAULT_ENABLED_AGENTS);
-    expect(getVisibleAgents(DEFAULT_ENABLED_AGENTS)).toEqual(["claude"]);
+  it("defaults to Claude only", () => {
+    assert.deepEqual(resolveEnabledAgents(null), DEFAULT_ENABLED_AGENTS);
+    assert.deepEqual(getVisibleAgents(DEFAULT_ENABLED_AGENTS), ["claude"]);
   });
 
-  it("parses enabled flags and always keeps Claude", () => {
+  it("ignores legacy pi/codex flags from storage (Pi/Codex 集成已移除)", () => {
     const enabled = resolveEnabledAgents(
       JSON.stringify({ claude: false, pi: true, codex: true }),
     );
-    expect(enabled).toEqual({ claude: true, pi: true, codex: true });
-    expect(getVisibleAgents(enabled)).toEqual(["claude", "pi", "codex"]);
+    assert.deepEqual(enabled, { claude: true });
+    assert.deepEqual(getVisibleAgents(enabled), ["claude"]);
   });
 
   it("ignores invalid JSON", () => {
-    expect(resolveEnabledAgents("{not-json")).toEqual(DEFAULT_ENABLED_AGENTS);
+    assert.deepEqual(resolveEnabledAgents("{not-json"), DEFAULT_ENABLED_AGENTS);
   });
 
-  it("reports enablement correctly", () => {
-    const enabled = { claude: true as const, pi: true, codex: false };
-    expect(isAgentEnabled("claude", enabled)).toBe(true);
-    expect(isAgentEnabled("pi", enabled)).toBe(true);
-    expect(isAgentEnabled("codex", enabled)).toBe(false);
+  it("reports Claude always enabled", () => {
+    assert.equal(isAgentEnabled("claude", DEFAULT_ENABLED_AGENTS), true);
   });
 });

@@ -246,16 +246,6 @@ body {
   transform: translateX(0);
 }
 
-.agent-selector-slider[data-index="1"],
-.agent-selector-slider.pi {
-  transform: translateX(100%);
-}
-
-.agent-selector-slider[data-index="2"],
-.agent-selector-slider.codex {
-  transform: translateX(200%);
-}
-
 .agent-tab {
   flex: 1;
   padding: 7px 10px;
@@ -284,14 +274,6 @@ body {
 
 .agent-tab.active.claude-style {
   color: #D97757 !important; /* Custom brand color for active Claude tab */
-}
-
-.agent-tab.active.pi-style {
-  color: var(--color-green) !important;
-}
-
-.agent-tab.active.codex-style {
-  color: var(--color-cyan) !important;
 }
 
 .new-session-btn {
@@ -340,11 +322,6 @@ body {
   background-color: var(--bg-main);
 }
 
-.search-input.pi-focus:focus {
-  border-color: var(--color-green);
-  background-color: var(--bg-main);
-}
-
 .search-icon {
   position: absolute;
   left: 12px;
@@ -359,6 +336,31 @@ body {
   flex: 1;
   overflow-y: auto;
   padding: 8px 0; /* 紧凑的全贴边设计，去除左右空隙 */
+}
+
+/* 会话超过 5 个时的「更多.../收起」按钮：小号、最左侧、弱化（项目/收藏分组内） */
+.sidebar-more-sessions-btn {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+  width: auto;
+  margin: 2px 8px 2px 12px; /* 左对齐与会话文本缩进一致 */
+  padding: 2px 4px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1.4;
+  cursor: pointer;
+  opacity: 0.75;
+  transition: color 0.15s ease, opacity 0.15s ease, background-color 0.15s ease;
+}
+.sidebar-more-sessions-btn:hover {
+  color: var(--color-primary);
+  opacity: 1;
+  background-color: transparent;
 }
 
 .section-title {
@@ -1168,11 +1170,6 @@ body.terminal-split-resizing .terminal-pane-host {
   color: var(--text-primary) !important;
 }
 
-.folder-button.pi-hover:hover {
-  background-color: var(--bg-hover-item) !important;
-  color: var(--text-primary) !important;
-}
-
 /* 📝 规则编辑按钮 */
 .md-button {
   display: flex;
@@ -1192,11 +1189,6 @@ body.terminal-split-resizing .terminal-pane-host {
 }
 
 .md-button:hover {
-  background-color: var(--bg-hover-item) !important;
-  color: var(--text-primary) !important;
-}
-
-.md-button.pi-hover:hover {
   background-color: var(--bg-hover-item) !important;
   color: var(--text-primary) !important;
 }
@@ -2350,11 +2342,6 @@ input:checked + .switch-slider:before {
   color: transparent !important;
 }
 
-/* 针对 Pi 终端进行优化隔离：强制锁定隐藏输入框的水平位置在左边缘，彻底防范输入法候选框因 TUI 隐藏硬件光标至右下角而漂移至最右侧甚至超出窗口 */
-.agent-type-pi .xterm-helper-textarea {
-  left: 20px !important;
-}
-
 
 
 /* 隐藏标签栏横向滚动条，保持现代扁平纯净质感 */
@@ -2611,24 +2598,6 @@ input:checked + .switch-slider:before {
   border-top: 1px solid rgba(217, 119, 87, 0.35) !important;
 }
 
-.tab.glowing-pi {
-  animation: glowing-green 2s infinite ease-in-out;
-  border-left: 1px solid rgba(16, 185, 129, 0.35) !important;
-  border-right: 1px solid rgba(16, 185, 129, 0.35) !important;
-  border-top: 1px solid rgba(16, 185, 129, 0.35) !important;
-}
-
-.tab.glowing-codex {
-  animation: glowing-cyan 2s infinite ease-in-out;
-  border-left: 1px solid rgba(6, 182, 212, 0.35) !important;
-  border-right: 1px solid rgba(6, 182, 212, 0.35) !important;
-  border-top: 1px solid rgba(6, 182, 212, 0.35) !important;
-}
-
-.tab.glowing-codex .tab-title-text {
-  color: var(--text-primary) !important;
-}
-
 /* ==========================================
    应用级静默反馈 Toast（替代原生 alert）
    ========================================== */
@@ -2869,8 +2838,9 @@ input:checked + .switch-slider:before {
   top: calc(100% + 6px);
   right: 0;
   width: 250px;
-  max-height: min(74vh, 460px);
-  overflow-y: auto;
+  /* 固定高度（仅随视口变化，不随供应商/模型数量伸缩）：供应商、模型列表在内部各自滚动 */
+  height: min(74vh, 460px);
+  overflow: hidden;
   background-color: var(--bg-sidebar);
   border: 1px solid var(--border-color);
   border-radius: 8px;
@@ -2893,6 +2863,15 @@ input:checked + .switch-slider:before {
 }
 .model-dropdown-provider-list {
   max-height: 230px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+/* 模型列表：占满固定高度菜单的剩余空间，超出部分内部滚动（保证菜单大小恒定） */
+.model-dropdown-model-list {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -3003,8 +2982,7 @@ input:checked + .switch-slider:before {
    ========================================== */
 
 /* 非活动标签思考完成后底部明黄色底线 */
-.tab.glowing-claude::before,
-.tab.glowing-pi::before {
+.tab.glowing-claude::before {
   content: '';
   position: absolute;
   bottom: 0;
@@ -3016,8 +2994,7 @@ input:checked + .switch-slider:before {
 }
 
 /* 标签标题文字也变成亮黄色 */
-.tab.glowing-claude .tab-title-text,
-.tab.glowing-pi .tab-title-text {
+.tab.glowing-claude .tab-title-text {
   color: #fbbf24 !important;
   font-weight: 600;
 }
@@ -3566,11 +3543,6 @@ input:checked + .switch-slider:before {
 .project-tree-resizer:hover,
 .project-tree-resizer.dragging {
   background-color: var(--color-orange);
-}
-
-.project-tree-resizer[data-agent-type="pi"]:hover,
-.project-tree-resizer[data-agent-type="pi"].dragging {
-  background-color: var(--color-green);
 }
 
 /* 右键上下文菜单 */
@@ -4257,11 +4229,18 @@ body.preview-resizing .preview-resize-handle::after {
   overflow: hidden;
 }
 
-.md-code-lang {
+/* 代码块右上角：语言标签 + 复制按钮 */
+.md-code-head {
   position: absolute;
   top: 6px;
   right: 10px;
   z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.md-code-lang {
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -4272,11 +4251,114 @@ body.preview-resizing .preview-resize-handle::after {
   pointer-events: none;
 }
 
+/* 复制按钮：小号、右上角、hover 显现 */
+.md-code-copy {
+  font-size: 10.5px;
+  line-height: 1;
+  padding: 3px 7px;
+  border: 1px solid var(--border-color);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--bg-main) 70%, transparent);
+  color: var(--text-secondary);
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.md-code-copy:hover {
+  opacity: 1;
+  color: var(--color-primary);
+  border-color: color-mix(in srgb, var(--color-primary) 45%, transparent);
+}
+.md-code-copy.is-copied {
+  opacity: 1;
+  color: #22c55e;
+  border-color: rgba(34, 197, 94, 0.45);
+}
+
+/* HTML 代码块：预览/源码 切换（右上角，纯 CSS radio 联动） */
+.md-html-preview {
+  position: relative;
+  margin: 1em 0;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: color-mix(in srgb, rgba(0, 0, 0, 0.28) 85%, var(--bg-main));
+  overflow: hidden;
+}
+.md-html-preview-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+  background: color-mix(in srgb, var(--bg-active-item) 70%, transparent);
+  border-bottom: 1px solid var(--border-color);
+}
+.md-html-preview .md-code-lang {
+  text-transform: none;
+  font-size: 10.5px;
+}
+/* radio 隐藏，仅作为切换状态载体 */
+.md-html-preview-radio {
+  display: none;
+}
+.md-html-preview-tabs {
+  display: inline-flex;
+  gap: 2px;
+}
+.md-html-preview-tab {
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 8px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.md-html-preview-tab:hover {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--bg-hover-item) 80%, transparent);
+}
+/* 当前模式高亮 */
+.md-html-preview-radio-pv:checked ~ .md-html-preview-bar .md-html-preview-tab-pv,
+.md-html-preview-radio-src:checked ~ .md-html-preview-bar .md-html-preview-tab-src {
+  background: var(--color-primary);
+  color: #fff;
+}
+/* 默认（预览）：iframe 显示，源码隐藏 */
+.md-html-preview-frame {
+  display: block;
+  width: 100%;
+  height: 340px;
+  border: none;
+  background: #ffffff;
+}
+.md-html-preview-source {
+  display: none;
+  max-height: 340px;
+  overflow: auto;
+  border-radius: 0;
+}
+/* 切到「源码」：预览 iframe 完全移除，只显示源码 */
+.md-html-preview-radio-src:checked ~ .md-html-preview-frame {
+  display: none;
+}
+.md-html-preview-radio-src:checked ~ .md-html-preview-source {
+  display: block;
+}
+
 .md-pre {
   margin: 0;
   padding: 14px 14px 12px;
   overflow-x: auto;
   background: transparent;
+}
+
+/* 右上角有语言标签+复制按钮，第一行留出空间 */
+.md-code-block .md-pre {
+  padding-top: 30px;
 }
 
 .md-code {

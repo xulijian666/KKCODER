@@ -4,6 +4,7 @@ export function addUnreadCompletion(
   activeSessionId: string,
   isWindowFocused = true
 ): string[] {
+  // 窗口聚焦且是当前活动会话时完成：用户正看着，不提示
   if (isWindowFocused && completedSessionId === activeSessionId) return unreadSessionIds;
   if (unreadSessionIds.includes(completedSessionId)) return unreadSessionIds;
   return [...unreadSessionIds, completedSessionId];

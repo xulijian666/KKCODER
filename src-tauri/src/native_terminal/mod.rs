@@ -144,7 +144,7 @@ pub fn spawn_compat_terminal(
         "claude {}\r\n",
         build_claude_args(is_reopen, &agent_session_id, model.as_deref()).join(" ")
     );
-    crate::log_to_file(&format!("[native_terminal] spawn claude: {}", claude_command.trim_end()));
+    crate::log_session(&session_id, &format!("[native_terminal] spawn claude: {}", claude_command.trim_end()));
     std::thread::sleep(std::time::Duration::from_millis(300));
     let mut input = writer.lock().map_err(|e| e.to_string())?;
     input

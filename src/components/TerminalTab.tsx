@@ -21,7 +21,7 @@ import { formatFeedbackError, notifyError, notifySuccess } from "../utils/appFee
 interface TerminalTabProps {
   sessionId: string;
   directory: string;
-  agentType: "claude" | "pi" | "codex";
+  agentType: "claude";
   agentSessionId: string;
   isReopen: boolean;
   onSpawned?: () => void;
@@ -610,7 +610,7 @@ const TerminalTabImpl: React.FC<TerminalTabProps> = ({
                   const notifyThresholdStr = localStorage.getItem("kkcoder_setting_notify_threshold");
                   const notifyThreshold = notifyThresholdStr ? parseFloat(notifyThresholdStr) : 2.0;
                   const playSoundEnabled = localStorage.getItem("kkcoder_setting_play_sound") !== "false";
-                  const soundTone = localStorage.getItem("kkcoder_setting_sound_tone") || "dingdong";
+                  const soundTone = localStorage.getItem("kkcoder_setting_sound_tone") || "default";
                   const soundVolumeStr = localStorage.getItem("kkcoder_setting_sound_volume");
                   const soundVolume = soundVolumeStr ? parseInt(soundVolumeStr, 10) : 80;
 

@@ -76,7 +76,7 @@ src/
 | 文件 | 职责 | 经 `index.ts` 导出 |
 |------|------|-------------------|
 | `index.ts` | 组件 barrel | — |
-| `Sidebar.tsx` | 会话列表、搜索、收藏、Agent 切换 | `Sidebar`, `Session`, `ClaudeIcon`, `PiIcon`, `CodexIcon` |
+| `Sidebar.tsx` | 会话列表、搜索、收藏（专注 Claude Code 单一助手，Pi/Codex 已移除） | `Sidebar`, `Session`, `ClaudeIcon` |
 | `TerminalTab.tsx` | xterm.js 标准 PTY 标签 | `TerminalTab` |
 | `NativeTerminalTab.tsx` | Claude 兼容/原生终端标签 | `CompatibilityTerminalTab` |
 | `ChatTab.tsx` | Claude GUI 聊天标签（历史、流式文本、推理与工具调用） | `ChatTab` |
@@ -89,7 +89,7 @@ src/
 | `ProjectTreeBindingBar.tsx` | 分屏下项目树绑定顶栏（跟随/钉左/钉右） | `ProjectTreeBindingBar` |
 | `SettingsModal.tsx` | 设置中心（外观 / 助手 / 终端 / 通知 / 快捷短语 / 会话 / 远程 / 关于） | `SettingsModal` |
 | `RemoteSettingsPanel.tsx` | 远程访问 / FRP / 设备配对 | `RemoteSettingsPanel` |
-| `NewSessionModal.tsx` | 新建会话 | `NewSessionModal` |
+| `NewSessionModal.tsx` | 新建会话（Claude Code） | `NewSessionModal` |
 | `MdEditorModal.tsx` | CLAUDE.md / AGENTS.md 编辑 | `MdEditorModal` |
 | `FileEditorModal.tsx` | 文本文件编辑 | `FileEditorModal` |
 | `DirectoryPickerModal.tsx` | 目录选择 | `DirectoryPickerModal` |
@@ -135,7 +135,7 @@ src/
 | `pathHelpers.ts` | 路径展示 | `getFolderName` |
 | `theme.ts` | 6 套主题 CSS 变量 / apply | `applyTheme`, `readStoredTheme`, `persistTheme`, `DEFAULT_THEME`, `THEME_STORAGE_KEY` |
 | `sessionQueue.ts` | 队列纯函数 | `clearSessionQueue`, `enqueueSessionTask`, `getSessionQueue`, `removeSessionTask`, `QueueBySession` |
-| `enabledAgents.ts` | Agent 启用开关与可见列表 | `loadEnabledAgents`, `saveEnabledAgents`, `isAgentEnabled`, `getVisibleAgents`, `AgentType`, `EnabledAgents` |
+| `enabledAgents.ts` | 助手启用状态（Pi/Codex 已移除，恒为 Claude Code） | `loadEnabledAgents`, `saveEnabledAgents`, `isAgentEnabled`, `getVisibleAgents`, `AgentType`, `EnabledAgents` |
 | `appFeedback.ts` | 静默反馈总线（notify / confirmAction） | `notify`, `notifyInfo`, `notifySuccess`, `notifyWarning`, `notifyError`, `confirmAction`, `formatFeedbackError` |
 | `terminalFocus.ts` | 活动终端焦点契约（request / 判定叠加层 / 可选 sessionId） | `requestActiveTerminalFocus`, `returnFocusToActiveTerminal`, `FOCUS_ACTIVE_TERMINAL_EVENT` |
 | `terminalSplit.ts` | 双槽分屏纯函数与持久化；标签拖放 MIME / 读写 sessionId | `SESSION_DRAG_MIME`, `isSessionDragEvent`, `readSessionIdFromDataTransfer`, `TERMINAL_SPLIT_STORAGE_KEY`, `clampSplitRatio`, `pickSplitCompanionSessionId`, `placeSessionBesideInTabOrder`, 类型 |
@@ -145,7 +145,6 @@ src/
 | `sessionCleanup.ts` | 清理设置读写 | `readSessionCleanupSettings` 等 |
 | `sessionTitle.ts` | 会话标题推导 | 按需直接 import |
 | `unreadCompletions.ts` | 未读完成集合 | `addUnreadCompletion`, `getUnreadCompletionCount`, `markSessionRead` |
-| `taskbarBadge.ts` | 任务栏角标 | `syncTaskbarUnreadBadge` |
 | `terminalMode.ts` | standard / native 模式 | `CLAUDE_TERMINAL_MODE_KEY`, `resolveClaudeTerminalMode`, `shouldUseNativeTerminal`, `ClaudeTerminalMode` |
 | `interactionMode.ts` | Claude CLI / GUI 交互模式解析与 Agent 路由 | `CLAUDE_INTERACTION_MODE_KEY`, `resolveClaudeInteractionMode`, `shouldUseGuiChat`, `ClaudeInteractionMode` |
 | `chatCompletion.ts` | GUI 聊天输入框的 `@` / `/` 触发检测与 token 替换 | `detectChatCompletionTrigger`, `replaceChatCompletionTrigger`, `ChatCompletionTrigger` |

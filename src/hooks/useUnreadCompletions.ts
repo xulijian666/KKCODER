@@ -1,11 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { Window as TauriWindow } from "@tauri-apps/api/window";
-import {
-  addUnreadCompletion,
-  getUnreadCompletionCount,
-  markSessionRead,
-} from "../utils/unreadCompletions";
-import { syncTaskbarUnreadBadge } from "../utils/taskbarBadge";
+import { addUnreadCompletion, markSessionRead } from "../utils/unreadCompletions";
 import { log } from "../utils/log";
 
 export function useUnreadCompletions(
@@ -13,6 +8,8 @@ export function useUnreadCompletions(
   appWindow: TauriWindow,
 ) {
   const [glowingSessionIds, setGlowingSessionIds] = useState<string[]>([]);
+  const glowingSessionIdsRef = useRef<string[]>([]);
+  glowingSessionIdsRef.current = glowingSessionIds;
   const activeSessionIdRef = useRef(activeSessionId);
   const isWindowFocusedRef = useRef(true);
 
@@ -26,6 +23,7 @@ export function useUnreadCompletions(
     }
   }, [activeSessionId]);
 
+  // 记录窗口聚焦状态：用于「聚焦时完成不加未读」的决策（任务栏角标已移除，仅保留闪烁逻辑）
   useEffect(() => {
     let unlisten: (() => void) | null = null;
 
@@ -33,22 +31,12 @@ export function useUnreadCompletions(
       .isFocused()
       .then((focused) => {
         isWindowFocusedRef.current = focused;
-        if (focused && activeSessionIdRef.current) {
-          setGlowingSessionIds((previous) =>
-            markSessionRead(previous, activeSessionIdRef.current),
-          );
-        }
       })
       .catch((error) => log(`Failed to read window focus state: ${error}`));
 
     appWindow
       .onFocusChanged(({ payload: focused }) => {
         isWindowFocusedRef.current = focused;
-        if (focused && activeSessionIdRef.current) {
-          setGlowingSessionIds((previous) =>
-            markSessionRead(previous, activeSessionIdRef.current),
-          );
-        }
       })
       .then((dispose) => {
         unlisten = dispose;
@@ -60,25 +48,17 @@ export function useUnreadCompletions(
     };
   }, [appWindow]);
 
-  useEffect(() => {
-    syncTaskbarUnreadBadge(getUnreadCompletionCount(glowingSessionIds), log);
-  }, [glowingSessionIds]);
-
-  useEffect(() => {
-    return () => {
-      syncTaskbarUnreadBadge(0, log);
-    };
-  }, []);
-
   const handleCommandComplete = (sessionId: string) => {
-    setGlowingSessionIds((previous) =>
-      addUnreadCompletion(
-        previous,
-        sessionId,
-        activeSessionIdRef.current,
-        isWindowFocusedRef.current,
-      ),
+    const next = addUnreadCompletion(
+      glowingSessionIdsRef.current,
+      sessionId,
+      activeSessionIdRef.current,
+      isWindowFocusedRef.current,
     );
+    log(
+      `[unread] complete session=${sessionId} focused=${isWindowFocusedRef.current} active=${activeSessionIdRef.current} count=${next.length}`,
+    );
+    setGlowingSessionIds(next);
   };
 
   return {

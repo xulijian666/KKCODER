@@ -7,22 +7,7 @@ use axum::Json;
 use super::auth::AuthToken;
 use super::state::RemoteServerState;
 
-fn log_to_file(message: &str) {
-    use std::fs::OpenOptions;
-    use std::io::Write;
-    if let Ok(mut file) = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .append(true)
-        .open("kkcoder_debug.log")
-    {
-        let now = std::time::SystemTime::now();
-        let since = now
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default();
-        let _ = writeln!(file, "[Timestamp: {}ms] {}", since.as_millis(), message);
-    }
-}
+
 
 /// 会话 DTO（匹配手机端 Session 模型）
 #[derive(serde::Serialize)]
@@ -225,7 +210,7 @@ pub async fn verify_pairing(
     State(state): State<Arc<RemoteServerState>>,
     Json(req): Json<PairVerifyRequest>,
 ) -> Result<Json<PairVerifyResponse>, (StatusCode, Json<serde_json::Value>)> {
-    log_to_file("[verify_pairing] v2 handler called!");
+    crate::log_to_file("[verify_pairing] v2 handler called!");
     // 从数据库读取 PIN（Tauri 命令写入的位置）
     let (pin_value, pin_expires_at) = {
         let db_path = state.db_path.clone();
@@ -236,7 +221,7 @@ pub async fn verify_pairing(
             if let Ok(mut stmt) = conn.prepare("SELECT key, value FROM remote_config") {
                 if let Ok(rows) = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))) {
                     for row in rows.flatten() {
-                        log_to_file(&format!("[verify_pairing] remote_config: {} = {}", row.0, row.1));
+                        crate::log_to_file(&format!("[verify_pairing] remote_config: {} = {}", row.0, row.1));
                     }
                 }
             }
@@ -255,7 +240,7 @@ pub async fn verify_pairing(
                 let millis: u64 = s.parse().ok()?;
                 std::time::UNIX_EPOCH.checked_add(std::time::Duration::from_millis(millis))
             });
-            log_to_file(&format!("[verify_pairing] db_path={}, pin_found={}, pin_value={:?}, expires_at={:?}, input_pin={}",
+            crate::log_to_file(&format!("[verify_pairing] db_path={}, pin_found={}, pin_value={:?}, expires_at={:?}, input_pin={}",
                 db_path.display(), pin.is_some(), pin, expires_at, "hidden"));
             Ok((pin, expires_at))
         })
@@ -270,7 +255,7 @@ pub async fn verify_pairing(
     ))?;
 
     if !super::auth::verify_pin(&req.pin, &pin_value, pin_expires_at) {
-        log_to_file(&format!("[verify_pairing] PIN mismatch: input='{}', stored='{}'", req.pin, pin_value));
+        crate::log_to_file(&format!("[verify_pairing] PIN mismatch: input='{}', stored='{}'", req.pin, pin_value));
         return Err((StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "Invalid or expired PIN"}))));
     }
 

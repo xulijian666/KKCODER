@@ -29,12 +29,9 @@ import {
   type TerminalSchemeMode,
 } from "../utils/terminalScheme";
 import { applyTheme, DEFAULT_THEME, THEME_STORAGE_KEY } from "../utils/theme";
-import {
-  loadEnabledAgents,
-  saveEnabledAgents,
-  type EnabledAgents,
-} from "../utils/enabledAgents";
 import kkcoderLogo from "../assets/brand/kkcoder-logo.svg";
+import { log, isDebugLogEnabled, DEBUG_LOG_KEY } from "../utils/log";
+import { notifyError, notifySuccess, formatFeedbackError } from "../utils/appFeedback";
 
 // 会话名称修正 localStorage keys
 const AUTO_RENAME_ON_STARTUP_KEY = "kkcoder_setting_auto_rename_startup";
@@ -62,6 +59,7 @@ type SettingsMenuId =
   | "shortcuts"
   | "sessions"
   | "remote"
+  | "debug"
   | "about";
 
 const SETTINGS_MENU: { id: SettingsMenuId; label: string; group: string }[] = [
@@ -72,6 +70,7 @@ const SETTINGS_MENU: { id: SettingsMenuId; label: string; group: string }[] = [
   { id: "shortcuts", label: "快捷短语", group: "工作区" },
   { id: "sessions", label: "会话", group: "管理" },
   { id: "remote", label: "远程", group: "管理" },
+  { id: "debug", label: "调试", group: "其他" },
   { id: "about", label: "关于", group: "其他" },
 ];
 
@@ -106,7 +105,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
   const [theme, setTheme] = useState<string>(() => {
     return localStorage.getItem(THEME_STORAGE_KEY) || DEFAULT_THEME;
   });
-  const [enabledAgents, setEnabledAgents] = useState<EnabledAgents>(() => loadEnabledAgents());
+  // 调试日志开关（默认开启）
+  const [debugLogEnabled, setDebugLogEnabled] = useState<boolean>(() => isDebugLogEnabled());
+  // 清理中状态，防止重复点击
+  const [clearingLogs, setClearingLogs] = useState(false);
   // Language state removed to satisfy TS6133 strict check
   const [closeBehavior, setCloseBehavior] = useState<string>(() => {
     return localStorage.getItem("kkcoder_setting_close_behavior") || "exit";
@@ -124,7 +126,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
     return val === null ? true : val === "true";
   });
   const [soundTone, setSoundTone] = useState<string>(() => {
-    return localStorage.getItem("kkcoder_setting_sound_tone") || "dingdong";
+    const stored = localStorage.getItem("kkcoder_setting_sound_tone");
+    // 新音色体系（CC GUI）：default/chime/bell/ding/success；旧值兼容归一
+    if (stored === "chime" || stored === "bell" || stored === "ding" || stored === "success") {
+      return stored;
+    }
+    if (stored === "crystal") return "chime";
+    if (stored === "dream") return "success";
+    if (stored === "dingdong") return "ding";
+    return "default";
   });
   const [soundVolume, setSoundVolume] = useState<number>(() => {
     const val = localStorage.getItem("kkcoder_setting_sound_volume");
@@ -210,6 +220,37 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
     window.dispatchEvent(new CustomEvent("kkcoder-ccswitch-path-change", { detail: ccswitchPath }));
   }, [ccswitchPath]);
 
+  // --- 调试日志开关与一键清理 ---
+  const handleToggleDebugLog = (enabled: boolean) => {
+    if (enabled) {
+      // 先开启再记录，让"启用"这一动作留痕
+      localStorage.setItem(DEBUG_LOG_KEY, "true");
+      setDebugLogEnabled(true);
+      log("[debug-log] enabled via settings");
+    } else {
+      // 先记录再关闭，让"关闭"这一动作留痕
+      log("[debug-log] disabled via settings");
+      localStorage.setItem(DEBUG_LOG_KEY, "false");
+      setDebugLogEnabled(false);
+    }
+    invoke("set_debug_log_enabled", { enabled }).catch((err) => {
+      notifyError(`同步日志开关失败：${formatFeedbackError(err)}`);
+    });
+  };
+
+  const handleClearLogs = async () => {
+    if (clearingLogs) return;
+    setClearingLogs(true);
+    try {
+      await invoke("clear_log_files");
+      notifySuccess("日志文件已清理");
+    } catch (err) {
+      notifyError(`清理日志失败：${formatFeedbackError(err)}`);
+    } finally {
+      setClearingLogs(false);
+    }
+  };
+
 
 
   // --- 会话名称修正设置 ---
@@ -250,11 +291,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
     localStorage.setItem(THEME_STORAGE_KEY, theme);
     applyTheme(theme);
     window.dispatchEvent(new CustomEvent("kkcoder-theme-change", { detail: theme }));
+    log(`[settings] theme -> ${theme}`);
   }, [theme]);
-
-  useEffect(() => {
-    saveEnabledAgents(enabledAgents);
-  }, [enabledAgents]);
 
   // 监听外部（如调色盘）的主题变动事件以同步本地 theme 状态
   useEffect(() => {
@@ -326,6 +364,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
     window.dispatchEvent(new CustomEvent("kkcoder-claude-terminal-mode-change", {
       detail: claudeTerminalMode,
     }));
+    log(`[settings] claude terminal mode -> ${claudeTerminalMode}`);
   }, [claudeTerminalMode]);
 
   useEffect(() => {
@@ -333,6 +372,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
     window.dispatchEvent(new CustomEvent(CLAUDE_INTERACTION_MODE_CHANGE_EVENT, {
       detail: claudeInteractionMode,
     }));
+    log(`[settings] claude interaction mode -> ${claudeInteractionMode}`);
   }, [claudeInteractionMode]);
 
   useEffect(() => {
@@ -618,7 +658,7 @@ return (
                 <section className="settings-section">
                   <div className="settings-section-head">
                     <h3 className="settings-section-title">启用的助手</h3>
-                    <p className="settings-section-desc">未启用的助手不会出现在侧栏切换中；Claude Code 始终可用</p>
+                    <p className="settings-section-desc">本应用专注 Claude Code 单一助手（Pi / Codex 集成已移除）</p>
                   </div>
                   <div className="settings-group">
                     <div className="settings-switch-row">
@@ -626,33 +666,7 @@ return (
                         <input type="checkbox" checked disabled />
                         <span className="switch-slider" />
                       </label>
-                      <span className="switch-label">Claude Code（默认）</span>
-                    </div>
-                    <div className="settings-switch-row">
-                      <label className="switch-container">
-                        <input
-                          type="checkbox"
-                          checked={enabledAgents.pi}
-                          onChange={(e) =>
-                            setEnabledAgents((prev) => ({ ...prev, claude: true, pi: e.target.checked }))
-                          }
-                        />
-                        <span className="switch-slider" />
-                      </label>
-                      <span className="switch-label">启用 Pi</span>
-                    </div>
-                    <div className="settings-switch-row">
-                      <label className="switch-container">
-                        <input
-                          type="checkbox"
-                          checked={enabledAgents.codex}
-                          onChange={(e) =>
-                            setEnabledAgents((prev) => ({ ...prev, claude: true, codex: e.target.checked }))
-                          }
-                        />
-                        <span className="switch-slider" />
-                      </label>
-                      <span className="switch-label">启用 Codex</span>
+                      <span className="switch-label">Claude Code（始终启用）</span>
                     </div>
                   </div>
                 </section>
@@ -918,16 +932,13 @@ return (
                   <div className="settings-group">
                     <div className="settings-group-label">音色</div>
                     <div className="settings-btn-group wrap-group">
-                      {(["叮咚", "钟声", "成功音", "闹铃", "气泡", "水晶", "梦幻", "水滴"] as const).map((tone) => {
+                      {(["默认", "清脆铃声", "钟声", "叮咚", "成功提示"] as const).map((tone) => {
                         const toneKey = {
-                          叮咚: "dingdong",
+                          默认: "default",
+                          清脆铃声: "chime",
                           钟声: "bell",
-                          成功音: "success",
-                          闹铃: "alarm",
-                          气泡: "bubble",
-                          水晶: "crystal",
-                          梦幻: "dream",
-                          水滴: "water",
+                          叮咚: "ding",
+                          成功提示: "success",
                         }[tone];
                         const isActive = soundTone === toneKey;
                         return (
@@ -936,7 +947,7 @@ return (
                             type="button"
                             className={`settings-toggle-btn ${isActive ? "active" : ""}`}
                             onClick={() => {
-                              const finalTone = toneKey || "dingdong";
+                              const finalTone = toneKey || "default";
                               setSoundTone(finalTone);
                               triggerPreview(finalTone, soundVolume);
                             }}
@@ -1140,6 +1151,44 @@ return (
             {activeMenu === "remote" && (
               <div className="settings-content">
                 <RemoteSettingsPanel />
+              </div>
+            )}
+
+            {activeMenu === "debug" && (
+              <div className="settings-content">
+                <section className="settings-section">
+                  <div className="settings-section-head">
+                    <h3 className="settings-section-title">调试日志</h3>
+                    <p className="settings-section-desc">记录前端操作与各会话的后端行为，用于问题定位；日志目录：{`<应用目录>/logs/`}</p>
+                  </div>
+                  <div className="settings-group">
+                    <div className="settings-switch-row">
+                      <label className="switch-container">
+                        <input
+                          type="checkbox"
+                          checked={debugLogEnabled}
+                          onChange={(e) => handleToggleDebugLog(e.target.checked)}
+                        />
+                        <span className="switch-slider" />
+                      </label>
+                      <span className="switch-label">启用调试日志（关闭后不再产生日志）</span>
+                    </div>
+                    <div className="settings-switch-row" style={{ justifyContent: "space-between" }}>
+                      <span className="switch-label" style={{ flex: 1 }}>
+                        一键清理日志文件
+                      </span>
+                      <button
+                        type="button"
+                        className="settings-toggle-btn"
+                        disabled={clearingLogs}
+                        onClick={handleClearLogs}
+                        style={{ color: "#ef4444", borderColor: "rgba(239,68,68,0.4)" }}
+                      >
+                        {clearingLogs ? "清理中..." : "立即清理"}
+                      </button>
+                    </div>
+                  </div>
+                </section>
               </div>
             )}
 

@@ -13,7 +13,6 @@ import type { Session } from "../components/Sidebar";
 import { generateUUID } from "../utils/uuid";
 import { log } from "../utils/log";
 import { readSessionCleanupSettings } from "../utils/sessionCleanup";
-import type { AgentType } from "../utils/enabledAgents";
 import { formatFeedbackError, notifyError } from "../utils/appFeedback";
 
 const CLAUDE_VERSION_CACHE_KEY = "kkcoder_cached_claude_version";
@@ -21,7 +20,6 @@ const CLAUDE_VERSION_CACHE_KEY = "kkcoder_cached_claude_version";
 export type { AgentType } from "../utils/enabledAgents";
 
 export interface UseSessionsOptions {
-  selectedAgent: AgentType;
   /** Latest open tabs (ref avoids circular hook deps with useSessionTabs). */
   openTabIdsRef: MutableRefObject<string[]>;
   activeSessionIdRef: MutableRefObject<string>;
@@ -35,7 +33,6 @@ export interface UseSessionsOptions {
   setIsInitLoaded: Dispatch<SetStateAction<boolean>>;
 }
 export function useSessions({
-  selectedAgent,
   openTabIdsRef,
   activeSessionIdRef,
   setOpenTabIds,
@@ -149,11 +146,10 @@ export function useSessions({
         const payload = event.payload;
         const sessionId = String(payload.session_id ?? "");
         const directory = String(payload.directory ?? "");
-        const agentType = String(payload.agent_type ?? "claude") as AgentType;
         const agentSessionId = String(payload.agent_session_id ?? "");
         const isReopen = Boolean(payload.is_reopen);
         log(
-          `[RemoteSpawn] Received spawn request: session=${sessionId}, dir=${directory}, agent=${agentType}, reopen=${isReopen}, agent_session_id=${agentSessionId}`,
+          `[RemoteSpawn] Received spawn request: session=${sessionId}, dir=${directory}, agent=claude, reopen=${isReopen}, agent_session_id=${agentSessionId}`,
         );
 
         try {
@@ -179,7 +175,7 @@ export function useSessions({
               await invoke("spawn_terminal", {
                 sessionId,
                 directory,
-                agentType: agentType || "claude",
+                agentType: "claude",
                 agentSessionId: finalAgentSessionId,
                 isReopen: hasAgentSessionId && (isReopen ?? true),
               });
@@ -198,7 +194,7 @@ export function useSessions({
               name: "新对话",
               path: directory,
               project: folderName,
-              type: agentType || "claude",
+              type: "claude",
               agentSessionId: finalAgentSessionId,
               favorite: 0,
             };
@@ -208,7 +204,7 @@ export function useSessions({
             await invoke("spawn_terminal", {
               sessionId,
               directory,
-              agentType: agentType || "claude",
+              agentType: "claude",
               agentSessionId: finalAgentSessionId,
               isReopen: false,
             });
@@ -247,20 +243,19 @@ export function useSessions({
   const handleCreateSession = useCallback(
     async (sessionName: string, projectPath: string, projectName: string) => {
       log(
-        `handleCreateSession triggered: name=${sessionName}, path=${projectPath}, project=${projectName}, agent=${selectedAgent}`,
+        `handleCreateSession triggered: name=${sessionName}, path=${projectPath}, project=${projectName}, agent=claude`,
       );
 
       const newId = `session-${Date.now().toString()}`;
-      // Codex 无法在启动前预生成 session id，留空，首句对话后从 ~/.codex/sessions 捕获
-      const agentSessionId = selectedAgent === "codex" ? "" : generateUUID();
-      log(`Generated new session UUIDs: id=${newId}, agentSessionId=${agentSessionId || "(pending codex capture)"}`);
+      const agentSessionId = generateUUID();
+      log(`Generated new session UUIDs: id=${newId}, agentSessionId=${agentSessionId}`);
 
       const newSession: Session = {
         id: newId,
         name: sessionName,
         project: projectName,
         path: projectPath,
-        type: selectedAgent,
+        type: "claude",
         agentSessionId,
         favorite: 0,
       };
@@ -269,28 +264,19 @@ export function useSessions({
       invoke("add_session", { session: newSession })
         .then(() => {
           log(`Successfully added session ${newId} to SQLite. Updating React states...`);
-          setSessions((previous) => {
-            log(`Adding ${newId} to sessions list (previous size: ${previous.length})`);
-            return [...previous, newSession];
-          });
-          setNewSessionIds((previous) => {
-            log(`Adding ${newId} to newSessionIds (previous size: ${previous.length})`);
-            return [...previous, newId];
-          });
-          setOpenTabIds((previous) => {
-            log(`Adding ${newId} to openTabIds (previous size: ${previous.length})`);
-            return [...previous, newId];
-          });
-          log(`Setting activeSessionId to ${newId}`);
+          // 日志放在 updater 外：StrictMode 下 updater 会被调用两次，避免日志重复
+          setSessions((previous) => [...previous, newSession]);
+          setNewSessionIds((previous) => [...previous, newId]);
+          setOpenTabIds((previous) => [...previous, newId]);
+          log(`Session ${newId} state updates finished (openTabs=${openTabIdsRef.current.length + 1}).`);
           setActiveSessionId(newId);
-          log(`handleCreateSession state updates finished.`);
         })
         .catch((error) => {
           log(`Failed to save session ${newId} to SQLite: ${error}`);
           notifyError(`保存会话失败：${formatFeedbackError(error)}`);
         });
     },
-    [selectedAgent, setActiveSessionId, setNewSessionIds, setOpenTabIds],
+    [setActiveSessionId, setNewSessionIds, setOpenTabIds],
   );
 
   const handleCreateSessionDirectly = useCallback(
@@ -305,6 +291,7 @@ export function useSessions({
   );
 
   const handleCreateTempSession = useCallback(() => {
+    log("[sessions] create temp session");
     const tempNumbers = sessions
       .filter((session) => session.isTemp)
       .map((session) => {
@@ -314,14 +301,14 @@ export function useSessions({
     const nextNumber = tempNumbers.length > 0 ? Math.max(...tempNumbers) + 1 : 1;
     const sessionName = `临时终端${nextNumber}`;
     const newId = `temp-session-${Date.now().toString()}`;
-    const agentSessionId = selectedAgent === "codex" ? "" : generateUUID();
+    const agentSessionId = generateUUID();
 
     const newSession: Session = {
       id: newId,
       name: sessionName,
       project: "无痕临时项目",
       path: "D:\\CODE",
-      type: selectedAgent,
+      type: "claude",
       agentSessionId,
       favorite: 0,
       isTemp: true,
@@ -331,7 +318,7 @@ export function useSessions({
     setNewSessionIds((previous) => [...previous, newId]);
     setOpenTabIds((previous) => [...previous, newId]);
     setActiveSessionId(newId);
-  }, [selectedAgent, sessions, setActiveSessionId, setNewSessionIds, setOpenTabIds]);
+  }, [sessions, setActiveSessionId, setNewSessionIds, setOpenTabIds]);
 
   const handleDeleteSession = useCallback(
     async (event: MouseEvent | null, sessionId: string) => {

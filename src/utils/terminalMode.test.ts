@@ -14,6 +14,4 @@ test("enables native mode only for Claude sessions", async () => {
 
   assert.equal(mode, "native");
   assert.equal(shouldUseNativeTerminal("claude", mode), true);
-  assert.equal(shouldUseNativeTerminal("pi", mode), false);
-  assert.equal(shouldUseNativeTerminal("codex", mode), false);
 });

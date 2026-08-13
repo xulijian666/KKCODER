@@ -8,7 +8,7 @@ export const resolveClaudeInteractionMode = (value: string | null): ClaudeIntera
   return value === "gui" ? "gui" : "cli";
 };
 
-/** 仅 Claude 支持 GUI 聊天模式；pi/codex 恒走 CLI 终端 */
+/** Claude Code 的交互模式：gui 时才走聊天界面（仅 Claude 存在，恒 claude 会话） */
 export const shouldUseGuiChat = (
   agentType: string,
   mode: ClaudeInteractionMode,

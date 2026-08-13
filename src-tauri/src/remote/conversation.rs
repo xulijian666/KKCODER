@@ -51,7 +51,7 @@ impl ConversationState {
     /// 注册一个会话的 JSONL 路径（在 spawn_terminal 时调用）
     pub fn register_session(&self, session_id: &str, agent_session_id: &str, project_path: &str) {
         if let Some(jsonl_path) = crate::find_claude_jsonl(agent_session_id, project_path) {
-            log_to_file(&format!(
+            crate::log_session(session_id, &format!(
                 "ConversationState: registered session {} -> {}",
                 session_id,
                 jsonl_path.display()
@@ -67,7 +67,7 @@ impl ConversationState {
                 },
             );
         } else {
-            log_to_file(&format!(
+            crate::log_session(session_id, &format!(
                 "ConversationState: no JSONL found for session {} (agent={}, project={})",
                 session_id, agent_session_id, project_path
             ));
@@ -78,7 +78,7 @@ impl ConversationState {
     pub fn unregister_session(&self, session_id: &str) {
         self.sessions.remove(session_id);
         self.event_txs.remove(session_id);
-        log_to_file(&format!(
+        crate::log_to_file(&format!(
             "ConversationState: unregistered session {}",
             session_id
         ));
@@ -110,16 +110,16 @@ impl ConversationState {
 
     /// 加载完整对话快照（首次连接时调用）
     pub fn load_snapshot(&self, session_id: &str) -> Vec<ConversationMessageDTO> {
-        log_to_file(&format!("load_snapshot: called for session {}, registered sessions: {:?}", session_id, self.sessions.iter().map(|r| r.key().clone()).collect::<Vec<_>>()));
+        crate::log_to_file(&format!("load_snapshot: called for session {}, registered sessions: {:?}", session_id, self.sessions.iter().map(|r| r.key().clone()).collect::<Vec<_>>()));
         let mut session = match self.sessions.get_mut(session_id) {
             Some(s) => s,
             None => {
-                log_to_file(&format!("load_snapshot: session {} not found in ConversationState", session_id));
+                crate::log_to_file(&format!("load_snapshot: session {} not found in ConversationState", session_id));
                 return vec![];
             }
         };
 
-        log_to_file(&format!("load_snapshot: reading JSONL from {}", session.jsonl_path.display()));
+        crate::log_to_file(&format!("load_snapshot: reading JSONL from {}", session.jsonl_path.display()));
 
         // 读取完整 JSONL
         let raw_messages = crate::read_claude_transcript(&session.jsonl_path);
@@ -330,13 +330,13 @@ async fn handle_chat_session(
     state: Arc<RemoteServerState>,
     token: String,
 ) {
-    log_to_file(&format!("chat_ws: new connection for session {}", session_id));
+    crate::log_to_file(&format!("chat_ws: new connection for session {}", session_id));
 
     // 获取 session handle（用于 submit_prompt 写入 PTY）
     let handle = match state.session_registry.get(&session_id) {
         Some(h) => h,
         None => {
-            log_to_file(&format!("chat_ws: session {} not found in registry", session_id));
+            crate::log_to_file(&format!("chat_ws: session {} not found in registry", session_id));
             let (mut sender, _) = socket.split();
             let err = serde_json::json!({"type": "error", "message": "Session not found"});
             let _ = sender.send(Message::Text(err.to_string().into())).await;
@@ -347,7 +347,7 @@ async fn handle_chat_session(
     let conversation = match &state.conversation {
         Some(c) => c.clone(),
         None => {
-            log_to_file("chat_ws: ConversationState not available");
+            crate::log_to_file("chat_ws: ConversationState not available");
             let (mut sender, _) = socket.split();
             let err = serde_json::json!({"type": "error", "message": "Conversation not available"});
             let _ = sender.send(Message::Text(err.to_string().into())).await;
@@ -357,13 +357,13 @@ async fn handle_chat_session(
 
     // 如果会话未注册，尝试动态注册（兼容启动前就存在的会话）
     if !conversation.sessions.contains_key(&session_id) {
-        log_to_file(&format!("chat_ws: session {} not registered, attempting dynamic registration", session_id));
+        crate::log_to_file(&format!("chat_ws: session {} not registered, attempting dynamic registration", session_id));
         let agent_session_id = handle.agent_session_id.clone();
         let project_path = handle.project_path.clone();
         conversation.register_session(&session_id, &agent_session_id, &project_path);
     }
 
-    log_to_file(&format!("chat_ws: session {} found, registered sessions count: {}", session_id, conversation.sessions.len()));
+    crate::log_to_file(&format!("chat_ws: session {} found, registered sessions count: {}", session_id, conversation.sessions.len()));
 
     // 更新设备最后活跃时间
     if let Some(mut device) = state.paired_devices.get_mut(&token) {
@@ -385,9 +385,9 @@ async fn handle_chat_session(
             let conv = conversation_for_send.clone();
             let sid = session_id_for_send.clone();
             tokio::task::spawn_blocking(move || {
-                log_to_file(&format!("chat_ws: loading snapshot for session {}", sid));
+                crate::log_to_file(&format!("chat_ws: loading snapshot for session {}", sid));
                 let snap = conv.load_snapshot(&sid);
-                log_to_file(&format!("chat_ws: snapshot loaded, {} messages", snap.len()));
+                crate::log_to_file(&format!("chat_ws: snapshot loaded, {} messages", snap.len()));
                 snap
             })
                 .await
@@ -395,7 +395,7 @@ async fn handle_chat_session(
         };
         let last_seq = snapshot.last().map(|m| m.seq).unwrap_or(0);
         let last_role = snapshot.last().map(|m| m.role.clone()).unwrap_or_default();
-        log_to_file(&format!("chat_ws: sending snapshot with {} messages, last_seq={}", snapshot.len(), last_seq));
+        crate::log_to_file(&format!("chat_ws: sending snapshot with {} messages, last_seq={}", snapshot.len(), last_seq));
         let snap_msg = serde_json::json!({
             "type": "conversation_snapshot",
             "messages": snapshot,
@@ -406,14 +406,14 @@ async fn handle_chat_session(
             .await
             .is_err()
         {
-            log_to_file("chat_ws: failed to send snapshot");
+            crate::log_to_file("chat_ws: failed to send snapshot");
             return;
         }
-        log_to_file("chat_ws: snapshot sent successfully");
+        crate::log_to_file("chat_ws: snapshot sent successfully");
 
         // 根据快照最后一条消息推断当前状态，发送给重连客户端
         let inferred_status = if last_role == "user" { "thinking" } else { "idle" };
-        log_to_file(&format!("chat_ws: inferred run_status={} (last msg role={})", inferred_status, last_role));
+        crate::log_to_file(&format!("chat_ws: inferred run_status={} (last msg role={})", inferred_status, last_role));
         let status_msg = serde_json::json!({"type": "run_status", "status": inferred_status});
         if ws_sender.send(Message::Text(status_msg.to_string().into())).await.is_err() {
             return;
@@ -511,7 +511,7 @@ pub async fn run_jsonl_watcher(
     conversation: Arc<ConversationState>,
     session_registry: Arc<super::state::SessionRegistry>,
 ) {
-    log_to_file("[JSONL Watcher] Started");
+    crate::log_to_file("[JSONL Watcher] Started");
     loop {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
@@ -528,7 +528,7 @@ pub async fn run_jsonl_watcher(
         for handle_entry in session_registry.sessions_iter() {
             let (sid, handle) = handle_entry;
             if !conversation.sessions.contains_key(&sid) {
-                log_to_file(&format!("[JSONL Watcher] Auto-registering session {}", sid));
+                crate::log_to_file(&format!("[JSONL Watcher] Auto-registering session {}", sid));
                 conversation.register_session(&sid, &handle.agent_session_id, &handle.project_path);
             }
         }
@@ -539,14 +539,14 @@ pub async fn run_jsonl_watcher(
                 continue;
             }
 
-            log_to_file(&format!("[JSONL Watcher] Session {} has {} new messages", session_id, added.len()));
+            crate::log_to_file(&format!("[JSONL Watcher] Session {} has {} new messages", session_id, added.len()));
 
             // 广播新消息
             if let Some(tx) = conversation.event_txs.get(&session_id) {
                 // 检测到新 user 消息 → 广播 thinking 状态（桌面端直接写 PTY 时也能触发）
                 let has_user = added.iter().any(|m| m.role == "user");
                 if has_user {
-                    log_to_file(&format!("[JSONL Watcher] Sending run_status: thinking for session {}", session_id));
+                    crate::log_to_file(&format!("[JSONL Watcher] Sending run_status: thinking for session {}", session_id));
                     let status_msg = serde_json::json!({"type": "run_status", "status": "thinking"});
                     let _ = tx.send(status_msg.to_string());
                 }
@@ -554,7 +554,7 @@ pub async fn run_jsonl_watcher(
                 // 检测到新 assistant 消息 → 广播 idle 状态
                 let has_assistant = added.iter().any(|m| m.role == "assistant");
                 if has_assistant {
-                    log_to_file(&format!("[JSONL Watcher] Sending run_status: idle for session {}", session_id));
+                    crate::log_to_file(&format!("[JSONL Watcher] Sending run_status: idle for session {}", session_id));
                     let status_msg = serde_json::json!({"type": "run_status", "status": "idle"});
                     let _ = tx.send(status_msg.to_string());
                 }
@@ -575,19 +575,4 @@ pub async fn run_jsonl_watcher(
     }
 }
 
-fn log_to_file(message: &str) {
-    use std::fs::OpenOptions;
-    use std::io::Write;
-    if let Ok(mut file) = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .append(true)
-        .open("kkcoder_debug.log")
-    {
-        let now = std::time::SystemTime::now();
-        let since = now
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default();
-        let _ = writeln!(file, "[Timestamp: {}ms] {}", since.as_millis(), message);
-    }
-}
+

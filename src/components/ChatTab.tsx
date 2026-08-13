@@ -342,7 +342,26 @@ type ChatAction =
   | { type: "tool:input"; id: string; input?: unknown }
   | { type: "tool:completed"; id: string; name?: string; output?: string; error?: string }
   | { type: "turn:finished"; costUsd?: number; isError?: boolean }
-  | { type: "turn:error"; message: string };
+  /** silent：用户主动取消，不把消息标红显示错误 */
+  | { type: "turn:error"; message: string; silent?: boolean }
+  /** 取消回退：模型尚无任何输出时，撤回最后一条用户消息（连同空的 assistant 占位） */
+  | { type: "cancel:rollback" };
+
+/** 模型无任何输出（正文首字未出）时，撤回最后一条用户消息；否则原样返回 */
+function trimLastUserTurn(messages: ChatMessage[]): ChatMessage[] {
+  let list = messages;
+  const last = list[list.length - 1];
+  if (last && last.role === "assistant") {
+    // 只看正文：思考过程/工具调用不算"已回复"，正文首字未出即视为未回复、可回退
+    const hasOutput = Boolean(last.text);
+    if (hasOutput) return messages; // 正文已有内容：保留现场，不回退
+    list = list.slice(0, -1); // 移除空的 assistant 占位
+  }
+  if (list.length === 0) return messages;
+  const prev = list[list.length - 1];
+  if (prev.role !== "user") return messages; // 尾部不是刚发的用户消息：不回退
+  return list.slice(0, -1);
+}
 
 function patchLast(
   state: ChatMessage[],
@@ -444,9 +463,12 @@ function messagesReducer(state: ChatMessage[], action: ChatAction): ChatMessage[
     case "turn:error":
       return patchLast(state, (m) => ({
         ...m,
-        status: "error",
-        error: action.message,
+        // 用户主动取消（两次 ESC）：不标红、不显示错误文案，保留已输出的内容
+        status: action.silent ? "done" : "error",
+        error: action.silent ? undefined : action.message,
       }));
+    case "cancel:rollback":
+      return trimLastUserTurn(state);
   }
 }
 
@@ -782,7 +804,12 @@ const QuestionCard: React.FC<{
   );
 };
 
-const MessageView: React.FC<{ message: ChatMessage }> = ({ message }) => {
+/**
+ * 单条消息视图。React.memo：消息对象引用不变时跳过重渲染，
+ * 避免输入框打字等无关重渲染导致 markdown 重新计算/HTML 代码块 DOM 被重注入
+ * （「源码/预览」切换状态依赖 DOM 稳定性）。
+ */
+const MessageView: React.FC<{ message: ChatMessage }> = React.memo(({ message }) => {
   if (message.role === "user") {
     return (
       <div className="chat-msg chat-msg-user">
@@ -849,7 +876,7 @@ const MessageView: React.FC<{ message: ChatMessage }> = ({ message }) => {
       )}
     </div>
   );
-};
+});
 
 export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
   const {
@@ -869,6 +896,11 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
   } = props;
 
   const [messages, dispatch] = useReducer(messagesReducer, []);
+  // 事件监听器闭包经 ref 读最新消息流（mount-once 模式）
+  const messagesRef = useRef<ChatMessage[]>([]);
+  messagesRef.current = messages;
+  // 最近一次发送的消息内容：取消回退时恢复回输入框
+  const lastSentRef = useRef<{ text: string; images: ChatImageAttachment[] } | null>(null);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [ready, setReady] = useState(false);
@@ -897,6 +929,8 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
   const escArmTimerRef = useRef<number | null>(null);
   // 用户是否钉在消息流底部：在底部附近才自动跟随新输出，浏览上方信息时不抢滚动
   const pinnedToBottomRef = useRef(true);
+  // 用户是否主动取消（两次 ESC）：收到 turn:error 时不显示"已取消"红字
+  const userCancelledRef = useRef(false);
 
   const onSpawnedRef = useRef(onSpawned);
   onSpawnedRef.current = onSpawned;
@@ -969,7 +1003,7 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
             });
           }
           break;
-        case "turn:finished":
+        case "turn:finished": {
           dispatch({
             type: "turn:finished",
             costUsd: payload.costUsd,
@@ -980,11 +1014,37 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
           setPendingQuestion(null);
           onStateChangeRef.current?.(false);
           onCommandCompleteRef.current?.();
+          // 回答完成：按设置播放提示音（与终端模式一致，走后端 play_notification_sound）
+          const chatPlaySound =
+            localStorage.getItem("kkcoder_setting_play_sound") !== "false";
+          if (chatPlaySound) {
+            const chatTone = localStorage.getItem("kkcoder_setting_sound_tone") || "default";
+            const chatVolumeStr = localStorage.getItem("kkcoder_setting_sound_volume");
+            const chatVolume = chatVolumeStr ? parseInt(chatVolumeStr, 10) : 80;
+            const chatNotify =
+              localStorage.getItem("kkcoder_setting_notify_on_complete") !== "false";
+            invoke("play_notification_sound", {
+              tone: chatTone,
+              volume: chatVolume,
+              title: chatNotify ? "KKCoder 回答完成" : null,
+              message: chatNotify ? "Claude 已回复完毕" : null,
+            }).catch((err) => log(`[chat] play notification failed: ${err}`));
+          }
           break;
+        }
         case "turn:error":
+          // 用户主动取消（两次 ESC）：静默结束，不显示"已取消"红字
+          const silentCancel = userCancelledRef.current;
+          userCancelledRef.current = false;
+          log(`[chat] turn:error silent=${silentCancel} message=${payload.message ?? ""}`);
+          if (silentCancel) {
+            // 模型首字未出（无任何输出）：撤回用户气泡，内容回到输入框
+            rollbackLastUserTurn();
+          }
           dispatch({
             type: "turn:error",
             message: payload.message ?? "Claude 执行出错",
+            silent: silentCancel,
           });
           setBusy(false);
           setCancelling(false);
@@ -1203,6 +1263,12 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
     const sentImages = images;
     // 记录该条消息实际使用的模型：手动选择优先，否则用供应商默认（旋钮映射）
     const msgModel = selectedModel || modelInfo?.defaultModel || "默认";
+    // 发送消息：无论当前是否在浏览历史，强制钉回底部——定位到刚发出的这条消息
+    pinnedToBottomRef.current = true;
+    // 新一轮对话：清除可能残留的主动取消标记
+    userCancelledRef.current = false;
+    // 记录本次发送内容：模型无输出时被取消，可回退恢复输入框
+    lastSentRef.current = { text, images: sentImages };
     dispatch({ type: "user:sent", text, id: msgId, images: sentImages, model: msgModel });
     setDraft("");
     setImages([]);
@@ -1340,15 +1406,53 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
     }, 2500);
   }, []);
 
+  /** 取消回退：模型无任何输出时撤回刚发的用户消息，并把内容恢复到输入框 */
+  const rollbackLastUserTurn = useCallback(() => {
+    const trimmed = trimLastUserTurn(messagesRef.current);
+    if (trimmed === messagesRef.current) {
+      const tail = messagesRef.current
+        .slice(-2)
+        .map((m) => ({
+          role: m.role,
+          textLen: m.text?.length ?? 0,
+          reasoningLen: m.reasoning?.length ?? 0,
+          tools: m.tools?.length ?? 0,
+        }));
+      log(`[chat] rollback skipped (tail=${JSON.stringify(tail)})`);
+      return;
+    }
+    log("[chat] rollback: removing last user turn");
+    dispatch({ type: "cancel:rollback" });
+    const sent = lastSentRef.current;
+    if (sent) {
+      setDraft(sent.text);
+      setImages(sent.images);
+      inputRef.current?.focus();
+    }
+  }, []);
+
   const handleCancel = useCallback(() => {
     if (cancelling) return;
+    log("[chat] user cancel requested (double ESC)");
+    // 标记主动取消：随后的 turn:error（"已取消"）不再以红字展示
+    userCancelledRef.current = true;
     disarmEsc();
     setCancelling(true);
-    invoke("chat_cancel", { sessionId }).catch((err) => {
-      log(`[chat] cancel failed: ${err}`);
-      setCancelling(false);
-    });
-  }, [cancelling, disarmEsc, sessionId]);
+    invoke("chat_cancel", { sessionId })
+      .then(() => {
+        // 兜底：若后端没有活跃 turn（不会发 turn:error），且模型无任何输出，
+        // 则自行撤回用户消息并恢复输入框。
+        window.setTimeout(() => {
+          if (!userCancelledRef.current) return; // 已收到 turn:error 并处理过
+          rollbackLastUserTurn();
+        }, 600);
+      })
+      .catch((err) => {
+        log(`[chat] cancel failed: ${err}`);
+        setCancelling(false);
+        userCancelledRef.current = false;
+      });
+  }, [cancelling, disarmEsc, rollbackLastUserTurn, sessionId]);
 
   // 运行中两次 ESC 终止：第一次按下 → 终止按钮显示 ESC 提示；第二次按下 → 终止任务。
   // 仅在当前会话运行中且本 tab 激活时生效；问题弹窗打开期间不劫持 ESC。
