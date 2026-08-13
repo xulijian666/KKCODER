@@ -8,3 +8,7 @@
 When you add, remove, rename, or change exports under `src/`, update `SOURCE_INDEX.md` in the same change, and keep `components/index.ts` / `hooks/index.ts` / `utils/index.ts` aligned when APIs are public.
 
 Organization conventions (not a full file list): `.trellis/spec/frontend/directory-structure.md`.
+
+## GUI 参考
+
+如果涉及到GUI模块的功能，都可以参考 `D:\CODE\desktop-cc-gui`
