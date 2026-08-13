@@ -32,9 +32,6 @@ export interface UseSessionsOptions {
   /** Prefer a stable ref.current callback — never put a per-render lambda in deps. */
   triggerAutoRenameRef: MutableRefObject<(source: string) => void>;
   setClaudeVersion: Dispatch<SetStateAction<string>>;
-  setPendingRestoreIds: Dispatch<SetStateAction<string[]>>;
-  setPendingActiveId: Dispatch<SetStateAction<string>>;
-  setShowRestoreToast: Dispatch<SetStateAction<boolean>>;
   setIsInitLoaded: Dispatch<SetStateAction<boolean>>;
 }
 export function useSessions({
@@ -47,9 +44,6 @@ export function useSessions({
   clearQueueForSessionRef,
   triggerAutoRenameRef,
   setClaudeVersion,
-  setPendingRestoreIds,
-  setPendingActiveId,
-  setShowRestoreToast,
   setIsInitLoaded,
 }: UseSessionsOptions) {
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -116,32 +110,6 @@ export function useSessions({
         if (cancelled) return;
         log(`Successfully fetched ${data ? data.length : 0} sessions from database.`);
         setSessions(data || []);
-        if (data && data.length > 0) {
-          const lastActiveId = localStorage.getItem("kkcoder_last_active_session_id");
-          const lastOpenTabsStr = localStorage.getItem("kkcoder_last_open_tab_ids");
-          let lastOpenTabs: string[] = [];
-          try {
-            if (lastOpenTabsStr) lastOpenTabs = JSON.parse(lastOpenTabsStr);
-          } catch {
-            // ignore
-          }
-
-          const validActiveId = data.some((session) => session.id === lastActiveId)
-            ? lastActiveId
-            : data[0].id;
-          const validOpenTabs = lastOpenTabs.filter((tabId) =>
-            data.some((session) => session.id === tabId),
-          );
-
-          if (validOpenTabs.length > 0) {
-            log(`Found ${validOpenTabs.length} sessions from last time. Setting restore states...`);
-            setPendingRestoreIds(validOpenTabs);
-            if (validActiveId) {
-              setPendingActiveId(validActiveId);
-            }
-            setShowRestoreToast(true);
-          }
-        }
         setIsInitLoaded(true);
         scheduleClaudeVersionFetch();
         scheduleDeferredDiagnostics();

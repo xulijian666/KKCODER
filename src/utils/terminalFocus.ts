@@ -100,7 +100,6 @@ export function isFocusBlockingOverlay(element: Element | null): boolean {
         ".modal-card",
         ".context-menu",
         ".tree-context-menu",
-        ".restore-toast",
         ".app-toast-host",
         ".settings-modal",
         "[data-focus-trap]",

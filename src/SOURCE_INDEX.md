@@ -82,7 +82,6 @@ src/
 | `ChatTab.tsx` | Claude GUI 聊天标签（历史、流式文本、推理与工具调用） | `ChatTab` |
 | `SessionTabBar.tsx` | 顶部标签栏 UI（分屏时双栏对齐；左栏保序待命标签、右栏 secondary） | `SessionTabBar` |
 | `TabContextMenu.tsx` | 标签右键菜单（含分屏进出） | `TabContextMenu` |
-| `SessionRestorePrompt.tsx` | 启动恢复 Toast + 弹窗 | `SessionRestorePrompt` |
 | `CloseConfirmModal.tsx` | 退出确认（托盘/退出） | `CloseConfirmModal` |
 | `TitleBar.tsx` | 自定义标题栏、主题盘、窗口按钮 | `TitleBar` |
 | `FilePreviewPanel.tsx` | 文件预览 + `useFilePreview` + 右键菜单组件 | `FilePreviewPanel`, `FilePreviewContextMenu`, `useFilePreview`, 相关类型 |
@@ -109,7 +108,7 @@ src/
 |------|------|-------------------|
 | `index.ts` | Hook barrel | — |
 | `useSessions.ts` | 会话 CRUD、启动加载、远程 spawn | `useSessions`, `AgentType` |
-| `useSessionTabs.ts` | 标签开闭/拖拽/恢复队列/右键状态 | `useSessionTabs`, `TabContextMenuState` |
+| `useSessionTabs.ts` | 标签开闭/拖拽/右键状态 | `useSessionTabs`, `TabContextMenuState` |
 | `useTerminalSplit.ts` | 最多 2 路左右分屏（固定右侧、拖条调比例、拖标签进右屏） | `useTerminalSplit` |
 | `useProjectTreeBinding.ts` | 分屏下项目树绑定会话解析 | `useProjectTreeBinding` |
 | `useSessionQueueEngine.ts` | 任务队列状态与自动调度 | `useSessionQueueEngine` |
@@ -178,7 +177,7 @@ App.tsx
   ├─ useAutoRename
   ├─ useFilePreview → FilePreviewPanel
   └─ UI: Sidebar, SessionTabBar, TabContextMenu,
-         SessionRestorePrompt, CloseConfirmModal, TitleBar, ...
+         CloseConfirmModal, TitleBar, ...
 ```
 
 跨模块循环依赖用 **ref 桥**（见 `App.tsx` 内 `*Ref`）断开，勿再把状态揉回单文件上帝组件。

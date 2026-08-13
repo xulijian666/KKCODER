@@ -15,7 +15,6 @@ export { AppToastHost } from "./AppToastHost";
 export { TitleBar } from "./TitleBar";
 export { SessionTabBar } from "./SessionTabBar";
 export { TabContextMenu } from "./TabContextMenu";
-export { SessionRestorePrompt } from "./SessionRestorePrompt";
 export { CloseConfirmModal } from "./CloseConfirmModal";
 export {
   FilePreviewPanel,

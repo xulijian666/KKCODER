@@ -49,10 +49,6 @@ export function useSessionTabs({
   const [tabContextMenu, setTabContextMenu] = useState<TabContextMenuState | null>(null);
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
   const [renamingTabText, setRenamingTabText] = useState("");
-  const [pendingRestoreIds, setPendingRestoreIds] = useState<string[]>([]);
-  const [pendingActiveId, setPendingActiveId] = useState("");
-  const [showRestoreToast, setShowRestoreToast] = useState(false);
-  const [showRestoreModal, setShowRestoreModal] = useState(false);
 
   useEffect(() => {
     const closeTabMenu = () => setTabContextMenu(null);
@@ -72,11 +68,8 @@ export function useSessionTabs({
         setOpenTabIds((previous) => [...previous, sessionId]);
       }
       setActiveSessionId(sessionId);
-      if (showRestoreToast) {
-        setShowRestoreToast(false);
-      }
     },
-    [openTabIds, showRestoreToast],
+    [openTabIds],
   );
 
   const handleCloseTab = useCallback(
@@ -113,46 +106,6 @@ export function useSessionTabs({
       setSessionsRef,
     ],
   );
-
-  const handleRestoreSingle = useCallback((sessionId: string) => {
-    setOpenTabIds((previous) =>
-      previous.includes(sessionId) ? previous : [...previous, sessionId],
-    );
-    setActiveSessionId(sessionId);
-    setPendingRestoreIds((previous) => {
-      const remaining = previous.filter((id) => id !== sessionId);
-      if (remaining.length === 0) {
-        setShowRestoreModal(false);
-        setShowRestoreToast(false);
-      }
-      return remaining;
-    });
-  }, []);
-
-  const handleRestoreAll = useCallback(() => {
-    if (pendingRestoreIds.length === 0) return;
-    setOpenTabIds((previous) => {
-      const merged = [...previous];
-      for (const sessionId of pendingRestoreIds) {
-        if (!merged.includes(sessionId)) merged.push(sessionId);
-      }
-      return merged;
-    });
-    if (pendingActiveId) {
-      setActiveSessionId(pendingActiveId);
-    } else if (pendingRestoreIds.length > 0) {
-      setActiveSessionId(pendingRestoreIds[pendingRestoreIds.length - 1]);
-    }
-    setPendingRestoreIds([]);
-    setShowRestoreModal(false);
-    setShowRestoreToast(false);
-  }, [pendingActiveId, pendingRestoreIds]);
-
-  const handleRestoreIgnore = useCallback(() => {
-    setPendingRestoreIds([]);
-    setShowRestoreModal(false);
-    setShowRestoreToast(false);
-  }, []);
 
   const handleSaveTabRename = useCallback(
     (sessionId: string) => {
@@ -260,19 +213,8 @@ export function useSessionTabs({
     setRenamingTabId,
     renamingTabText,
     setRenamingTabText,
-    pendingRestoreIds,
-    setPendingRestoreIds,
-    pendingActiveId,
-    setPendingActiveId,
-    showRestoreToast,
-    setShowRestoreToast,
-    showRestoreModal,
-    setShowRestoreModal,
     handleSelectSession,
     handleCloseTab,
-    handleRestoreSingle,
-    handleRestoreAll,
-    handleRestoreIgnore,
     handleSaveTabRename,
     handleLocateSession,
     handleTabWheel,

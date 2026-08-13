@@ -17,7 +17,6 @@ import {
   FilePreviewContextMenu,
   SessionTabBar,
   TabContextMenu,
-  SessionRestorePrompt,
   CloseConfirmModal,
   AppToastHost,
   ConfirmModal,
@@ -229,17 +228,7 @@ function App() {
     setRenamingTabId,
     renamingTabText,
     setRenamingTabText,
-    pendingRestoreIds,
-    setPendingRestoreIds,
-    setPendingActiveId,
-    showRestoreToast,
-    setShowRestoreToast,
-    showRestoreModal,
-    setShowRestoreModal,
     handleCloseTab,
-    handleRestoreSingle,
-    handleRestoreAll,
-    handleRestoreIgnore,
     handleSaveTabRename,
     handleLocateSession,
     handleTabWheel,
@@ -440,9 +429,6 @@ function App() {
     clearQueueForSessionRef,
     triggerAutoRenameRef,
     setClaudeVersion,
-    setPendingRestoreIds,
-    setPendingActiveId,
-    setShowRestoreToast,
     setIsInitLoaded,
   });
 
@@ -691,7 +677,6 @@ function App() {
     !!editingFilePath ||
     showQueueModal ||
     showCloseConfirmModal ||
-    showRestoreModal ||
     !!activeConfirm ||
     !!tabContextMenu ||
     !!renamingTabId;
@@ -715,18 +700,6 @@ function App() {
       return prev;
     });
   }, [handlePreviewPathRenamed]);
-
-  useEffect(() => {
-    if (isInitLoaded) {
-      localStorage.setItem("kkcoder_last_active_session_id", activeSessionId);
-    }
-  }, [activeSessionId, isInitLoaded]);
-
-  useEffect(() => {
-    if (isInitLoaded) {
-      localStorage.setItem("kkcoder_last_open_tab_ids", JSON.stringify(openTabIds));
-    }
-  }, [openTabIds, isInitLoaded]);
 
   useTabFlipAnimation(openTabIds);
 
@@ -753,11 +726,8 @@ function App() {
     (sessionId: string) => {
       ensureTabOpen(sessionId);
       activateSplitSession(sessionId);
-      if (showRestoreToast) {
-        setShowRestoreToast(false);
-      }
     },
-    [activateSplitSession, ensureTabOpen, setShowRestoreToast, showRestoreToast],
+    [activateSplitSession, ensureTabOpen],
   );
 
   // 分屏快捷键：Ctrl+\ 切换；Ctrl+Alt+1/2 聚焦左右（或上下）
@@ -771,7 +741,6 @@ function App() {
         editingFilePath ||
         showQueueModal ||
         showCloseConfirmModal ||
-        showRestoreModal ||
         activeConfirm ||
         tabContextMenu ||
         renamingTabId
@@ -806,7 +775,6 @@ function App() {
     showMdEditor,
     showModal,
     showQueueModal,
-    showRestoreModal,
     showSettings,
     tabContextMenu,
     toggleSplit,
@@ -1487,21 +1455,6 @@ function App() {
         appWindow={appWindow}
         onRememberChange={setRememberCloseChoice}
         onCancel={() => setShowCloseConfirmModal(false)}
-      />
-
-      <SessionRestorePrompt
-        showToast={showRestoreToast}
-        showModal={showRestoreModal}
-        pendingRestoreIds={pendingRestoreIds}
-        sessions={sessions}
-        onOpenModal={() => {
-          setShowRestoreToast(false);
-          setShowRestoreModal(true);
-        }}
-        onCloseModal={() => setShowRestoreModal(false)}
-        onRestoreSingle={handleRestoreSingle}
-        onRestoreAll={handleRestoreAll}
-        onIgnore={handleRestoreIgnore}
       />
 
       <AppToastHost toasts={toasts} onDismiss={dismissToast} />
