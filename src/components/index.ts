@@ -2,6 +2,7 @@ export { Sidebar, type Session, ClaudeIcon, PiIcon, CodexIcon } from "./Sidebar"
 export { TerminalTab } from "./TerminalTab";
 export { CompatibilityTerminalTab } from "./NativeTerminalTab";
 export { ChatTab } from "./ChatTab";
+export { ModelSelector } from "./ModelSelector";
 export { NewSessionModal } from "./NewSessionModal";
 export { SettingsModal } from "./SettingsModal";
 export { RemoteSettingsPanel } from "./RemoteSettingsPanel";

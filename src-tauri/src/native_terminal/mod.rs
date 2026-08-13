@@ -21,6 +21,7 @@ const PENDING_BUFFER_LIMIT: usize = 256 * 1024;
 pub fn spawn_compat_terminal(
     app_handle: AppHandle,
     manager: State<'_, NativeTerminalManager>,
+    model_state: State<'_, crate::claude_model::ClaudeModelState>,
     session_id: String,
     directory: String,
     agent_session_id: String,
@@ -132,7 +133,18 @@ pub fn spawn_compat_terminal(
         }
     });
 
-    let claude_command = format!("claude {}\r\n", build_claude_args(is_reopen, &agent_session_id).join(" "));
+    let model = {
+        let guard = model_state
+            .model
+            .lock()
+            .map_err(|error| error.to_string())?;
+        guard.clone()
+    };
+    let claude_command = format!(
+        "claude {}\r\n",
+        build_claude_args(is_reopen, &agent_session_id, model.as_deref()).join(" ")
+    );
+    crate::log_to_file(&format!("[native_terminal] spawn claude: {}", claude_command.trim_end()));
     std::thread::sleep(std::time::Duration::from_millis(300));
     let mut input = writer.lock().map_err(|e| e.to_string())?;
     input

@@ -8,6 +8,7 @@ use std::io::Write;
 mod remote;
 mod native_terminal;
 mod claude_chat;
+mod claude_model;
 
 // 极其可靠的本地调试文件日志输出器，自动写入 kkcoder_debug.log 以便于闪退后追溯
 pub(crate) fn log_to_file(message: &str) {
@@ -851,6 +852,7 @@ fn spawn_terminal(
     initial_cols: Option<u16>,
     initial_rows: Option<u16>,
     state: State<'_, PtyManager>,
+    model_state: State<'_, claude_model::ClaudeModelState>,
     app_handle: AppHandle,
 ) -> Result<(), String> {
     log_to_file(&format!(
@@ -947,12 +949,26 @@ fn spawn_terminal(
     let master_shared = Arc::new(Mutex::new(master));
 
     // 自动运行 Agent CLI 脚本
-    // 自动运行 Agent CLI 脚本
+    // KKCODER 全局模型覆盖（None = 跟随 CC Switch 默认 tier 配置）
+    let model_flag = {
+        let guard = model_state
+            .model
+            .lock()
+            .map_err(|error| error.to_string())?;
+        guard
+            .as_ref()
+            .filter(|model| !model.trim().is_empty())
+            .map(|model| format!("--model \"{}\" ", model.trim()))
+            .unwrap_or_default()
+    };
     let initial_cmd = if agent_type == "claude" {
         if is_reopen {
-            "claude --dangerously-skip-permissions\r\n".to_string()
+            format!("claude --dangerously-skip-permissions {model_flag}\r\n")
         } else {
-            format!("claude --dangerously-skip-permissions --session-id \"{}\"\r\n", agent_session_id)
+            format!(
+                "claude --dangerously-skip-permissions {model_flag}--session-id \"{}\"\r\n",
+                agent_session_id
+            )
         }
     } else if agent_type == "pi" {
         if is_reopen {
@@ -3339,6 +3355,7 @@ pub fn run() {
         .manage(pty_manager)
         .manage(native_terminal::manager::NativeTerminalManager::default())
         .manage(claude_chat::ClaudeChatManager::default())
+        .manage(claude_model::ClaudeModelState::default())
         .manage(remote::frp::FrpManager::new())
         .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
@@ -3477,6 +3494,9 @@ pub fn run() {
             claude_chat::chat_get_context_usage,
             claude_chat::catalog::chat_search_project_entries,
             claude_chat::catalog::chat_get_slash_items,
+            claude_model::claude_model_info,
+            claude_model::set_claude_model,
+            claude_model::set_claude_provider,
             rename_session,
             toggle_favorite,
             touch_session_last_user_message,

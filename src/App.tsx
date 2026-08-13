@@ -54,6 +54,14 @@ import {
   type EnabledAgents,
 } from "./utils";
 import {
+  loadSelectedModel,
+  saveSelectedModel,
+  loadClaudeModelInfo,
+  setClaudeModelBackend,
+  setClaudeProviderBackend,
+  type ClaudeModelInfo,
+} from "./utils/claudeModel";
+import {
   usePanelResize,
   useTheme,
   useShortcuts,
@@ -176,6 +184,102 @@ function App() {
     localStorage.setItem("kkcoder_sidebar_mode", next);
     if (next === "hover") setSidebarRevealed(false); // 切到悬停即收起为边缘条
   }, [sidebarMode]);
+
+  // 模型选择：读取 CC Switch 维护的 ~/.claude/settings.json 清单，
+  // 选中即写入 localStorage 并同步后端全局状态（两处 claude 启动都从后端读）
+  const [selectedModel, setSelectedModel] = useState<string | null>(() => loadSelectedModel());
+  const [modelInfo, setModelInfo] = useState<ClaudeModelInfo | null>(null);
+  // 变更检测用的上一次信息 + 失效提示去重标记
+  const modelInfoRef = useRef<ClaudeModelInfo | null>(null);
+  const notifiedRemovedModelRef = useRef<string | null>(null);
+  const notifiedProviderRemovedRef = useRef(false);
+
+  // 刷新模型信息：拉取后做变更检测，关键字段没变就不更新（避免每 10s 轮询触发全量重渲染）
+  const refreshModelInfo = useCallback(() => {
+    loadClaudeModelInfo()
+      .then((info) => {
+        const prev = modelInfoRef.current;
+        const unchanged =
+          !!prev &&
+          prev.providerName === info.providerName &&
+          prev.routeMode === info.routeMode &&
+          prev.providerRemoved === info.providerRemoved &&
+          prev.defaultModel === info.defaultModel &&
+          prev.models.join("|") === info.models.join("|") &&
+          prev.providers.map((p) => p.id).join("|") ===
+            info.providers.map((p) => p.id).join("|");
+        if (unchanged) return;
+        modelInfoRef.current = info;
+        setModelInfo(info);
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    refreshModelInfo();
+    // 启动时把持久化的选择同步给后端（后端重启后需要重建）
+    setClaudeModelBackend(loadSelectedModel());
+    // 窗口重新获得焦点时刷新 + 每 10s 轻量轮询：
+    // CC Switch 增删供应商/模型、改旋钮 → 最多 10s 内自动同步，无需手动操作
+    const onFocus = () => refreshModelInfo();
+    window.addEventListener("focus", onFocus);
+    const timer = window.setInterval(refreshModelInfo, 10_000);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      window.clearInterval(timer);
+    };
+  }, [refreshModelInfo]);
+
+  // 已选模型失效：被删除/改名 → 自动清空回默认 + 提示（每个失效模型只提示一次）
+  useEffect(() => {
+    if (!modelInfo) return;
+    const selected = selectedModel;
+    if (selected && modelInfo.models.length > 0 && !modelInfo.models.includes(selected)) {
+      if (notifiedRemovedModelRef.current !== selected) {
+        notifiedRemovedModelRef.current = selected;
+        notifyWarning(`已选模型 ${selected} 已不在 CC Switch 配置中，已恢复为该供应商默认`);
+      }
+      setSelectedModel(null);
+      setClaudeModelBackend(null);
+      saveSelectedModel(null);
+    } else {
+      notifiedRemovedModelRef.current = null;
+    }
+  }, [modelInfo, selectedModel]);
+
+  // 当前直连的供应商被删除/改名：提示一次（路由模式下由代理接管，不提示）
+  useEffect(() => {
+    if (!modelInfo) return;
+    if (modelInfo.providerRemoved && !notifiedProviderRemovedRef.current) {
+      notifiedProviderRemovedRef.current = true;
+      notifyWarning("当前直连的供应商已不在 CC Switch 列表中（可能被删除或改名）");
+    }
+    if (!modelInfo.providerRemoved) notifiedProviderRemovedRef.current = false;
+  }, [modelInfo]);
+
+  const handleSelectModel = useCallback((model: string | null) => {
+    setSelectedModel(model);
+    setClaudeModelBackend(model);
+    saveSelectedModel(model);
+  }, []);
+
+  // 直连覆盖：选中供应商 → 写入 settings.json env → 用返回的最新信息刷新下拉。
+  // 选了供应商就定死用它的默认映射，清空手动指定的模型（新供应商的模型名可能不同）
+  const handleSelectProvider = useCallback((providerId: string) => {
+    setSelectedModel(null);
+    setClaudeModelBackend(null);
+    saveSelectedModel(null);
+    setClaudeProviderBackend(providerId)
+      .then((info) => {
+        modelInfoRef.current = info;
+        setModelInfo(info);
+      })
+      .catch((err) => {
+        // 写入失败（如权限/端口占用）：刷新并提示原因
+        refreshModelInfo();
+        notifyWarning(formatFeedbackError(err, "切换供应商失败"));
+      });
+  }, [refreshModelInfo]);
 
   const {
     width: projectTreeWidth,
@@ -1048,6 +1152,11 @@ function App() {
                             directory={s.path}
                             agentSessionId={s.agentSessionId}
                             isActive={isActive}
+                            selectedModel={selectedModel}
+                            modelInfo={modelInfo}
+                            onSelectModel={handleSelectModel}
+                            onSelectProvider={handleSelectProvider}
+                            onRefreshModelInfo={refreshModelInfo}
                             onSpawned={() => {
                               log(`ChatTab spawn resolved for session: ${s.id}. Removing from newSessionIds...`);
                               setNewSessionIds((prev) => prev.filter((nid) => nid !== s.id));

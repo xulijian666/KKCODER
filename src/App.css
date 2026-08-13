@@ -2321,12 +2321,6 @@ input:checked + .switch-slider:before {
   color: var(--text-primary);
 }
 
-.titlebar-btn.active {
-  background-color: rgba(59, 130, 246, 0.14);
-  color: var(--color-primary, #2563eb);
-}
-
-
 .close-btn:hover {
   background-color: #ef4444 !important;
   color: #ffffff !important;
@@ -2867,6 +2861,127 @@ input:checked + .switch-slider:before {
   height: 1px;
   background-color: var(--border-color);
   margin: 6px 4px;
+}
+
+/* 模型选择器（标题栏）：显示当前模型名 + 下拉切换，参考 desktop-cc-gui ModelSelect */
+.model-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 250px;
+  max-height: min(74vh, 460px);
+  overflow-y: auto;
+  background-color: var(--bg-sidebar);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25), 0 2px 4px rgba(0, 0, 0, 0.15);
+  padding: 6px;
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  pointer-events: auto;
+}
+.model-dropdown-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 6px 8px 3px;
+  user-select: none;
+}
+.model-dropdown-provider-list {
+  max-height: 230px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.model-dropdown-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px 6px;
+}
+.model-dropdown-provider {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.model-dropdown-mode {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  padding: 1px 7px;
+  flex-shrink: 0;
+}
+.model-dropdown-mode.is-route {
+  color: var(--color-primary);
+  border-color: color-mix(in srgb, var(--color-primary) 45%, transparent);
+}
+.model-dropdown-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+  user-select: none;
+  color: var(--text-primary);
+}
+.model-dropdown-item:hover {
+  background-color: var(--bg-hover-item);
+}
+.model-dropdown-item.active {
+  background-color: var(--bg-active-item);
+}
+.model-dropdown-item-label {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.model-dropdown-item.active .model-dropdown-item-label {
+  color: var(--color-primary);
+  font-weight: 600;
+}
+.model-dropdown-item-end {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+.model-dropdown-route-badge {
+  font-size: 9.5px;
+  font-weight: 700;
+  color: var(--color-orange, #f97316);
+  border: 1px solid color-mix(in srgb, var(--color-orange, #f97316) 45%, transparent);
+  border-radius: 999px;
+  padding: 0 6px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+.model-dropdown-divider {
+  height: 1px;
+  background-color: var(--border-color);
+  margin: 4px 4px;
+}
+.model-dropdown-empty {
+  padding: 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-align: center;
 }
 
 /* 跟随系统的特殊圆点：半白半黑 */
@@ -4728,6 +4843,17 @@ body.preview-resizing .preview-resize-handle::after {
   color: #ffffff;
   border-top-right-radius: 3px;
 }
+
+/* 用户消息下方的小字模型标签 */
+.chat-msg-model {
+  font-size: 10.5px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  opacity: 0.85;
+  margin-top: 3px;
+  padding-right: 2px;
+  user-select: none;
+}
 .chat-bubble-assistant {
   background: var(--bg-sidebar);
   border: 1px solid var(--border-color);
@@ -4958,6 +5084,61 @@ body.preview-resizing .preview-resize-handle::after {
 }
 .chat-input:disabled {
   opacity: 0.6;
+}
+
+/* 聊天输入框旁的模型/供应商选择器 */
+.chat-model-select {
+  position: relative;
+  display: inline-flex;
+  align-self: flex-end;
+}
+.chat-model-select-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 36px;
+  max-width: 170px;
+  padding: 0 9px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-sidebar);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+  flex-shrink: 0;
+}
+.chat-model-select-btn:hover {
+  border-color: var(--color-primary);
+  color: var(--text-primary);
+}
+.chat-model-select-btn.active {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary) 8%, var(--bg-sidebar));
+}
+.chat-model-select-label {
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 路由开关指示灯：开启时显示小圆点，一眼可见 */
+.chat-model-route-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 0 2px color-mix(in srgb, #22c55e 25%, transparent);
+  flex-shrink: 0;
+}
+/* 输入框在下部，下拉向上弹、向右展开（避免向左越过终端区被左侧侧栏遮挡） */
+.chat-model-dropdown {
+  top: auto;
+  bottom: calc(100% + 8px);
+  left: 0;
+  right: auto;
 }
 .chat-send-btn {
   display: flex;

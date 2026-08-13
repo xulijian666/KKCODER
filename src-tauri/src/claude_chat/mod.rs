@@ -25,6 +25,8 @@ pub const CHAT_EVENT_CHANNEL: &str = "claude-chat-event";
 pub struct ActiveChatTurn {
     pub pid: u32,
     pub cancelled: Arc<AtomicBool>,
+    /// 该 turn 使用的模型（AskUserQuestion 恢复路径沿用）
+    pub model: Option<String>,
 }
 
 /// 原生 AskUserQuestion 的待回答项：回答经 sender 回传给阻塞中的 reader 线程
@@ -104,6 +106,7 @@ impl ChatStreamEvent {
 }
 
 /// 拼装并 spawn 一个 `claude -p` 进程，写入 stream-json 输入并关闭 stdin。
+/// `model` 为 KKCODER 全局选择的模型覆盖（None = 跟随 CC Switch 默认配置）。
 #[allow(clippy::too_many_arguments)]
 fn spawn_claude_process(
     app: &AppHandle,
@@ -114,11 +117,12 @@ fn spawn_claude_process(
     agent_session_id: &str,
     resume: bool,
     content: Vec<serde_json::Value>,
+    model: Option<&str>,
 ) -> Result<(Child, std::process::ChildStdout, std::process::ChildStderr), String> {
     let ask_server =
         askuser_mcp::ensure_started(askuser_mcp, app.clone(), pending_questions.clone())?;
     let session_flag = if resume { "--resume" } else { "--session-id" };
-    let args = vec![
+    let mut args = vec![
         "-p".to_string(),
         "--input-format".to_string(),
         "stream-json".to_string(),
@@ -135,6 +139,10 @@ fn spawn_claude_process(
         session_flag.to_string(),
         agent_session_id.to_string(),
     ];
+    if let Some(model) = model.filter(|value| !value.trim().is_empty()) {
+        args.push("--model".to_string());
+        args.push(model.trim().to_string());
+    }
 
     let mut cmd = build_claude_command(&args);
     cmd.env("MCP_TOOL_TIMEOUT", "1800000");
@@ -180,6 +188,7 @@ fn spawn_claude_process(
 pub fn chat_send_message(
     app: AppHandle,
     state: State<'_, ClaudeChatManager>,
+    model_state: State<'_, crate::claude_model::ClaudeModelState>,
     session_id: String,
     directory: String,
     agent_session_id: String,
@@ -197,6 +206,15 @@ pub fn chat_send_message(
         .into_iter()
         .map(|image| parse_image_data_url(&image))
         .collect::<Result<Vec<_>, _>>()?;
+
+    // KKCODER 全局模型覆盖（None = 跟随 CC Switch 默认 tier 配置）
+    let model = {
+        let guard = model_state
+            .model
+            .lock()
+            .map_err(|error| error.to_string())?;
+        guard.clone()
+    };
 
     // busy 检查
     {
@@ -229,8 +247,13 @@ pub fn chat_send_message(
         &agent_session_id,
         resume,
         content,
+        model.as_deref(),
     )?;
     let pid = child.id();
+    log_to_file(&format!(
+        "[claude_chat] send session={session_id} resume={resume} pid={pid} model={}",
+        model.as_deref().unwrap_or("(默认)")
+    ));
 
     let cancelled = Arc::new(AtomicBool::new(false));
     {
@@ -245,15 +268,13 @@ pub fn chat_send_message(
             ActiveChatTurn {
                 pid,
                 cancelled: cancelled.clone(),
+                model,
             },
         );
     }
 
     // turn:started
     ChatStreamEvent::new(&session_id, "turn:started").emit(&app);
-    log_to_file(&format!(
-        "[claude_chat] send session={session_id} resume={resume} pid={pid}"
-    ));
 
     // 后台读线程：drain stderr + 逐行解析 stdout + 收尾清理
     spawn_reader_thread(
@@ -809,6 +830,11 @@ fn run_process_loop(
             kill_process_tree(child.id());
             let _ = child.wait();
             let _ = stderr_thread.join();
+            // 沿用本 turn 启动时的模型覆盖
+            let turn_model = turns
+                .lock()
+                .ok()
+                .and_then(|t| t.get(&session_id).and_then(|turn| turn.model.clone()));
             let content = vec![serde_json::json!({ "type": "text", "text": answer })];
             match spawn_claude_process(
                 &app,
@@ -819,6 +845,7 @@ fn run_process_loop(
                 &agent_session_id,
                 true,
                 content,
+                turn_model.as_deref(),
             ) {
                 Ok((new_child, new_stdout, new_stderr)) => {
                     let pid = new_child.id();
@@ -828,7 +855,8 @@ fn run_process_loop(
                         }
                     }
                     log_to_file(&format!(
-                        "[claude_chat] resume session={session_id} pid={pid}"
+                        "[claude_chat] resume session={session_id} pid={pid} model={}",
+                        turn_model.as_deref().unwrap_or("(默认)")
                     ));
                     child = new_child;
                     stdout = Some(new_stdout);

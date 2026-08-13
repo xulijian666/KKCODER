@@ -27,6 +27,8 @@ import { formatFeedbackError } from "../utils/appFeedback";
 import { isEditableFocusTarget } from "../utils/terminalFocus";
 import { generateUUID } from "../utils/uuid";
 import { log } from "../utils/log";
+import { ModelSelector } from "./ModelSelector";
+import type { ClaudeModelInfo } from "../utils/claudeModel";
 import {
   detectChatCompletionTrigger,
   replaceChatCompletionTrigger,
@@ -40,6 +42,11 @@ interface ChatTabProps {
   directory: string;
   agentSessionId: string;
   isActive?: boolean;
+  selectedModel: string | null;
+  modelInfo: ClaudeModelInfo | null;
+  onSelectModel: (model: string | null) => void;
+  onSelectProvider: (providerId: string) => void;
+  onRefreshModelInfo?: () => void;
   onSpawned?: () => void;
   onStateChange?: (busy: boolean) => void;
   onCommandComplete?: () => void;
@@ -59,6 +66,8 @@ interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   text: string;
+  /** 该条消息发送时实际使用的模型（selectedModel 或供应商默认），仅用户消息带 */
+  model?: string;
   reasoning?: string;
   tools: ToolCardData[];
   status: "streaming" | "done" | "error";
@@ -323,7 +332,7 @@ const ACCEPTED_IMAGE_TYPES = new Set([
 
 type ChatAction =
   | { type: "history"; messages: ChatMessage[] }
-  | { type: "user:sent"; text: string; id: string; images: ChatImageAttachment[] }
+  | { type: "user:sent"; text: string; id: string; images: ChatImageAttachment[]; model: string }
   | { type: "assistant:local"; text: string; contextUsage?: ContextUsageData | null }
   | { type: "send:failed"; id: string; message: string }
   | { type: "turn:started" }
@@ -358,6 +367,7 @@ function messagesReducer(state: ChatMessage[], action: ChatAction): ChatMessage[
           id: action.id,
           role: "user",
           text: action.text,
+          model: action.model,
           tools: [],
           status: "done",
           images: action.images,
@@ -786,6 +796,7 @@ const MessageView: React.FC<{ message: ChatMessage }> = ({ message }) => {
           )}
           {message.text}
         </div>
+        {message.model && <div className="chat-msg-model">模型：{message.model}</div>}
         {message.error && (
           <div className="chat-msg-error">{message.error}</div>
         )}
@@ -846,6 +857,11 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
     directory,
     agentSessionId,
     isActive,
+    selectedModel,
+    modelInfo,
+    onSelectModel,
+    onSelectProvider,
+    onRefreshModelInfo,
     onSpawned,
     onStateChange,
     onCommandComplete,
@@ -1185,7 +1201,9 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
 
     const msgId = generateUUID();
     const sentImages = images;
-    dispatch({ type: "user:sent", text, id: msgId, images: sentImages });
+    // 记录该条消息实际使用的模型：手动选择优先，否则用供应商默认（旋钮映射）
+    const msgModel = selectedModel || modelInfo?.defaultModel || "默认";
+    dispatch({ type: "user:sent", text, id: msgId, images: sentImages, model: msgModel });
     setDraft("");
     setImages([]);
     setAttachmentError(null);
@@ -1465,6 +1483,13 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
           </div>
         )}
         <div className="chat-input-bar">
+          <ModelSelector
+            selectedModel={selectedModel}
+            modelInfo={modelInfo}
+            onSelectModel={onSelectModel}
+            onSelectProvider={onSelectProvider}
+            onRefreshModelInfo={onRefreshModelInfo}
+          />
           <textarea
             ref={inputRef}
             className="chat-input"
