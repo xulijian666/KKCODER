@@ -1,4 +1,4 @@
-import React, { useEffect, useReducer, useRef, useState } from "react";
+import React, { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { renderChatMarkdownToHtml } from "../utils/markdown";
 import { formatFeedbackError } from "../utils/appFeedback";
+import { isEditableFocusTarget } from "../utils/terminalFocus";
 import { generateUUID } from "../utils/uuid";
 import { log } from "../utils/log";
 import {
@@ -587,9 +588,10 @@ const CompletionMenu: React.FC<{
 const QuestionCard: React.FC<{
   request: PendingQuestionRequest;
   submitting: boolean;
+  error: string | null;
   onSubmit: (answers: Record<string, { answers: string[] }>) => void;
   onSkip: () => void;
-}> = ({ request, submitting, onSubmit, onSkip }) => {
+}> = ({ request, submitting, error, onSubmit, onSkip }) => {
   const [activeQuestion, setActiveQuestion] = useState(0);
   const [selections, setSelections] = useState<Record<string, Set<string>>>({});
   const [customAnswers, setCustomAnswers] = useState<Record<string, string>>({});
@@ -609,10 +611,32 @@ const QuestionCard: React.FC<{
     });
   };
 
-  const submit = () => {
+  /** 明确选中（不取消）：双击快速确认时使用 */
+  const selectOption = (questionId: string, label: string, multiSelect: boolean) => {
+    setSelections((previous) => {
+      const current = new Set(previous[questionId] ?? []);
+      if (multiSelect) {
+        current.add(label);
+      } else {
+        current.clear();
+        current.add(label);
+      }
+      return { ...previous, [questionId]: current };
+    });
+  };
+
+  /** 组装答案；override 用于双击确认：把双击的选项直接写入对应问题的答案 */
+  const submit = (override?: { questionId: string; label: string }) => {
     const answers: Record<string, { answers: string[] }> = {};
     for (const item of request.questions) {
-      const values = [...(selections[item.id] ?? [])];
+      let values = [...(selections[item.id] ?? [])];
+      if (override && item.id === override.questionId) {
+        values = item.multiSelect
+          ? values.includes(override.label)
+            ? values
+            : [...values, override.label]
+          : [override.label];
+      }
       const custom = customAnswers[item.id]?.trim();
       if (custom) values.push(custom);
       answers[item.id] = { answers: values };
@@ -620,105 +644,128 @@ const QuestionCard: React.FC<{
     onSubmit(answers);
   };
 
+  /** 双击选项：选中该选项；非最后一题则前进到下一题，最后一题直接提交 */
+  const handleDoubleClickOption = (label: string) => {
+    selectOption(question.id, label, !!question.multiSelect);
+    if (activeQuestion < request.questions.length - 1) {
+      setActiveQuestion((index) => index + 1);
+    } else {
+      submit({ questionId: question.id, label });
+    }
+  };
+
   if (!question) return null;
   const selected = selections[question.id] ?? new Set<string>();
 
   return (
-    <div className="chat-question-card">
-      <div className="chat-question-header">
-        <div>
-          <span className="chat-question-kicker">Claude 需要你的选择</span>
-          <strong>{question.header || "选择"}</strong>
-        </div>
-        {request.questions.length > 1 && (
-          <span className="chat-question-progress">
-            {activeQuestion + 1}/{request.questions.length}
-          </span>
-        )}
-      </div>
-      {request.questions.length > 1 && (
-        <div className="chat-question-tabs" role="tablist">
-          {request.questions.map((item, index) => (
-            <button
-              type="button"
-              key={item.id}
-              className={index === activeQuestion ? "is-active" : ""}
-              onClick={() => setActiveQuestion(index)}
-            >
-              {item.header || `问题 ${index + 1}`}
-            </button>
-          ))}
-        </div>
-      )}
-      <div className="chat-question-text">{question.question}</div>
-      <div className="chat-question-options">
-        {question.options.map((option, index) => {
-          const isSelected = selected.has(option.label);
-          return (
-            <button
-              type="button"
-              key={`${option.label}:${index}`}
-              className={`chat-question-option ${isSelected ? "is-selected" : ""}`}
-              onClick={() => toggleOption(question.id, option.label, !!question.multiSelect)}
-              disabled={submitting}
-            >
-              <span className="chat-question-marker">
-                {question.multiSelect ? (isSelected ? "✓" : "") : index + 1}
+    <div className="chat-question-overlay">
+      <div
+        className="chat-question-card chat-question-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Claude 需要你的选择"
+      >
+        {/* 中部可滚动：标题/问题/选项；底部操作栏固定在弹窗内始终可见 */}
+        <div className="chat-question-scroll">
+          <div className="chat-question-header">
+            <div>
+              <span className="chat-question-kicker">Claude 需要你的选择</span>
+              <strong>{question.header || "选择"}</strong>
+            </div>
+            {request.questions.length > 1 && (
+              <span className="chat-question-progress">
+                {activeQuestion + 1}/{request.questions.length}
               </span>
-              <span>
-                <strong>{option.label}</strong>
-                {option.description && <small>{option.description}</small>}
-              </span>
-            </button>
-          );
-        })}
-        <textarea
-          className="chat-question-custom"
-          value={customAnswers[question.id] ?? ""}
-          onChange={(event) =>
-            setCustomAnswers((previous) => ({
-              ...previous,
-              [question.id]: event.target.value,
-            }))
-          }
-          placeholder="其他回答（可选）"
-          rows={2}
-          disabled={submitting}
-        />
-      </div>
-      <div className="chat-question-actions">
-        <button type="button" onClick={onSkip} disabled={submitting}>
-          跳过
-        </button>
-        <div>
-          {activeQuestion > 0 && (
-            <button
-              type="button"
-              onClick={() => setActiveQuestion((index) => index - 1)}
-              disabled={submitting}
-            >
-              上一步
-            </button>
+            )}
+          </div>
+          {request.questions.length > 1 && (
+            <div className="chat-question-tabs" role="tablist">
+              {request.questions.map((item, index) => (
+                <button
+                  type="button"
+                  key={item.id}
+                  className={index === activeQuestion ? "is-active" : ""}
+                  onClick={() => setActiveQuestion(index)}
+                >
+                  {item.header || `问题 ${index + 1}`}
+                </button>
+              ))}
+            </div>
           )}
-          {activeQuestion < request.questions.length - 1 ? (
-            <button
-              type="button"
-              className="is-primary"
-              onClick={() => setActiveQuestion((index) => index + 1)}
+          <div className="chat-question-text">{question.question}</div>
+          <div className="chat-question-options">
+            {question.options.map((option, index) => {
+              const isSelected = selected.has(option.label);
+              return (
+                <button
+                  type="button"
+                  key={`${option.label}:${index}`}
+                  className={`chat-question-option ${isSelected ? "is-selected" : ""}`}
+                  onClick={() => toggleOption(question.id, option.label, !!question.multiSelect)}
+                  onDoubleClick={() => handleDoubleClickOption(option.label)}
+                  disabled={submitting}
+                  title="单击选择，双击直接确认"
+                >
+                  <span className="chat-question-marker">
+                    {question.multiSelect ? (isSelected ? "✓" : "") : index + 1}
+                  </span>
+                  <span>
+                    <strong>{option.label}</strong>
+                    {option.description && <small>{option.description}</small>}
+                  </span>
+                </button>
+              );
+            })}
+            <textarea
+              className="chat-question-custom"
+              value={customAnswers[question.id] ?? ""}
+              onChange={(event) =>
+                setCustomAnswers((previous) => ({
+                  ...previous,
+                  [question.id]: event.target.value,
+                }))
+              }
+              placeholder="其他回答（可选）"
+              rows={2}
               disabled={submitting}
-            >
-              下一步
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="is-primary"
-              onClick={submit}
-              disabled={submitting}
-            >
-              {submitting ? "正在提交…" : "提交选择"}
-            </button>
-          )}
+            />
+          </div>
+        </div>
+        {error && <div className="chat-question-error">{error}</div>}
+        <div className="chat-question-actions">
+          <button type="button" onClick={onSkip} disabled={submitting}>
+            跳过
+          </button>
+          <div>
+            {activeQuestion > 0 && (
+              <button
+                type="button"
+                onClick={() => setActiveQuestion((index) => index - 1)}
+                disabled={submitting}
+              >
+                上一步
+              </button>
+            )}
+            {activeQuestion < request.questions.length - 1 ? (
+              <button
+                type="button"
+                className="is-primary"
+                onClick={() => setActiveQuestion((index) => index + 1)}
+                disabled={submitting}
+              >
+                下一步
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="is-primary"
+                onClick={() => submit()}
+                disabled={submitting}
+              >
+                {submitting ? "正在提交…" : "提交选择"}
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -810,6 +857,8 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
   const [busy, setBusy] = useState(false);
   const [ready, setReady] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  // 运行中两次 ESC 终止交互：第一次按下后终止按钮显示 ESC 提示，第二次按下才终止
+  const [escArmed, setEscArmed] = useState(false);
   const [completionTrigger, setCompletionTrigger] = useState<ChatCompletionTrigger | null>(null);
   const [completionItems, setCompletionItems] = useState<CompletionEntry[]>([]);
   const [completionLoading, setCompletionLoading] = useState(false);
@@ -827,6 +876,9 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const completionRequestRef = useRef(0);
   const composingRef = useRef(false);
+  // ESC 提示态与超时定时器（状态 + ref 镜像，避免监听器闭包读到旧值）
+  const escArmedRef = useRef(false);
+  const escArmTimerRef = useRef<number | null>(null);
   // 用户是否钉在消息流底部：在底部附近才自动跟随新输出，浏览上方信息时不抢滚动
   const pinnedToBottomRef = useRef(true);
 
@@ -1077,7 +1129,7 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
     if (el && pinnedToBottomRef.current) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [messages, pendingQuestion]);
+  }, [messages]);
 
   const handleScroll = () => {
     const el = scrollRef.current;
@@ -1247,14 +1299,68 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
     if (next.length) setImages((previous) => [...previous, ...next]);
   };
 
-  const handleCancel = () => {
+  const disarmEsc = useCallback(() => {
+    escArmedRef.current = false;
+    setEscArmed(false);
+    if (escArmTimerRef.current !== null) {
+      window.clearTimeout(escArmTimerRef.current);
+      escArmTimerRef.current = null;
+    }
+  }, []);
+
+  const armEsc = useCallback(() => {
+    escArmedRef.current = true;
+    setEscArmed(true);
+    if (escArmTimerRef.current !== null) {
+      window.clearTimeout(escArmTimerRef.current);
+    }
+    // 2.5s 内未按第二次 ESC 则收回提示，避免误以为还处于待确认状态
+    escArmTimerRef.current = window.setTimeout(() => {
+      escArmedRef.current = false;
+      setEscArmed(false);
+      escArmTimerRef.current = null;
+    }, 2500);
+  }, []);
+
+  const handleCancel = useCallback(() => {
     if (cancelling) return;
+    disarmEsc();
     setCancelling(true);
     invoke("chat_cancel", { sessionId }).catch((err) => {
       log(`[chat] cancel failed: ${err}`);
       setCancelling(false);
     });
-  };
+  }, [cancelling, disarmEsc, sessionId]);
+
+  // 运行中两次 ESC 终止：第一次按下 → 终止按钮显示 ESC 提示；第二次按下 → 终止任务。
+  // 仅在当前会话运行中且本 tab 激活时生效；问题弹窗打开期间不劫持 ESC。
+  useEffect(() => {
+    if (!busy || pendingQuestion || !isActive) {
+      disarmEsc();
+      return;
+    }
+    const handleGlobalKeyDown = (event: KeyboardEvent) => {
+      if (isEditableFocusTarget(event.target)) return;
+      if (event.key !== "Escape") {
+        // 按下其他键视为放弃 ESC 终止意图
+        if (escArmedRef.current) disarmEsc();
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      if (escArmedRef.current) {
+        disarmEsc();
+        handleCancel();
+      } else {
+        armEsc();
+      }
+    };
+    window.addEventListener("keydown", handleGlobalKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleGlobalKeyDown);
+      disarmEsc();
+    };
+  }, [armEsc, busy, disarmEsc, handleCancel, isActive, pendingQuestion]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // 输入法组合输入期间把箭头/回车让给输入法候选窗
@@ -1305,15 +1411,6 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
         {messages.map((m) => (
           <MessageView key={m.id} message={m} />
         ))}
-        {pendingQuestion && (
-          <QuestionCard
-            request={pendingQuestion}
-            submitting={questionSubmitting}
-            onSubmit={(answers) => void answerQuestion(answers)}
-            onSkip={() => void answerQuestion({})}
-          />
-        )}
-        {questionError && <div className="chat-msg-error">{questionError}</div>}
       </div>
       <div
         className={`chat-composer ${draggingImage ? "is-dragging" : ""}`}
@@ -1400,26 +1497,53 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
                 void addImageFiles(pastedImages);
               }
             }}
-            placeholder={pendingQuestion ? "请先回答上方问题" : "输入消息，@ 引用文件，/ 使用技能或命令"}
+            placeholder={pendingQuestion ? "请先完成弹出的问题" : "输入消息，@ 引用文件，/ 使用技能或命令"}
             rows={1}
             disabled={busy || !ready || !!pendingQuestion}
           />
           <button
             type="button"
-            className={`chat-send-btn ${busy ? "is-cancel" : ""}`}
+            className={`chat-send-btn ${busy ? "is-cancel" : ""} ${escArmed ? "is-esc-armed" : ""}`}
             onClick={busy ? handleCancel : () => void handleSend()}
             disabled={
               cancelling ||
               (!busy && (!ready || !!pendingQuestion || (!draft.trim() && images.length === 0)))
             }
-            title={cancelling ? "正在取消" : busy ? "取消生成" : "发送"}
+            title={
+              cancelling
+                ? "正在取消"
+                : busy
+                  ? escArmed
+                    ? "再按一次 ESC 终止任务（或点击直接终止）"
+                    : "终止生成（按 ESC 两次）"
+                  : "发送"
+            }
           >
-            {busy ? <Square size={15} /> : <Send size={15} />}
+            {busy ? (
+              escArmed ? (
+                <span className="chat-cancel-esc">ESC</span>
+              ) : (
+                <Square size={15} />
+              )
+            ) : (
+              <Send size={15} />
+            )}
           </button>
         </div>
       </div>
       {busy && lastMsg?.role === "assistant" && lastMsg.status === "streaming" && (
-        <div className="chat-busy-hint">AI 正在生成…</div>
+        <div className={`chat-busy-hint ${escArmed ? "is-esc-armed" : ""}`}>
+          {escArmed ? "再按一次 ESC 终止任务" : "AI 正在生成…"}
+        </div>
+      )}
+      {pendingQuestion && (
+        <QuestionCard
+          request={pendingQuestion}
+          submitting={questionSubmitting}
+          error={questionError}
+          onSubmit={(answers) => void answerQuestion(answers)}
+          onSkip={() => void answerQuestion({})}
+        />
       )}
     </div>
   );
