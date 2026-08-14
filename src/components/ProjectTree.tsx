@@ -334,6 +334,38 @@ const ProjectTreeImpl: React.FC<ProjectTreeProps> = ({
     setSearchQuery("");
   }, [projectPath, loadFiles]);
 
+  // 监听全局刷新文件树事件（对话完成、操作落盘等，等同于点击刷新按钮，保留展开状态）
+  const refreshTimerRef = useRef<number | null>(null);
+  useEffect(() => {
+    const isSamePath = (p1?: string, p2?: string) => {
+      if (!p1 || !p2) return true;
+      const n1 = p1.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+      const n2 = p2.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+      return n1 === n2;
+    };
+
+    const handleGlobalRefresh = (event: Event) => {
+      const customEvent = event as CustomEvent<{ projectPath?: string }>;
+      if (!customEvent.detail?.projectPath || isSamePath(customEvent.detail.projectPath, projectPath)) {
+        // 250ms 防抖合并：多次连续工具调用或频繁事件仅在静止后触发 1 次单次轻量扫描
+        if (refreshTimerRef.current !== null) {
+          window.clearTimeout(refreshTimerRef.current);
+        }
+        refreshTimerRef.current = window.setTimeout(() => {
+          refreshTimerRef.current = null;
+          void loadFiles(true);
+        }, 250);
+      }
+    };
+    window.addEventListener("kkcoder-refresh-project-tree", handleGlobalRefresh);
+    return () => {
+      window.removeEventListener("kkcoder-refresh-project-tree", handleGlobalRefresh);
+      if (refreshTimerRef.current !== null) {
+        window.clearTimeout(refreshTimerRef.current);
+      }
+    };
+  }, [projectPath, loadFiles]);
+
   // 2. 异步拉取文件夹子节点（按需惰性加载）
   const handleFolderExpand = async (node: FileNode) => {
     const isCurrentlyExpanded = expandedFolders[node.path] || false;

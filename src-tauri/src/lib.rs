@@ -9,6 +9,7 @@ mod remote;
 mod native_terminal;
 mod claude_chat;
 mod claude_model;
+mod git;
 
 // 极其可靠的本地调试文件日志输出器。
 // 日志目录：<工作目录>/logs/（dev 下即 src-tauri/logs/）
@@ -3474,7 +3475,12 @@ pub fn run() {
             get_local_ip,
             start_frp,
             stop_frp,
-            get_frp_status
+            get_frp_status,
+            git::get_git_branch_info,
+            git::switch_git_branch,
+            git::create_git_branch,
+            git::pull_git_updates,
+            git::init_git_repo
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

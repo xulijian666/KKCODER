@@ -27,6 +27,7 @@ import { isEditableFocusTarget } from "../utils/terminalFocus";
 import { generateUUID } from "../utils/uuid";
 import { log } from "../utils/log";
 import { ModelSelector } from "./ModelSelector";
+import { GitBranchSelector } from "./GitBranchSelector";
 import type { ClaudeModelInfo } from "../utils/claudeModel";
 import {
   detectChatCompletionTrigger,
@@ -1196,6 +1197,19 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
               output: payload.output,
               error: payload.error,
             });
+            // 仅在执行文件写/改/命令类工具时触发刷新（只读工具如 view/grep/read 静默跳过，零开销）
+            const isMutating =
+              !payload.toolName ||
+              /write|edit|replace|patch|create|delete|remove|bash|terminal|command|move|rename/i.test(
+                payload.toolName,
+              );
+            if (isMutating) {
+              window.dispatchEvent(
+                new CustomEvent("kkcoder-refresh-project-tree", {
+                  detail: { projectPath: directory },
+                }),
+              );
+            }
           }
           break;
         case "turn:finished": {
@@ -1230,6 +1244,13 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
               message: chatNotify ? "Claude 已回复完毕" : null,
             }).catch((err) => log(`[chat] play notification failed: ${err}`));
           }
+
+          // 对话执行完成：自动触发右侧项目文件树刷新（保持已展开的目录结构）
+          window.dispatchEvent(
+            new CustomEvent("kkcoder-refresh-project-tree", {
+              detail: { projectPath: directory },
+            }),
+          );
           break;
         }
         case "turn:error":
@@ -1250,6 +1271,13 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
           setCancelling(false);
           setPendingQuestion(null);
           onStateChangeRef.current?.(false);
+
+          // 异常或主动终止后同样刷新一次文件树
+          window.dispatchEvent(
+            new CustomEvent("kkcoder-refresh-project-tree", {
+              detail: { projectPath: directory },
+            }),
+          );
           break;
         case "question:requested":
           if (payload.requestId && payload.questions?.length) {
@@ -2197,6 +2225,23 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
               onSelectProvider={onSelectProvider}
               onRefreshModelInfo={onRefreshModelInfo}
               disabled={busy}
+            />
+            <GitBranchSelector
+              directory={directory}
+              disabled={busy}
+              onSendAiConflictPrompt={(prompt) => {
+                setDraft(prompt);
+                requestAnimationFrame(() => inputRef.current?.focus());
+              }}
+              onTriggerSmartCommit={(prompt) => {
+                if (busy) {
+                  notifyWarning("AI 正在运行中，已将智能提交指令填入输入框");
+                  setDraft(prompt);
+                  requestAnimationFrame(() => inputRef.current?.focus());
+                } else {
+                  void sendText(prompt, []);
+                }
+              }}
             />
             <div className="chat-composer-toolbar-spacer" />
             <button

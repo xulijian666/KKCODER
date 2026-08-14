@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { Check, ChevronDown, Cpu } from "lucide-react";
 import type { ClaudeModelInfo } from "../utils/claudeModel";
 import { log } from "../utils/log";
 
@@ -23,7 +24,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
 }) => {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
-  const displayModel = selectedModel || modelInfo?.defaultModel || "模型";
+  const displayModel = selectedModel || modelInfo?.defaultModel || "选择模型";
 
   // 点击菜单外部任意处关闭
   useEffect(() => {
@@ -71,13 +72,12 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
               : "选择模型 / 供应商")
         }
       >
+        <Cpu size={12} className="chat-model-icon" />
         <span className="chat-model-select-label">{displayModel}</span>
         {routeEnabled && (
           <span className="chat-model-route-dot" title="CC Switch 路由开关已开启" />
         )}
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-          <path d="m6 9 6 6 6-6"></path>
-        </svg>
+        <ChevronDown size={11} className={`chat-model-select-chevron ${open ? "is-open" : ""}`} />
       </button>
 
       {open && (
@@ -108,11 +108,11 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                     : "CC Switch 路由开关未开启，请求直连"
                 }
               >
-                {modelInfo.routeEnabled ? "路由已开" : "路由已关"}
+                {modelInfo.routeEnabled ? "路由已启用" : "直连模式"}
               </span>
             </div>
           )}
-          <div className="model-dropdown-section-title">供应商</div>
+          <div className="model-dropdown-section-title">供应商 · Providers</div>
           {modelInfo && modelInfo.providers.length > 0 ? (
             <div className="model-dropdown-provider-list">
               {modelInfo.providers.map((provider) => {
@@ -135,13 +135,11 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                           className="model-dropdown-route-badge"
                           title="该供应商需要开启路由（走 CC Switch 代理）才能使用"
                         >
-                          需要路由
+                          需路由
                         </span>
                       )}
                       {isCurrent && (
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M20 6 9 17l-5-5"></path>
-                        </svg>
+                        <Check size={12} strokeWidth={2.5} className="model-dropdown-check" />
                       )}
                     </span>
                   </div>
@@ -152,7 +150,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
             <div className="model-dropdown-empty">未读取到供应商</div>
           )}
           <div className="model-dropdown-divider" />
-          <div className="model-dropdown-section-title">模型</div>
+          <div className="model-dropdown-section-title">可用模型 · Models</div>
           <div className="model-dropdown-model-list">
             {modelInfo && modelInfo.models.length > 0
               ? modelInfo.models.map((model) => {
@@ -171,9 +169,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                     >
                       <span className="model-dropdown-item-label">{model}</span>
                       {isSelected && (
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M20 6 9 17l-5-5"></path>
-                        </svg>
+                        <Check size={12} strokeWidth={2.5} className="model-dropdown-check" />
                       )}
                     </div>
                   );

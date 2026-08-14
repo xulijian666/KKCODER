@@ -3,6 +3,7 @@ export { TerminalTab } from "./TerminalTab";
 export { CompatibilityTerminalTab } from "./NativeTerminalTab";
 export { ChatTab } from "./ChatTab";
 export { ModelSelector } from "./ModelSelector";
+export { GitBranchSelector, type GitBranchInfo, type GitPullResult } from "./GitBranchSelector";
 export { NewSessionModal } from "./NewSessionModal";
 export { SettingsModal } from "./SettingsModal";
 export { RemoteSettingsPanel } from "./RemoteSettingsPanel";

@@ -80,6 +80,8 @@ src/
 | `TerminalTab.tsx` | xterm.js 标准 PTY 标签 | `TerminalTab` |
 | `NativeTerminalTab.tsx` | Claude 兼容/原生终端标签 | `CompatibilityTerminalTab` |
 | `ChatTab.tsx` | Claude GUI 聊天标签（历史、流式文本、推理与工具调用） | `ChatTab` |
+| `ModelSelector.tsx` | 聊天模型与供应商选择菜单 | `ModelSelector` |
+| `GitBranchSelector.tsx` | Git 分支切换、新建、拉取更新与冲突 AI 修复组件 | `GitBranchSelector`, 相关类型 |
 | `SessionTabBar.tsx` | 顶部标签栏 UI（分屏时双栏对齐；左栏保序待命标签、右栏 secondary） | `SessionTabBar` |
 | `TabContextMenu.tsx` | 标签右键菜单（含分屏进出） | `TabContextMenu` |
 | `CloseConfirmModal.tsx` | 退出确认（托盘/退出） | `CloseConfirmModal` |
