@@ -1,30 +1,24 @@
-//! Claude 模型/供应商选择：供应商与模型都在 KKCODER 里切换。
-//! - 供应商列表：只读 cc-switch.db（配置由 CC Switch 管理）
-//! - 切换供应商：
-//!   - 可直连（apiFormat=anthropic）→ 直连覆盖：把该供应商 env 写进 settings.json（claude 直连）
-//!   - 仅路由（apiFormat≠anthropic，如 OpenCode Go）→ 写回本地路由状态 + 改 cc-switch is_current，
-//!     由 CC Switch 代理路由（代理用内存态，可能需要重启 CC Switch 才生效）
-//! - 当前供应商名：优先 KKCODER 直连覆盖记录的 provider_id；否则路由模式读 is_current，
-//!   直连模式按 apikey(base_url) 反推
-//! - 模型清单：读取 settings.json env（去重、去 [1m] 后缀）；手动选模型 = 启动时加 --model
+//! Claude 模型/供应商选择（KKCODER 内生效，**不碰任何持久配置**）：
+//! - 供应商列表：只读 cc-switch.db（配置由 CC Switch 管理，KKCODER 绝不写它）
+//! - 切换供应商：只记录选择（内存 + 前端 localStorage），不写 settings.json / cc-switch.db；
+//!   生效方式 = 启动 claude 时生成临时 settings 文件（`--settings`，直连该供应商真实 env）
+//!   ——原实现直接改写 ~/.claude/settings.json，会被 CC Switch 的"Live 配置同步回写 db"机制
+//!   污染 CC Switch 的供应商配置（如 OpenCode Go 被覆盖成 longcat），故废弃
+//! - 仅路由供应商（apiFormat 非 anthropic，如 OpenCode Go）：claude 无法直连，
+//!   选择仅用于查看其模型映射，实际请求跟随 CC Switch 现状
+//! - 模型清单：从所选供应商 db env 收集（未选时只读展示 settings.json 现状）；
+//!   手动选模型 = 启动时加 --model
 
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 use rusqlite::{Connection, OpenFlags};
 use serde::Serialize;
 use tauri::State;
 
+/// CC Switch 路由代理的占位 token（claude 走代理时 settings.json env 里的值）
 const PROXY_PLACEHOLDER_TOKEN: &str = "PROXY_MANAGED";
-const PROXY_BASE_URL: &str = "http://127.0.0.1:15721";
-
-/// KKCODER 全局状态：model = 手动指定模型（None = 不传 --model，用配置现状）；
-/// provider_id = KKCODER 直连覆盖过的供应商（用于精确高亮，区分同 base_url 不同 key 的供应商）
-#[derive(Default)]
-pub struct ClaudeModelState {
-    pub model: Mutex<Option<String>>,
-    pub provider_id: Mutex<Option<String>>,
-}
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -63,6 +57,15 @@ const EXTRA_MODEL_KEYS: [&str; 3] = [
     "CLAUDE_CODE_SUBAGENT_MODEL",
 ];
 
+/// KKCODER 全局状态（仅内存，不持久化到任何配置文件）：
+/// model = 手动指定模型（None = 不传 --model，用配置现状）；
+/// provider_id = 用户选择的供应商（启动 claude 时用其 env 生成临时 settings 文件）
+#[derive(Default)]
+pub struct ClaudeModelState {
+    pub model: Mutex<Option<String>>,
+    pub provider_id: Mutex<Option<String>>,
+}
+
 fn settings_path() -> Option<std::path::PathBuf> {
     Some(dirs::home_dir()?.join(".claude").join("settings.json"))
 }
@@ -70,13 +73,6 @@ fn settings_path() -> Option<std::path::PathBuf> {
 fn read_settings_json() -> Option<serde_json::Value> {
     let text = std::fs::read_to_string(settings_path()?).ok()?;
     serde_json::from_str(&text).ok()
-}
-
-fn write_settings_json(value: &serde_json::Value) -> Result<(), String> {
-    let path = settings_path().ok_or_else(|| "无法定位用户主目录".to_string())?;
-    let text = serde_json::to_string_pretty(value)
-        .map_err(|error| format!("settings.json 序列化失败: {error}"))?;
-    std::fs::write(&path, text).map_err(|error| format!("settings.json 写入失败: {error}"))
 }
 
 /// 打开 cc-switch.db（默认只读；写入用 try_write）
@@ -266,43 +262,6 @@ fn resolve_provider_by_base_url(conn: &Connection, base_url: &str) -> Option<(St
     None
 }
 
-/// 记录的 provider_id 是否仍与旋钮现状匹配（env 的 base_url + token 都要对上）
-fn recorded_provider_is_current(
-    conn: &Connection,
-    pid: &str,
-    base_url: &str,
-    token: &str,
-) -> bool {
-    if token.trim().eq_ignore_ascii_case(PROXY_PLACEHOLDER_TOKEN) || token.trim().is_empty() {
-        return false;
-    }
-    let Ok(config) = conn.query_row(
-        "SELECT settings_config FROM providers WHERE id = ?1",
-        [pid],
-        |row| row.get::<_, String>(0),
-    ) else {
-        return false;
-    };
-    let Ok(config) = serde_json::from_str::<serde_json::Value>(&config) else {
-        return false;
-    };
-    let Some(env) = config.get("env") else {
-        return false;
-    };
-    let p_url = env
-        .get("ANTHROPIC_BASE_URL")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim()
-        .trim_end_matches('/');
-    let p_token = env
-        .get("ANTHROPIC_AUTH_TOKEN")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim();
-    p_url == base_url.trim().trim_end_matches('/') && p_token == token.trim()
-}
-
 /// 去掉 [1m]/[1M] 上下文窗口后缀（仅用于展示；--model 传干净名）
 fn strip_context_suffix(value: &str) -> String {
     let trimmed = value.trim();
@@ -346,41 +305,12 @@ fn tier_model_name(env: Option<&serde_json::Value>, tier: &str) -> Option<String
     None
 }
 
-#[tauri::command]
-pub fn claude_model_info(state: State<'_, ClaudeModelState>) -> ClaudeModelInfo {
-    let conn = open_cc_switch_db(false);
-    let providers = conn
-        .as_ref()
-        .map(read_claude_providers)
-        .unwrap_or_default();
-
-    let Some(json) = read_settings_json() else {
-        let route_enabled = conn.as_ref().map(proxy_route_enabled).unwrap_or(false);
-        return ClaudeModelInfo {
-            models: Vec::new(),
-            default_model: None,
-            provider_name: None,
-            route_mode: route_enabled,
-            route_enabled,
-            provider_removed: false,
-            providers,
-        };
-    };
-
-    let env = json.get("env");
-    let base_url = env
-        .and_then(|value| value.get("ANTHROPIC_BASE_URL"))
-        .and_then(|value| value.as_str())
-        .unwrap_or("");
-    // 路由开关开启 → 一律路由模式（claude 走本地代理）；否则按 base_url 兜底判断
-    let route_enabled = conn.as_ref().map(proxy_route_enabled).unwrap_or(false);
-    let mut route_mode =
-        route_enabled || base_url.contains("127.0.0.1") || base_url.contains("localhost");
-    let auth_token = env
-        .and_then(|env| env.get("ANTHROPIC_AUTH_TOKEN"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-
+/// 从 env 收集去重后的模型清单 + 默认模型。
+/// `tier_hint`：settings.json 顶层 model 字段（用户选中的 tier）；供应商模式无此信息时用 opus 兜底。
+fn collect_models_from_env(
+    env: Option<&serde_json::Value>,
+    tier_hint: Option<&str>,
+) -> (Vec<String>, Option<String>) {
     let mut models: Vec<String> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     let mut push_model = |name: String| {
@@ -406,24 +336,89 @@ pub fn claude_model_info(state: State<'_, ClaudeModelState>) -> ClaudeModelInfo 
             }
         }
     }
+    let default_model = tier_hint
+        .and_then(|tier| tier_model_name(env, tier))
+        .or_else(|| tier_model_name(env, "opus"));
+    (models, default_model)
+}
 
-    let tier = json.get("model").and_then(|value| value.as_str()).unwrap_or("");
-    let default_model = tier_model_name(env, tier);
+#[tauri::command]
+pub fn claude_model_info(state: State<'_, ClaudeModelState>) -> ClaudeModelInfo {
+    let conn = open_cc_switch_db(false);
+    let providers = conn
+        .as_ref()
+        .map(read_claude_providers)
+        .unwrap_or_default();
+    let route_enabled = conn.as_ref().map(proxy_route_enabled).unwrap_or(false);
 
-    // 当前生效供应商名。优先级：
-    // 1) KKCODER 直连覆盖记录的 provider_id（且 env 匹配）→ 精确区分同地址不同 key
-    // 2) 路由模式 → cc-switch is_current
-    // 3) 直连模式 → 按 apikey 反推，再 base_url 兜底
+    // KKCODER 内选择过供应商 → 模型清单/当前供应商从该供应商的 db 配置收集（只读，不改任何配置）
     let recorded_provider_id = state
         .provider_id
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .clone();
-    let use_recorded = recorded_provider_id.as_ref().is_some_and(|pid| {
-        conn.as_ref()
-            .is_some_and(|conn| recorded_provider_is_current(conn, pid, base_url, auth_token))
+    let recorded = recorded_provider_id.as_deref().and_then(|pid| {
+        conn.as_ref().and_then(|conn| {
+            read_provider_env(conn, pid).map(|env| (pid.to_string(), env))
+        })
     });
+    if let Some((pid, env)) = recorded {
+        let (models, default_model) = collect_models_from_env(Some(&env), None);
+        let provider_name = conn.as_ref().and_then(|conn| {
+            conn.query_row(
+                "SELECT name FROM providers WHERE id = ?1",
+                [&pid],
+                |row| row.get::<_, String>(0),
+            )
+            .ok()
+        });
+        let route_only = conn
+            .as_ref()
+            .is_some_and(|conn| read_provider_route_only(conn, &pid));
+        let provider_removed = provider_name.is_none();
+        return ClaudeModelInfo {
+            models,
+            default_model,
+            provider_name,
+            route_mode: route_only || route_enabled,
+            route_enabled,
+            provider_removed,
+            providers,
+        };
+    }
 
+    // 未选择：只读展示 CC Switch 当前配置（settings.json 现状）
+    let Some(json) = read_settings_json() else {
+        return ClaudeModelInfo {
+            models: Vec::new(),
+            default_model: None,
+            provider_name: None,
+            route_mode: route_enabled,
+            route_enabled,
+            provider_removed: false,
+            providers,
+        };
+    };
+
+    let env = json.get("env");
+    let base_url = env
+        .and_then(|value| value.get("ANTHROPIC_BASE_URL"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    // 路由开关开启 → 一律路由模式（claude 走本地代理）；否则按 base_url 兜底判断
+    let mut route_mode =
+        route_enabled || base_url.contains("127.0.0.1") || base_url.contains("localhost");
+    let auth_token = env
+        .and_then(|env| env.get("ANTHROPIC_AUTH_TOKEN"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    let tier = json.get("model").and_then(|value| value.as_str());
+    let (models, default_model) = collect_models_from_env(env, tier);
+
+    // 当前生效供应商名（只读展示 CC Switch 现状）：
+    // 1) 路由开关开启 → cc-switch is_current
+    // 2) 直连模式 → 按 apikey 反推，再 base_url 兜底
     let (provider_name, provider_removed) = if route_enabled {
         // 路由开关开启：供应商由 cc-switch 当前 is_current 决定
         let name = conn.as_ref().and_then(|conn| {
@@ -435,19 +430,6 @@ pub fn claude_model_info(state: State<'_, ClaudeModelState>) -> ClaudeModelInfo 
             .ok()
         });
         (name, false)
-    } else if use_recorded {
-        let pid = recorded_provider_id.unwrap();
-        let name = conn
-            .as_ref()
-            .and_then(|conn| {
-                conn.query_row(
-                    "SELECT name FROM providers WHERE id = ?1",
-                    [&pid],
-                    |row| row.get::<_, String>(0),
-                )
-                .ok()
-            });
-        (name.clone(), name.is_none()) // 记录过但已被删 → removed
     } else if !base_url.is_empty() {
         let resolved = conn
             .as_ref()
@@ -491,11 +473,10 @@ pub fn set_claude_model(state: State<'_, ClaudeModelState>, model: Option<String
     *guard = trimmed;
 }
 
-/// 切换供应商（通过 KKCODER）。
-/// - 路由开关开启 → 保持走代理：写路由状态 env（127.0.0.1 + 占位 token + 该供应商模型映射），
-///   并同步 cc-switch 的 is_current 指向它（代理内存态可能需要重启 cc-switch 才刷新）
-/// - 路由开关关闭 → 直连覆盖：该供应商真实 env 写进 settings.json（claude 直连）；
-///   仅路由供应商（apiFormat 非 anthropic，如 OpenCode Go）此时无法直连，提示需开启路由
+/// 切换供应商（KKCODER 内生效）：只记录选择，**不改写任何持久配置**。
+/// - 不写 ~/.claude/settings.json、不改 cc-switch.db（配置是 CC Switch 的地盘，避免互相污染）
+/// - 生效方式：启动 claude 时生成临时 settings 文件（`--settings`）直连该供应商，
+///   或（仅路由供应商）跟随 CC Switch 现状
 /// 返回切换后的最新模型信息，供前端刷新。
 #[tauri::command]
 pub fn set_claude_provider(
@@ -503,66 +484,20 @@ pub fn set_claude_provider(
     provider_id: String,
 ) -> Result<ClaudeModelInfo, String> {
     let conn = open_cc_switch_db(false).ok_or_else(|| "无法读取 CC Switch 数据库".to_string())?;
-    let provider_env = read_provider_env(&conn, &provider_id)
-        .ok_or_else(|| "供应商不存在或缺少配置".to_string())?;
-    let route_only = read_provider_route_only(&conn, &provider_id);
-    let route_enabled = proxy_route_enabled(&conn);
-
-    // 基于当前旋钮（settings.json）只替换 env；没有 settings.json 时以空对象起步
-    let mut settings = read_settings_json().unwrap_or_else(|| serde_json::json!({}));
-
-    if route_enabled {
-        // 路由开关开启：一律走本地代理。写路由状态 env（代理地址 + 占位 token），
-        // 保留该供应商的模型映射；并同步 cc-switch 的 is_current 指向它。
-        crate::log_to_file(&format!(
-            "[claude_model] set provider (route): {}",
-            provider_id
-        ));
-        let mut env = provider_env;
-        if let Some(value) = env.get_mut("ANTHROPIC_BASE_URL") {
-            *value = serde_json::json!(PROXY_BASE_URL);
-        }
-        if let Some(value) = env.get_mut("ANTHROPIC_AUTH_TOKEN") {
-            *value = serde_json::json!(PROXY_PLACEHOLDER_TOKEN);
-        }
-        settings["env"] = env;
-        write_settings_json(&settings)?;
-        // 尽力同步 cc-switch 的当前供应商（代理内存态可能不刷新，需重启才生效）
-        if let Some(write_conn) = open_cc_switch_db(true) {
-            let _ = write_conn.execute(
-                "UPDATE providers SET is_current = 0 WHERE app_type = 'claude'",
-                [],
-            );
-            let _ = write_conn.execute(
-                "UPDATE providers SET is_current = 1 WHERE app_type = 'claude' AND id = ?1",
-                [&provider_id],
-            );
-            crate::log_to_file("[claude_model] cc-switch is_current 已同步（代理需重启才刷新）");
-        }
-        // 路由模式下当前供应商由 cc-switch 决定，不记录为 KKCODER 直连覆盖
-        {
-            let mut guard = state
-                .provider_id
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
-            *guard = None;
-        }
-        return Ok(claude_model_info(state));
+    let exists = conn
+        .query_row(
+            "SELECT 1 FROM providers WHERE app_type = 'claude' AND id = ?1",
+            [&provider_id],
+            |_| Ok(()),
+        )
+        .is_ok();
+    if !exists {
+        return Err("供应商不存在或已被删除".to_string());
     }
-
-    // 路由关闭：直连覆盖。仅路由供应商此时无法直连。
-    if route_only {
-        crate::log_to_file(&format!(
-            "[claude_model] set provider REJECTED(route-only, 路由已关): {}",
-            provider_id
-        ));
-        return Err("该供应商需开启路由才能使用。请先在 CC Switch 打开路由开关。".to_string());
-    }
-
-    crate::log_to_file(&format!("[claude_model] set provider (direct override): {}", provider_id));
-    settings["env"] = provider_env;
-    write_settings_json(&settings)?;
-    crate::log_to_file("[claude_model] settings.json env 已覆盖为所选供应商");
+    crate::log_to_file(&format!(
+        "[claude_model] select provider (仅 KKCODER 内生效，不写配置): {}",
+        provider_id
+    ));
     {
         let mut guard = state
             .provider_id
@@ -570,8 +505,73 @@ pub fn set_claude_provider(
             .unwrap_or_else(|error| error.into_inner());
         *guard = Some(provider_id);
     }
-
     Ok(claude_model_info(state))
+}
+
+/// 生成 claude `--settings` 用的临时 settings 文件（仅对本次 claude 进程生效，不碰任何持久配置）：
+/// - 已选供应商且可直连（apiFormat=anthropic）→ 原 settings.json 内容 + env 替换为该供应商 env
+/// - 已选供应商仅路由 / 未选 → None（claude 跟随 CC Switch 现状）
+pub fn build_settings_override_file(
+    state: &ClaudeModelState,
+    session_id: &str,
+) -> Option<PathBuf> {
+    let provider_id = state
+        .provider_id
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone()?;
+    if provider_id.trim().is_empty() {
+        return None;
+    }
+    let conn = open_cc_switch_db(false)?;
+    if read_provider_route_only(&conn, &provider_id) {
+        crate::log_to_file(&format!(
+            "[claude_model] provider {provider_id} 仅路由，claude 跟随 CC Switch 现状（不改写任何配置）"
+        ));
+        return None;
+    }
+    let env = read_provider_env(&conn, &provider_id)?;
+    let mut settings = read_settings_json().unwrap_or_else(|| serde_json::json!({}));
+    settings["env"] = env;
+    let dir = std::env::temp_dir().join("kkcoder-claude-settings");
+    std::fs::create_dir_all(&dir).ok()?;
+    let path = dir.join(format!("{session_id}.json"));
+    let text = serde_json::to_string_pretty(&settings).ok()?;
+    std::fs::write(&path, text).ok()?;
+    crate::log_to_file(&format!(
+        "[claude_model] 已生成临时 settings（仅本次进程生效）: {}",
+        path.display()
+    ));
+    Some(path)
+}
+
+/// 删除某会话的临时 settings 文件（turn 收尾时调用，尽力而为）
+pub fn remove_settings_override_file(session_id: &str) {
+    let path = std::env::temp_dir()
+        .join("kkcoder-claude-settings")
+        .join(format!("{session_id}.json"));
+    let _ = std::fs::remove_file(&path);
+}
+
+/// 清理 24 小时前的临时 settings 文件（应用启动时调用，防残留堆积）
+pub fn cleanup_stale_settings_override_files() {
+    let dir = std::env::temp_dir().join("kkcoder-claude-settings");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    let cutoff = std::time::SystemTime::now()
+        .checked_sub(std::time::Duration::from_secs(24 * 3600));
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let stale = entry
+            .metadata()
+            .ok()
+            .and_then(|meta| meta.modified().ok())
+            .is_some_and(|modified| cutoff.is_none_or(|cutoff| modified < cutoff));
+        if path.extension().is_some_and(|ext| ext == "json") && stale {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
 }
 
 #[cfg(test)]

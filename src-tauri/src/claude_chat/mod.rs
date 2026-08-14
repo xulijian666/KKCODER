@@ -27,6 +27,8 @@ pub struct ActiveChatTurn {
     pub cancelled: Arc<AtomicBool>,
     /// 该 turn 使用的模型（AskUserQuestion 恢复路径沿用）
     pub model: Option<String>,
+    /// 该 turn 的临时 settings 文件（--settings，仅本次进程生效；收尾时删除）
+    pub settings_file: Option<std::path::PathBuf>,
 }
 
 /// 原生 AskUserQuestion 的待回答项：回答经 sender 回传给阻塞中的 reader 线程
@@ -107,6 +109,7 @@ impl ChatStreamEvent {
 
 /// 拼装并 spawn 一个 `claude -p` 进程，写入 stream-json 输入并关闭 stdin。
 /// `model` 为 KKCODER 全局选择的模型覆盖（None = 跟随 CC Switch 默认配置）。
+/// `settings_file` 为所选供应商的临时 settings 文件（None = 跟随 CC Switch 现状）。
 #[allow(clippy::too_many_arguments)]
 fn spawn_claude_process(
     app: &AppHandle,
@@ -118,6 +121,7 @@ fn spawn_claude_process(
     resume: bool,
     content: Vec<serde_json::Value>,
     model: Option<&str>,
+    settings_file: Option<&std::path::Path>,
 ) -> Result<(Child, std::process::ChildStdout, std::process::ChildStderr), String> {
     let ask_server =
         askuser_mcp::ensure_started(askuser_mcp, app.clone(), pending_questions.clone())?;
@@ -142,6 +146,11 @@ fn spawn_claude_process(
     if let Some(model) = model.filter(|value| !value.trim().is_empty()) {
         args.push("--model".to_string());
         args.push(model.trim().to_string());
+    }
+    if let Some(settings_file) = settings_file {
+        // 用所选供应商的临时 settings（直连），不动 ~/.claude/settings.json
+        args.push("--settings".to_string());
+        args.push(settings_file.display().to_string());
     }
 
     let mut cmd = build_claude_command(&args);
@@ -238,6 +247,9 @@ pub fn chat_send_message(
         content.push(serde_json::json!({ "type": "text", "text": text }));
     }
 
+    // 所选供应商的临时 settings 文件（直连该供应商，不碰 ~/.claude/settings.json 与 cc-switch.db）
+    let settings_file = crate::claude_model::build_settings_override_file(&model_state, &session_id);
+
     let (mut child, stdout, stderr) = spawn_claude_process(
         &app,
         state.askuser_mcp.as_ref(),
@@ -248,6 +260,7 @@ pub fn chat_send_message(
         resume,
         content,
         model.as_deref(),
+        settings_file.as_deref(),
     )?;
     let pid = child.id();
     log_session(&session_id, &format!(
@@ -269,6 +282,7 @@ pub fn chat_send_message(
                 pid,
                 cancelled: cancelled.clone(),
                 model,
+                settings_file,
             },
         );
     }
@@ -830,11 +844,15 @@ fn run_process_loop(
             kill_process_tree(child.id());
             let _ = child.wait();
             let _ = stderr_thread.join();
-            // 沿用本 turn 启动时的模型覆盖
-            let turn_model = turns
-                .lock()
-                .ok()
-                .and_then(|t| t.get(&session_id).and_then(|turn| turn.model.clone()));
+            // 沿用本 turn 启动时的模型覆盖与临时 settings 文件
+            let turn_state = {
+                let guard = turns.lock().ok();
+                guard
+                    .as_ref()
+                    .and_then(|t| t.get(&session_id))
+                    .map(|turn| (turn.model.clone(), turn.settings_file.clone()))
+            };
+            let (turn_model, turn_settings_file) = turn_state.unwrap_or((None, None));
             let content = vec![serde_json::json!({ "type": "text", "text": answer })];
             match spawn_claude_process(
                 &app,
@@ -846,6 +864,7 @@ fn run_process_loop(
                 true,
                 content,
                 turn_model.as_deref(),
+                turn_settings_file.as_deref(),
             ) {
                 Ok((new_child, new_stdout, new_stderr)) => {
                     let pid = new_child.id();
@@ -893,7 +912,8 @@ fn run_process_loop(
         }
     }
 
-    // 清理 turns（busy 释放）
+    // 清理 turns（busy 释放）+ 删除本 turn 的临时 settings 文件
+    crate::claude_model::remove_settings_override_file(&session_id);
     {
         let mut turns_guard = turns.lock().unwrap_or_else(|e| e.into_inner());
         turns_guard.remove(&session_id);

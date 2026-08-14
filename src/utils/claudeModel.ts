@@ -47,7 +47,7 @@ export function setClaudeModelBackend(model: string | null): void {
   });
 }
 
-/** 直连覆盖：选中供应商（写入 settings.json env），返回刷新后的模型信息 */
+/** 选择供应商（仅 KKCODER 内生效，不写任何外部配置），返回刷新后的模型信息 */
 export function setClaudeProviderBackend(providerId: string): Promise<ClaudeModelInfo> {
   return invoke<ClaudeModelInfo>("set_claude_provider", { providerId });
 }

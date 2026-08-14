@@ -1045,11 +1045,15 @@ fn spawn_terminal(
             .unwrap_or_default()
     };
     // 仅支持 Claude Code 助手（Pi / Codex 集成已移除）
+    // 所选供应商的临时 settings 文件（直连该供应商，不碰 ~/.claude/settings.json 与 cc-switch.db）
+    let settings_flag = crate::claude_model::build_settings_override_file(&model_state, &session_id)
+        .map(|path| format!("--settings \"{}\" ", path.display()))
+        .unwrap_or_default();
     let initial_cmd = if is_reopen {
-        format!("claude --dangerously-skip-permissions {model_flag}\r\n")
+        format!("claude --dangerously-skip-permissions {model_flag}{settings_flag}\r\n")
     } else {
         format!(
-            "claude --dangerously-skip-permissions {model_flag}--session-id \"{}\"\r\n",
+            "claude --dangerously-skip-permissions {model_flag}{settings_flag}--session-id \"{}\"\r\n",
             agent_session_id
         )
     };
@@ -3287,7 +3291,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
             use tauri::Manager;
-            
+
+            // 清理过期的临时 claude settings 文件（防残留堆积）
+            claude_model::cleanup_stale_settings_override_files();
+
             // 1. 获取默认窗口图标
             let icon = app.default_window_icon().cloned();
             

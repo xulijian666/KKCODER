@@ -292,9 +292,15 @@ function App() {
     saveSelectedModel(model);
   }, []);
 
-  // 直连覆盖：选中供应商 → 写入 settings.json env → 用返回的最新信息刷新下拉。
-  // 选了供应商就定死用它的默认映射，清空手动指定的模型（新供应商的模型名可能不同）
+  // 选择供应商：只记录到 KKCODER 自己（内存 + localStorage），不写任何外部配置。
+  // 启动 claude 时用所选供应商 env 生成临时 settings 文件（--settings 直连），
+  // ~/.claude/settings.json 与 cc-switch.db 保持原样（避免 CC Switch 回写污染）。
+  // 仅路由供应商（routeOnly）claude 无法直连，提示改用 CC Switch。
   const handleSelectProvider = useCallback((providerId: string) => {
+    const routeOnly = modelInfo?.providers.find((p) => p.id === providerId)?.routeOnly;
+    if (routeOnly) {
+      notifyWarning("该供应商需要 CC Switch 路由代理才能使用，选择后仍由 CC Switch 当前配置转发；请在 CC Switch 中切换该供应商");
+    }
     setSelectedModel(null);
     setClaudeModelBackend(null);
     saveSelectedModel(null);
@@ -304,11 +310,10 @@ function App() {
         setModelInfo(info);
       })
       .catch((err) => {
-        // 写入失败（如权限/端口占用）：刷新并提示原因
         refreshModelInfo();
-        notifyWarning(formatFeedbackError(err, "切换供应商失败"));
+        notifyWarning(formatFeedbackError(err, "选择供应商失败"));
       });
-  }, [refreshModelInfo]);
+  }, [refreshModelInfo, modelInfo?.providers]);
 
   const {
     width: projectTreeWidth,

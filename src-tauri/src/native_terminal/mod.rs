@@ -140,9 +140,13 @@ pub fn spawn_compat_terminal(
             .map_err(|error| error.to_string())?;
         guard.clone()
     };
+    // 所选供应商的临时 settings 文件（直连该供应商，不碰 ~/.claude/settings.json 与 cc-switch.db）
+    let settings_file =
+        crate::claude_model::build_settings_override_file(&model_state, &session_id);
     let claude_command = format!(
         "claude {}\r\n",
-        build_claude_args(is_reopen, &agent_session_id, model.as_deref()).join(" ")
+        build_claude_args(is_reopen, &agent_session_id, model.as_deref(), settings_file.as_deref())
+            .join(" ")
     );
     crate::log_session(&session_id, &format!("[native_terminal] spawn claude: {}", claude_command.trim_end()));
     std::thread::sleep(std::time::Duration::from_millis(300));
