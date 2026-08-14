@@ -507,14 +507,14 @@ ${pushInstruction}`;
               <div className="git-conflict-modal-footer">
                 <button
                   type="button"
-                  className="git-conflict-btn-cancel"
+                  className="git-conflict-btn-secondary"
                   onClick={() => setConflictData(null)}
                 >
                   稍后自行处理
                 </button>
                 <button
                   type="button"
-                  className="git-conflict-btn-ai"
+                  className="git-conflict-btn-primary"
                   onClick={handleResolveConflictWithAi}
                 >
                   <Sparkles size={13} />
@@ -558,15 +558,14 @@ ${pushInstruction}`;
               <div className="git-conflict-modal-footer">
                 <button
                   type="button"
-                  className="git-conflict-btn-cancel"
+                  className="git-conflict-btn-secondary"
                   onClick={() => setSwitchBlockData(null)}
                 >
                   取消
                 </button>
                 <button
                   type="button"
-                  className="branch-action-btn branch-smart-commit-btn"
-                  style={{ padding: "6px 12px", fontSize: "12px", borderRadius: "6px" }}
+                  className="git-conflict-btn-secondary"
                   onClick={handleAiCommitBeforeSwitch}
                   title="发送提示词让 AI 整理并提交当前代码，随后切换分支"
                 >
@@ -575,7 +574,7 @@ ${pushInstruction}`;
                 </button>
                 <button
                   type="button"
-                  className="git-conflict-btn-ai"
+                  className="git-conflict-btn-primary"
                   onClick={handleStashAndSwitch}
                   disabled={stashingSwitch}
                   title="执行 git stash 暂存修改并切换至目标分支"

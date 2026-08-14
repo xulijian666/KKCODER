@@ -6553,43 +6553,48 @@ body.preview-resizing .preview-resize-handle::after {
   gap: 10px;
   padding: 12px 18px;
   border-top: 1px solid var(--border-color);
-  background: var(--bg-sidebar);
+  background: color-mix(in srgb, var(--bg-sidebar) 75%, var(--bg-main));
 }
-.git-conflict-btn-cancel {
-  padding: 6px 12px;
-  font-size: 12px;
-  font-weight: 500;
+.git-conflict-modal-footer button {
+  min-height: 32px;
+  padding: 0 14px;
   border-radius: 7px;
-  border: 1px solid var(--border-color);
-  background: var(--bg-main);
-  color: var(--text-secondary);
-  cursor: pointer;
-}
-.git-conflict-btn-cancel:hover {
-  background-color: var(--bg-hover-item);
-  color: var(--text-primary);
-}
-.git-conflict-btn-ai {
+  font-size: 12.5px;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
-  padding: 6px 14px;
-  font-size: 12.5px;
-  font-weight: 600;
-  border-radius: 7px;
-  border: none;
+  cursor: pointer;
+  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.git-conflict-modal-footer button:active {
+  transform: translateY(0) scale(0.98);
+}
+.git-conflict-btn-secondary {
+  border: 1px solid var(--border-color);
+  background: var(--bg-main);
+  color: var(--text-primary);
+  font-weight: 500;
+}
+.git-conflict-btn-secondary:hover:not(:disabled) {
+  background-color: var(--bg-hover-item);
+  border-color: color-mix(in srgb, var(--text-primary) 25%, var(--border-color));
+}
+.git-conflict-btn-primary {
+  border: 1px solid var(--color-primary);
   background: var(--color-primary);
   color: #ffffff;
-  cursor: pointer;
-  box-shadow: 0 2px 8px color-mix(in srgb, var(--color-primary) 30%, transparent);
-  transition: all 0.15s ease;
+  font-weight: 600;
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--color-primary) 25%, transparent);
 }
-.git-conflict-btn-ai:hover {
-  filter: brightness(1.07);
+.git-conflict-btn-primary:hover:not(:disabled) {
+  background: var(--color-primary-hover, var(--color-primary));
+  box-shadow: 0 3px 12px color-mix(in srgb, var(--color-primary) 35%, transparent);
   transform: translateY(-1px);
 }
-.git-conflict-btn-ai:active {
-  transform: translateY(0);
+.git-conflict-modal-footer button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .chat-spin-icon {
   animation: chat-spin 0.8s linear infinite;
