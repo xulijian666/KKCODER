@@ -5,9 +5,11 @@ import {
   shouldUseGuiChat,
 } from "./interactionMode.ts";
 
-test("defaults Claude interaction mode to CLI", () => {
-  assert.equal(resolveClaudeInteractionMode(null), "cli");
-  assert.equal(resolveClaudeInteractionMode("unexpected"), "cli");
+test("defaults Claude interaction mode to GUI", () => {
+  assert.equal(resolveClaudeInteractionMode(null), "gui");
+  assert.equal(resolveClaudeInteractionMode("unexpected"), "gui");
+  assert.equal(resolveClaudeInteractionMode("cli"), "cli");
+  assert.equal(resolveClaudeInteractionMode("gui"), "gui");
 });
 
 test("routes only Claude sessions to GUI chat", () => {
