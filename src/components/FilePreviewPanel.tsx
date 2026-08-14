@@ -188,53 +188,6 @@ function resolvePreviewContainer(): HTMLElement | null {
   return panel?.parentElement ?? null;
 }
 
-function getLineNumberFromNode(node: Node | null): number | null {
-  let current: HTMLElement | null = node as HTMLElement;
-  while (current && current !== document.body) {
-    if (current.classList?.contains("preview-code-line")) {
-      const attribute = current.getAttribute("data-line");
-      return attribute ? parseInt(attribute, 10) : null;
-    }
-    current = current.parentElement;
-  }
-  return null;
-}
-
-function getSelectionLineRange(selection: Selection): { startLine: number; endLine: number } | null {
-  let startLine = Infinity;
-  let endLine = -Infinity;
-
-  const anchorLine = getLineNumberFromNode(selection.anchorNode);
-  const focusLine = getLineNumberFromNode(selection.focusNode);
-
-  if (anchorLine !== null) {
-    startLine = Math.min(startLine, anchorLine);
-    endLine = Math.max(endLine, anchorLine);
-  }
-  if (focusLine !== null) {
-    startLine = Math.min(startLine, focusLine);
-    endLine = Math.max(endLine, focusLine);
-  }
-
-  try {
-    document.querySelectorAll(".preview-code-line").forEach((lineElement) => {
-      if (selection.containsNode(lineElement, true)) {
-        const attribute = lineElement.getAttribute("data-line");
-        if (attribute) {
-          const lineNumber = parseInt(attribute, 10);
-          startLine = Math.min(startLine, lineNumber);
-          endLine = Math.max(endLine, lineNumber);
-        }
-      }
-    });
-  } catch {
-    // Selection APIs can throw on detached nodes.
-  }
-
-  if (startLine === Infinity || endLine === -Infinity) return null;
-  return { startLine, endLine };
-}
-
 export interface UseFilePreviewOptions {
   projectPath: string | undefined;
   activeSessionId: string;

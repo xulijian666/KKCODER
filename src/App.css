@@ -1683,7 +1683,7 @@ body.terminal-split-resizing .terminal-pane-host {
   user-select: none;
 }
 .settings-page-head-inner {
-  width: min(100%, 760px);
+  width: min(100%, 980px);
 }
 .settings-page-title {
   margin: 0;
@@ -1712,7 +1712,8 @@ body.terminal-split-resizing .terminal-pane-host {
   display: flex;
   flex-direction: column;
   gap: 28px;
-  max-width: 760px;
+  /* 对齐 CC-GUI --settings-content-fixed-width: 980px，避免宽窗口右侧大片留白 */
+  max-width: 980px;
 }
 
 .settings-section {
@@ -1765,6 +1766,292 @@ body.terminal-split-resizing .terminal-pane-host {
   line-height: 1.5;
   color: var(--text-secondary);
 }
+
+/* ==================== 基础设置 pref 体系（参考 CC-GUI：分组卡片 + Preference Row 高密度） ==================== */
+.settings-basic-surface {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px 16px;
+  align-items: start;
+  max-width: 980px;
+}
+
+/* 宽屏（内容区 ≥1120px）时分组卡片横向双列排布，充分利用右侧空间 */
+@media (min-width: 1120px) {
+  .settings-basic-surface {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* 分组：卡片标签 + 卡片 */
+.settings-pref-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* 卡片分组标签：小图标 + 大写标题 */
+.settings-pref-card-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  padding: 2px 2px 0;
+  user-select: none;
+}
+
+/* 分组卡片：一块外壳 + 内部 hairline 分割，避免层层套卡 */
+.settings-pref-card {
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-main);
+  overflow: hidden;
+}
+
+/* Preference Row：左标题+说明，右控件，一行一设置的高密度布局 */
+.settings-pref-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px 24px;
+  align-items: center;
+  min-height: 60px;
+  padding: 12px 16px;
+  border-top: 1px solid color-mix(in srgb, var(--border-color) 82%, transparent);
+}
+.settings-pref-card > .settings-pref-row:first-child {
+  border-top: none;
+}
+
+/* Stack 行：主行信息 + 下方展开控件/提示（如自定义配色 JSON） */
+.settings-pref-row--stack {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  min-height: 0;
+}
+
+.settings-pref-meta {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.settings-pref-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+}
+.settings-pref-desc {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  max-width: 52ch;
+}
+.settings-pref-hint {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.settings-pref-control {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+}
+.settings-pref-control--stretch {
+  min-width: min(420px, 60%);
+}
+
+/* Segmented control：浅轨 + 选中 pill（参考 CC-GUI settings-pref-segmented） */
+.settings-pref-segmented {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 8px;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border-color);
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+.settings-pref-segment {
+  appearance: none;
+  -webkit-appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 6px 11px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background-color 130ms ease,
+    color 130ms ease,
+    box-shadow 130ms ease;
+}
+.settings-pref-segment:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+.settings-pref-segment.is-active {
+  /* 选中 pill 用主题感知表面色（浅色=白，深色=亮面），与 agent 切换器滑块一致 */
+  background: var(--bg-agent-slider);
+  color: var(--text-primary);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+.settings-pref-segment.is-disabled,
+.settings-pref-segment:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* 主题色板在 pref 行中限宽换行，避免撑爆右列挤压左标题 */
+.settings-pref-control .theme-grid {
+  max-width: 300px;
+}
+
+/* 宽屏双列卡片内：宽控件行自动纵向（标题在上、控件在下），避免挤压 */
+@media (min-width: 1120px) {
+  .settings-basic-surface .settings-pref-row:has(.theme-grid),
+  .settings-basic-surface .settings-pref-row:has(.settings-pref-path) {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .settings-basic-surface .settings-pref-row:has(.theme-grid) .settings-pref-control,
+  .settings-basic-surface .settings-pref-row:has(.settings-pref-path) .settings-pref-control {
+    justify-content: flex-start;
+  }
+  .settings-basic-surface .settings-pref-path {
+    min-width: 0;
+  }
+}
+
+
+/* Slider 行：固定宽度右列，等宽数值 */
+.settings-pref-slider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 250px;
+  max-width: 100%;
+}
+.settings-pref-value {
+  flex: 0 0 auto;
+  min-width: 54px;
+  text-align: right;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+/* 数字输入 + 步进器 + 范围提示 */
+.settings-pref-number {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.settings-pref-helper {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+/* 路径输入行 */
+.settings-pref-path {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 340px;
+}
+
+/* 轻量动作按钮 */
+.settings-pref-btn {
+  flex-shrink: 0;
+  padding: 5px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-sidebar);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background-color 130ms ease,
+    border-color 130ms ease;
+}
+.settings-pref-btn:hover {
+  background: var(--bg-hover-item);
+  border-color: var(--color-primary, #3b82f6);
+}
+.settings-pref-btn--primary {
+  border-color: var(--color-primary, #3b82f6);
+  background: var(--color-primary, #3b82f6);
+  color: #ffffff;
+}
+.settings-pref-btn--primary:hover {
+  background: var(--color-primary, #3b82f6);
+  filter: brightness(1.07);
+  border-color: var(--color-primary, #3b82f6);
+}
+
+.settings-pref-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* 状态提示徽标（成功/错误） */
+.settings-pref-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  line-height: 1;
+  padding: 4px 9px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.settings-pref-status--ok {
+  color: #16a34a;
+  background: color-mix(in srgb, #16a34a 10%, transparent);
+}
+.settings-pref-status--error {
+  color: #ef4444;
+  background: color-mix(in srgb, #ef4444 10%, transparent);
+}
+
+/* 窄窗口：pref 行换列，控件左对齐 */
+@media (max-width: 900px) {
+  .settings-pref-row {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  .settings-pref-control {
+    justify-content: flex-start;
+  }
+  .settings-pref-path {
+    min-width: 0;
+  }
+}
+
 
 .settings-inline-actions {
   display: flex;
@@ -1910,13 +2197,17 @@ body.terminal-split-resizing .terminal-pane-host {
 }
 
 .settings-shortcut-list {
+  display: flex;
+  flex-direction: column;
   gap: 8px;
+  width: 100%;
 }
 
 .settings-shortcut-row {
   display: flex;
   gap: 8px;
   align-items: center;
+  width: 100%;
 }
 
 .settings-shortcut-index {
@@ -4799,23 +5090,19 @@ body.preview-resizing .preview-resize-handle::after {
   }
 }
 
-/* 目录跳转后的标题闪烁定位动画 */
+/* 目录跳转后的标题高亮定位动画：点击立即高亮，停留片刻后缓慢淡出，不闪烁 */
 .md-heading-flash {
-  animation: markdownHeadingFlash 1.3s ease-out;
+  animation: markdownHeadingFlash 2.4s ease-out;
   border-radius: 3px;
 }
 
 @keyframes markdownHeadingFlash {
   0% {
-    background-color: transparent;
-  }
-  15%,
-  40%,
-  65% {
     background-color: rgba(249, 115, 22, 0.35);
   }
-  27%,
-  52%,
+  55% {
+    background-color: rgba(249, 115, 22, 0.35);
+  }
   100% {
     background-color: transparent;
   }

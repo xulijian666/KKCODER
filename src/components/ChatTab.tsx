@@ -1735,7 +1735,7 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
     let result = text;
     for (const item of pastedTextsRef.current) {
       const label = `[Pasted text #${item.id} +${item.lines} lines]`;
-      result = result.replaceAll(label, buildPasteWrapped(item));
+      result = result.split(label).join(buildPasteWrapped(item));
     }
     return result;
   };
@@ -1746,7 +1746,7 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
     let result = text;
     for (const item of pastedTextsRef.current) {
       const label = `[Pasted text #${item.id} +${item.lines} lines]`;
-      result = result.replaceAll(buildPasteWrapped(item), label);
+      result = result.split(buildPasteWrapped(item)).join(label);
     }
     return result;
   };

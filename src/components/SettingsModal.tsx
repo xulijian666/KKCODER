@@ -1,3 +1,4 @@
+// 设置面板：左侧精简导航 + 右侧 CC-GUI 风格 pref 布局
 import React, { useState, useEffect, useCallback } from "react";
 import {
   ArrowLeft,
@@ -9,6 +10,7 @@ import {
   Info,
   Keyboard,
   Palette,
+  Settings,
   TerminalSquare,
   type LucideIcon,
 } from "lucide-react";
@@ -65,11 +67,7 @@ interface RenameResult {
 
 
 type SettingsMenuId =
-  | "appearance"
-  | "agents"
-  | "terminal"
-  | "notifications"
-  | "shortcuts"
+  | "basic"
   | "sessions"
   | "remote"
   | "debug"
@@ -83,26 +81,18 @@ interface SettingsMenuEntry {
 }
 
 const SETTINGS_MENU: SettingsMenuEntry[] = [
-  { id: "appearance", label: "外观", group: "基础设置", description: "主题、语言与窗口行为" },
-  { id: "agents", label: "AI 助手", group: "基础设置", description: "启用的助手与交互模式" },
-  { id: "terminal", label: "终端", group: "基础设置", description: "终端外观与运行行为" },
-  { id: "notifications", label: "通知", group: "基础设置", description: "回答完成提醒与提示音" },
-  { id: "shortcuts", label: "快捷短语", group: "工作区", description: "常用短语一键发送" },
+  { id: "basic", label: "基础", group: "基础设置", description: "外观、AI 助手、终端、通知与快捷短语等常用设置" },
   { id: "sessions", label: "会话", group: "管理", description: "会话清理、自动命名与远程管理入口" },
   { id: "remote", label: "远程", group: "管理", description: "远程访问 / FRP / 设备配对" },
   { id: "debug", label: "调试", group: "其他", description: "调试日志开关与一键清理" },
   { id: "about", label: "关于", group: "其他", description: "版本信息与致谢" },
 ];
 
-const SETTINGS_GROUPS = ["基础设置", "工作区", "管理", "其他"] as const;
+const SETTINGS_GROUPS = ["基础设置", "管理", "其他"] as const;
 
 /** 左侧菜单项图标（对齐 CC-GUI settings-nav 带图标样式） */
 const SETTINGS_NAV_ICONS: Record<SettingsMenuId, LucideIcon> = {
-  appearance: Palette,
-  agents: Bot,
-  terminal: TerminalSquare,
-  notifications: Bell,
-  shortcuts: Keyboard,
+  basic: Settings,
   sessions: FolderKanban,
   remote: Globe,
   debug: Bug,
@@ -117,7 +107,7 @@ interface SettingsModalProps {
 
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onSessionsRenamed }) => {
-  const [activeMenu, setActiveMenu] = useState<SettingsMenuId>("appearance");
+  const [activeMenu, setActiveMenu] = useState<SettingsMenuId>("basic");
   const [showFilePicker, setShowFilePicker] = useState(false);
   // 返回应用：先播放退场动画再真正关闭（丝滑返回）
   const [closing, setClosing] = useState(false);
@@ -662,236 +652,285 @@ return (
           </div>
 
           <div className="settings-scroll">
-            {activeMenu === "appearance" && (
-              <div className="settings-content">
-                <section className="settings-section">
-                  <div className="settings-section-head">
-                    <h3 className="settings-section-title">主题</h3>
-                    <p className="settings-section-desc">界面配色，切换后即时生效</p>
-                  </div>
-                  <div className="settings-group">
-                    <div className="theme-grid">
-                      <div className={`theme-box dark-blue-box ${theme === "dark-blue" ? "checked" : ""}`} onClick={() => setTheme("dark-blue")} title="深蓝主题">
-                        <div className="theme-dot" style={{ backgroundColor: "#3b82f6" }} />
-                      </div>
-                      <div className={`theme-box dark-purple-box ${theme === "dark-purple" ? "checked" : ""}`} onClick={() => setTheme("dark-purple")} title="暗紫主题">
-                        <div className="theme-dot" style={{ backgroundColor: "#8b5cf6" }} />
-                      </div>
-                      <div className={`theme-box dark-zinc-box ${theme === "dark-zinc" ? "checked" : ""}`} onClick={() => setTheme("dark-zinc")} title="碳黑主题">
-                        <div className="theme-dot" style={{ backgroundColor: "#f59e0b" }} />
-                      </div>
-                      <div className={`theme-box light-blue-box ${theme === "light-blue" ? "checked" : ""}`} onClick={() => setTheme("light-blue")} title="冰蓝主题">
-                        <div className="theme-dot" style={{ backgroundColor: "#3b82f6" }} />
-                      </div>
-                      <div className={`theme-box light-orange-box ${theme === "light-orange" ? "checked" : ""}`} onClick={() => setTheme("light-orange")} title="蜜橘主题">
-                        <div className="theme-dot" style={{ backgroundColor: "#ea580c" }} />
-                      </div>
-                      <div className={`theme-box light-premium-box ${theme === "light-premium" ? "checked" : ""}`} onClick={() => setTheme("light-premium")} title="经典高雅">
-                        <div className="theme-dot" style={{ backgroundColor: "#2563eb" }} />
-                        {theme === "light-premium" && <span className="theme-checkmark">✓</span>}
-                      </div>
-                      <div className={`theme-box auto-box ${theme === "auto" ? "checked" : ""}`} onClick={() => setTheme("auto")} title="跟随系统">
-                        <span className="auto-text">Auto</span>
+            {activeMenu === "basic" && (
+              <div className="settings-content settings-basic-surface">
+                <div className="settings-pref-group">
+                <div className="settings-pref-card-label">
+                  <Palette size={12} aria-hidden />
+                  <span>外观</span>
+                </div>
+                <div className="settings-pref-card">
+                  <div className="settings-pref-row">
+                    <div className="settings-pref-meta">
+                      <div className="settings-pref-title">主题</div>
+                      <div className="settings-pref-desc">界面配色，切换后即时生效</div>
+                    </div>
+                    <div className="settings-pref-control">
+                      <div className="theme-grid">
+                        <div className={`theme-box dark-blue-box ${theme === "dark-blue" ? "checked" : ""}`} onClick={() => setTheme("dark-blue")} title="深蓝主题">
+                          <div className="theme-dot" style={{ backgroundColor: "#3b82f6" }} />
+                        </div>
+                        <div className={`theme-box dark-purple-box ${theme === "dark-purple" ? "checked" : ""}`} onClick={() => setTheme("dark-purple")} title="暗紫主题">
+                          <div className="theme-dot" style={{ backgroundColor: "#8b5cf6" }} />
+                        </div>
+                        <div className={`theme-box dark-zinc-box ${theme === "dark-zinc" ? "checked" : ""}`} onClick={() => setTheme("dark-zinc")} title="碳黑主题">
+                          <div className="theme-dot" style={{ backgroundColor: "#f59e0b" }} />
+                        </div>
+                        <div className={`theme-box light-blue-box ${theme === "light-blue" ? "checked" : ""}`} onClick={() => setTheme("light-blue")} title="冰蓝主题">
+                          <div className="theme-dot" style={{ backgroundColor: "#3b82f6" }} />
+                        </div>
+                        <div className={`theme-box light-orange-box ${theme === "light-orange" ? "checked" : ""}`} onClick={() => setTheme("light-orange")} title="蜜橘主题">
+                          <div className="theme-dot" style={{ backgroundColor: "#ea580c" }} />
+                        </div>
+                        <div className={`theme-box light-premium-box ${theme === "light-premium" ? "checked" : ""}`} onClick={() => setTheme("light-premium")} title="经典高雅">
+                          <div className="theme-dot" style={{ backgroundColor: "#2563eb" }} />
+                          {theme === "light-premium" && <span className="theme-checkmark">✓</span>}
+                        </div>
+                        <div className={`theme-box auto-box ${theme === "auto" ? "checked" : ""}`} onClick={() => setTheme("auto")} title="跟随系统">
+                          <span className="auto-text">Auto</span>
+                        </div>
                       </div>
                     </div>
                   </div>
-                </section>
-
-                <section className="settings-section">
-                  <div className="settings-section-head">
-                    <h3 className="settings-section-title">语言</h3>
-                    <p className="settings-section-desc">界面语言（更多语言即将支持）</p>
-                  </div>
-                  <div className="settings-group">
-                    <div className="settings-btn-group">
-                      <button type="button" className="settings-toggle-btn active">简体中文</button>
-                      <button type="button" className="settings-toggle-btn disabled" title="English 暂不可选" disabled>
-                        English
-                      </button>
+                  <div className="settings-pref-row">
+                    <div className="settings-pref-meta">
+                      <div className="settings-pref-title">界面语言</div>
+                      <div className="settings-pref-desc">更多语言即将支持</div>
+                    </div>
+                    <div className="settings-pref-control">
+                      <div className="settings-pref-segmented">
+                        <button type="button" className="settings-pref-segment is-active">简体中文</button>
+                        <button type="button" className="settings-pref-segment is-disabled" title="English 暂不可选" disabled>
+                          English
+                        </button>
+                      </div>
                     </div>
                   </div>
-                </section>
-
-                <section className="settings-section">
-                  <div className="settings-section-head">
-                    <h3 className="settings-section-title">窗口</h3>
-                    <p className="settings-section-desc">关闭主窗口时的行为</p>
-                  </div>
-                  <div className="settings-group">
-                    <div className="settings-btn-group">
-                      <button type="button" className={`settings-toggle-btn ${closeBehavior === "ask" ? "active" : ""}`} onClick={() => setCloseBehavior("ask")}>
-                        每次询问
-                      </button>
-                      <button type="button" className={`settings-toggle-btn ${closeBehavior === "minimize" ? "active" : ""}`} onClick={() => setCloseBehavior("minimize")}>
-                        最小化到托盘
-                      </button>
-                      <button type="button" className={`settings-toggle-btn ${closeBehavior === "exit" ? "active" : ""}`} onClick={() => setCloseBehavior("exit")}>
-                        直接退出
-                      </button>
+                  <div className="settings-pref-row">
+                    <div className="settings-pref-meta">
+                      <div className="settings-pref-title">关闭窗口时</div>
+                      <div className="settings-pref-desc">关闭主窗口时的行为</div>
+                    </div>
+                    <div className="settings-pref-control">
+                      <div className="settings-pref-segmented">
+                        <button
+                          type="button"
+                          className={`settings-pref-segment ${closeBehavior === "ask" ? "is-active" : ""}`}
+                          onClick={() => setCloseBehavior("ask")}
+                        >
+                          每次询问
+                        </button>
+                        <button
+                          type="button"
+                          className={`settings-pref-segment ${closeBehavior === "minimize" ? "is-active" : ""}`}
+                          onClick={() => setCloseBehavior("minimize")}
+                        >
+                          最小化到托盘
+                        </button>
+                        <button
+                          type="button"
+                          className={`settings-pref-segment ${closeBehavior === "exit" ? "is-active" : ""}`}
+                          onClick={() => setCloseBehavior("exit")}
+                        >
+                          直接退出
+                        </button>
+                      </div>
                     </div>
                   </div>
-                </section>
-              </div>
-            )}
+                </div>
+                </div>
 
-            {activeMenu === "agents" && (
-              <div className="settings-content">
-                <section className="settings-section">
-                  <div className="settings-section-head">
-                    <h3 className="settings-section-title">启用的助手</h3>
-                    <p className="settings-section-desc">本应用专注 Claude Code 单一助手（Pi / Codex 集成已移除）</p>
-                  </div>
-                  <div className="settings-group">
-                    <div className="settings-switch-row">
+                <div className="settings-pref-group">
+                <div className="settings-pref-card-label">
+                  <Bot size={12} aria-hidden />
+                  <span>AI 助手</span>
+                </div>
+                <div className="settings-pref-card">
+                  <div className="settings-pref-row">
+                    <div className="settings-pref-meta">
+                      <div className="settings-pref-title">Claude Code</div>
+                      <div className="settings-pref-desc">本应用专注 Claude Code 单一助手（Pi / Codex 集成已移除）</div>
+                    </div>
+                    <div className="settings-pref-control">
                       <label className="switch-container">
                         <input type="checkbox" checked disabled />
                         <span className="switch-slider" />
                       </label>
-                      <span className="switch-label">Claude Code（始终启用）</span>
                     </div>
                   </div>
-                </section>
-
-                <section className="settings-section">
-                  <div className="settings-section-head">
-                    <h3 className="settings-section-title">Claude 交互模式</h3>
-                    <p className="settings-section-desc">CLI 为原始终端界面；GUI 为聊天式界面，仅影响新打开的 Claude 标签</p>
-                  </div>
-                  <div className="settings-group">
-                    <div className="settings-btn-group">
-                      <button
-                        type="button"
-                        className={`settings-toggle-btn ${claudeInteractionMode === "cli" ? "active" : ""}`}
-                        onClick={() => setClaudeInteractionMode("cli")}
-                      >
-                        CLI 终端
-                      </button>
-                      <button
-                        type="button"
-                        className={`settings-toggle-btn ${claudeInteractionMode === "gui" ? "active" : ""}`}
-                        onClick={() => setClaudeInteractionMode("gui")}
-                      >
-                        GUI 聊天
-                      </button>
+                  <div className="settings-pref-row">
+                    <div className="settings-pref-meta">
+                      <div className="settings-pref-title">交互模式</div>
+                      <div className="settings-pref-desc">CLI 为原始终端界面；GUI 为聊天式界面，仅影响新打开的 Claude 标签</div>
                     </div>
-                  </div>
-                  <div className="settings-switch-row">
-                    <label className="switch-container">
-                      <input
-                        type="checkbox"
-                        checked={collapseToolCards}
-                        onChange={(e) => setCollapseToolCards(e.target.checked)}
-                      />
-                      <span className="switch-slider" />
-                    </label>
-                    <span className="switch-label">命令记录自动折叠（多条命令时折叠为一行摘要）</span>
-                  </div>
-                  <div className="settings-switch-row">
-                    <label className="switch-container">
-                      <input
-                        type="checkbox"
-                        checked={splitReasoning}
-                        onChange={(e) => setSplitReasoning(e.target.checked)}
-                      />
-                      <span className="switch-slider" />
-                    </label>
-                    <span className="switch-label">分开显示多段思考（被工具调用打断的思考各自成块；关闭则合并为一块）</span>
-                  </div>
-                </section>
-              </div>
-            )}
-
-            {activeMenu === "terminal" && (
-              <div className="settings-content">
-                <section className="settings-section">
-                  <div className="settings-section-head">
-                    <h3 className="settings-section-title">字体与字号</h3>
-                    <p className="settings-section-desc">终端画布显示，切换后对新输出与重绘立即生效</p>
-                  </div>
-                  <div className="settings-group">
-                    <div className="settings-group-label">字体</div>
-                    <div className="settings-btn-group">
-                      {(["Cascadia Mono", "Fira Code", "Consolas", "monospace"] as const).map((family) => (
+                    <div className="settings-pref-control">
+                      <div className="settings-pref-segmented">
                         <button
-                          key={family}
                           type="button"
-                          className={`settings-toggle-btn ${fontFamily === family ? "active" : ""}`}
-                          onClick={() => setFontFamily(family)}
+                          className={`settings-pref-segment ${claudeInteractionMode === "cli" ? "is-active" : ""}`}
+                          onClick={() => setClaudeInteractionMode("cli")}
                         >
-                          {family === "monospace" ? "System" : family}
+                          CLI 终端
                         </button>
-                      ))}
+                        <button
+                          type="button"
+                          className={`settings-pref-segment ${claudeInteractionMode === "gui" ? "is-active" : ""}`}
+                          onClick={() => setClaudeInteractionMode("gui")}
+                        >
+                          GUI 聊天
+                        </button>
+                      </div>
                     </div>
                   </div>
-                  <div className="settings-group">
-                    <div className="settings-group-label">字号</div>
-                    <div className="slider-row">
-                      <input type="range" min="11.0" max="22.0" step="0.5" className="settings-slider" value={fontSize} onChange={(e) => setFontSize(parseFloat(e.target.value))} />
-                      <span className="slider-value">{fontSize.toFixed(1)}px</span>
+                  <div className="settings-pref-row">
+                    <div className="settings-pref-meta">
+                      <div className="settings-pref-title">命令记录自动折叠</div>
+                      <div className="settings-pref-desc">多条命令时折叠为一行摘要，聊天更紧凑</div>
                     </div>
-                  </div>
-                </section>
-
-                <section className="settings-section">
-                  <div className="settings-section-head">
-                    <h3 className="settings-section-title">终端配色</h3>
-                    <p className="settings-section-desc">默认跟随 App 主题；可粘贴 Windows Terminal 配色 JSON</p>
-                  </div>
-                  <div className="settings-group">
-                    <div className="settings-btn-group">
-                      <button type="button" className={`settings-toggle-btn ${terminalSchemeMode === "default" ? "active" : ""}`} onClick={() => { setTerminalSchemeMode("default"); setTerminalSchemeError(""); }}>
-                        默认
-                      </button>
-                      <button type="button" className={`settings-toggle-btn ${terminalSchemeMode === "custom" ? "active" : ""}`} onClick={() => setTerminalSchemeMode("custom")}>
-                        自定义{terminalSchemeName ? ` · ${terminalSchemeName}` : ""}
-                      </button>
-                    </div>
-                    {terminalSchemeMode === "custom" && (
-                      <>
-                        <div className="settings-helper-text">
-                          支持 windowsterminalthemes.dev 导出格式，普通模式与兼容模式均生效。
-                        </div>
-                        <textarea
-                          className="settings-textarea"
-                          value={terminalSchemeJson}
-                          onChange={(e) => { setTerminalSchemeJson(e.target.value); setTerminalSchemeError(""); }}
-                          placeholder={'{\n  "name": "Alabaster",\n  "background": "#f7f7f7",\n  ...\n}'}
-                          rows={8}
+                    <div className="settings-pref-control">
+                      <label className="switch-container">
+                        <input
+                          type="checkbox"
+                          checked={collapseToolCards}
+                          onChange={(e) => setCollapseToolCards(e.target.checked)}
                         />
-                        <div className="settings-inline-actions">
-                          <button type="button" className="settings-toggle-btn active" onClick={applyCustomScheme}>应用配色</button>
-                          <button
-                            type="button"
-                            className="settings-toggle-btn"
-                            onClick={() => {
-                              setTerminalSchemeJson("");
-                              setTerminalSchemeName("");
-                              setTerminalSchemeError("");
-                              localStorage.removeItem(TERMINAL_SCHEME_JSON_KEY);
-                              setTerminalSchemeMode("default");
-                            }}
-                          >
-                            清除
-                          </button>
-                          {terminalSchemeError ? (
-                            <span className="settings-status settings-status-error">{terminalSchemeError}</span>
-                          ) : terminalSchemeName ? (
-                            <span className="settings-status settings-status-ok">已应用：{terminalSchemeName}</span>
-                          ) : null}
-                        </div>
-                      </>
-                    )}
-                  </div>
-                </section>
-
-                {/Windows/i.test(navigator.userAgent) && (
-                  <section className="settings-section">
-                    <div className="settings-section-head">
-                      <h3 className="settings-section-title">Claude 兼容模式</h3>
-                      <p className="settings-section-desc">仅影响新打开的 Claude 标签</p>
+                        <span className="switch-slider" />
+                      </label>
                     </div>
-                    <div className="settings-group">
-                      <div className="settings-switch-row">
+                  </div>
+                  <div className="settings-pref-row">
+                    <div className="settings-pref-meta">
+                      <div className="settings-pref-title">分开显示多段思考</div>
+                      <div className="settings-pref-desc">被工具调用打断的思考各自成块；关闭则合并为一块</div>
+                    </div>
+                    <div className="settings-pref-control">
+                      <label className="switch-container">
+                        <input
+                          type="checkbox"
+                          checked={splitReasoning}
+                          onChange={(e) => setSplitReasoning(e.target.checked)}
+                        />
+                        <span className="switch-slider" />
+                      </label>
+                    </div>
+                  </div>
+                </div>
+                </div>
+
+                <div className="settings-pref-group">
+                <div className="settings-pref-card-label">
+                  <TerminalSquare size={12} aria-hidden />
+                  <span>终端</span>
+                </div>
+                <div className="settings-pref-card">
+                  <div className="settings-pref-row">
+                    <div className="settings-pref-meta">
+                      <div className="settings-pref-title">字体</div>
+                      <div className="settings-pref-desc">终端画布显示，切换后对新输出与重绘立即生效</div>
+                    </div>
+                    <div className="settings-pref-control">
+                      <div className="settings-pref-segmented">
+                        {(["Cascadia Mono", "Fira Code", "Consolas", "monospace"] as const).map((family) => (
+                          <button
+                            key={family}
+                            type="button"
+                            className={`settings-pref-segment ${fontFamily === family ? "is-active" : ""}`}
+                            onClick={() => setFontFamily(family)}
+                          >
+                            {family === "monospace" ? "System" : family}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="settings-pref-row">
+                    <div className="settings-pref-meta">
+                      <div className="settings-pref-title">字号</div>
+                      <div className="settings-pref-desc">终端字体大小</div>
+                    </div>
+                    <div className="settings-pref-control">
+                      <div className="settings-pref-slider">
+                        <input
+                          type="range"
+                          min="11.0"
+                          max="22.0"
+                          step="0.5"
+                          className="settings-slider"
+                          value={fontSize}
+                          onChange={(e) => setFontSize(parseFloat(e.target.value))}
+                        />
+                        <span className="settings-pref-value">{fontSize.toFixed(1)}px</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="settings-pref-row">
+                    <div className="settings-pref-meta">
+                      <div className="settings-pref-title">终端配色</div>
+                      <div className="settings-pref-desc">默认跟随 App 主题；可粘贴 Windows Terminal 配色 JSON</div>
+                    </div>
+                    <div className="settings-pref-control">
+                      <div className="settings-pref-segmented">
+                        <button
+                          type="button"
+                          className={`settings-pref-segment ${terminalSchemeMode === "default" ? "is-active" : ""}`}
+                          onClick={() => { setTerminalSchemeMode("default"); setTerminalSchemeError(""); }}
+                        >
+                          默认
+                        </button>
+                        <button
+                          type="button"
+                          className={`settings-pref-segment ${terminalSchemeMode === "custom" ? "is-active" : ""}`}
+                          onClick={() => setTerminalSchemeMode("custom")}
+                        >
+                          自定义{terminalSchemeName ? ` · ${terminalSchemeName}` : ""}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  {terminalSchemeMode === "custom" && (
+                    <div className="settings-pref-row settings-pref-row--stack">
+                      <div className="settings-pref-hint">
+                        支持 windowsterminalthemes.dev 导出格式，普通模式与兼容模式均生效。
+                      </div>
+                      <textarea
+                        className="settings-textarea"
+                        value={terminalSchemeJson}
+                        onChange={(e) => { setTerminalSchemeJson(e.target.value); setTerminalSchemeError(""); }}
+                        placeholder={'{\n  "name": "Alabaster",\n  "background": "#f7f7f7",\n  ...\n}'}
+                        rows={7}
+                      />
+                      <div className="settings-pref-actions">
+                        <button type="button" className="settings-pref-btn settings-pref-btn--primary" onClick={applyCustomScheme}>
+                          应用配色
+                        </button>
+                        <button
+                          type="button"
+                          className="settings-pref-btn"
+                          onClick={() => {
+                            setTerminalSchemeJson("");
+                            setTerminalSchemeName("");
+                            setTerminalSchemeError("");
+                            localStorage.removeItem(TERMINAL_SCHEME_JSON_KEY);
+                            setTerminalSchemeMode("default");
+                          }}
+                        >
+                          清除
+                        </button>
+                        {terminalSchemeError ? (
+                          <span className="settings-pref-status settings-pref-status--error">{terminalSchemeError}</span>
+                        ) : terminalSchemeName ? (
+                          <span className="settings-pref-status settings-pref-status--ok">已应用：{terminalSchemeName}</span>
+                        ) : null}
+                      </div>
+                    </div>
+                  )}
+                  {/Windows/i.test(navigator.userAgent) && (
+                    <div className="settings-pref-row">
+                      <div className="settings-pref-meta">
+                        <div className="settings-pref-title">Claude 兼容模式</div>
+                        <div className="settings-pref-desc">使用独立安全 PTY 与 xterm 渲染链路，仅影响新打开的 Claude 标签</div>
+                      </div>
+                      <div className="settings-pref-control">
                         <label className="switch-container">
                           <input
                             type="checkbox"
@@ -900,234 +939,269 @@ return (
                           />
                           <span className="switch-slider" />
                         </label>
-                        <span className="switch-label">使用独立安全 PTY 与 xterm 渲染链路</span>
                       </div>
                     </div>
-                  </section>
-                )}
-
-                <section className="settings-section">
-                  <div className="settings-section-head">
-                    <h3 className="settings-section-title">回滚缓冲</h3>
-                    <p className="settings-section-desc">可回看的最大行数，重启会话后生效</p>
-                  </div>
-                  <div className="settings-group">
-                    <div className="settings-number-field">
-                      <input
-                        type="number"
-                        min={1000}
-                        max={100000}
-                        step={10000}
-                        value={scrollback || ""}
-                        onChange={(e) => {
-                          const val = parseInt(e.target.value, 10);
-                          setScrollback(Number.isNaN(val) ? 0 : val);
-                        }}
-                        onBlur={() => {
-                          let val = scrollback;
-                          if (Number.isNaN(val) || val < 1000) val = 1000;
-                          if (val > 100000) val = 100000;
-                          setScrollback(val);
-                        }}
-                        className="no-native-spinners settings-number-input"
-                      />
-                      <div className="settings-number-steppers">
-                        <button type="button" className="settings-stepper-btn" onClick={() => setScrollback((prev) => Math.min(100000, Math.max(1000, prev + 10000)))}>▲</button>
-                        <button type="button" className="settings-stepper-btn" onClick={() => setScrollback((prev) => Math.min(100000, Math.max(1000, prev - 10000)))}>▼</button>
+                  )}
+                  <div className="settings-pref-row">
+                    <div className="settings-pref-meta">
+                      <div className="settings-pref-title">回滚缓冲</div>
+                      <div className="settings-pref-desc">可回看的最大行数，重启会话后生效</div>
+                    </div>
+                    <div className="settings-pref-control">
+                      <div className="settings-pref-number">
+                        <input
+                          type="number"
+                          min={1000}
+                          max={100000}
+                          step={10000}
+                          value={scrollback || ""}
+                          onChange={(e) => {
+                            const val = parseInt(e.target.value, 10);
+                            setScrollback(Number.isNaN(val) ? 0 : val);
+                          }}
+                          onBlur={() => {
+                            let val = scrollback;
+                            if (Number.isNaN(val) || val < 1000) val = 1000;
+                            if (val > 100000) val = 100000;
+                            setScrollback(val);
+                          }}
+                          className="no-native-spinners settings-number-input"
+                        />
+                        <div className="settings-number-steppers">
+                          <button type="button" className="settings-stepper-btn" onClick={() => setScrollback((prev) => Math.min(100000, Math.max(1000, prev + 10000)))}>▲</button>
+                          <button type="button" className="settings-stepper-btn" onClick={() => setScrollback((prev) => Math.min(100000, Math.max(1000, prev - 10000)))}>▼</button>
+                        </div>
+                        <span className="settings-pref-helper">1,000 – 100,000</span>
                       </div>
                     </div>
-                    <div className="settings-helper-text">范围 1,000 – 100,000</div>
                   </div>
-                </section>
-
-                <section className="settings-section">
-                  <div className="settings-section-head">
-                    <h3 className="settings-section-title">文件预览</h3>
-                    <p className="settings-section-desc">右侧预览面板的等宽字体</p>
+                  <div className="settings-pref-row">
+                    <div className="settings-pref-meta">
+                      <div className="settings-pref-title">文件预览字体</div>
+                      <div className="settings-pref-desc">右侧预览面板的等宽字体</div>
+                    </div>
+                    <div className="settings-pref-control">
+                      <div className="settings-pref-segmented">
+                        {(["Cascadia Mono", "Fira Code", "Consolas", "monospace"] as const).map((family) => (
+                          <button
+                            key={family}
+                            type="button"
+                            className={`settings-pref-segment ${previewFontFamily === family ? "is-active" : ""}`}
+                            onClick={() => setPreviewFontFamily(family)}
+                          >
+                            {family === "monospace" ? "System" : family}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   </div>
-                  <div className="settings-group">
-                    <div className="settings-group-label">字体</div>
-                    <div className="settings-btn-group">
-                      {(["Cascadia Mono", "Fira Code", "Consolas", "monospace"] as const).map((family) => (
-                        <button
-                          key={family}
-                          type="button"
-                          className={`settings-toggle-btn ${previewFontFamily === family ? "active" : ""}`}
-                          onClick={() => setPreviewFontFamily(family)}
-                        >
-                          {family === "monospace" ? "System" : family}
+                  <div className="settings-pref-row">
+                    <div className="settings-pref-meta">
+                      <div className="settings-pref-title">文件预览字号</div>
+                      <div className="settings-pref-desc">预览面板字体大小</div>
+                    </div>
+                    <div className="settings-pref-control">
+                      <div className="settings-pref-slider">
+                        <input
+                          type="range"
+                          min="10.0"
+                          max="24.0"
+                          step="0.5"
+                          className="settings-slider"
+                          value={previewFontSize}
+                          onChange={(e) => setPreviewFontSize(parseFloat(e.target.value))}
+                        />
+                        <span className="settings-pref-value">{previewFontSize.toFixed(1)}px</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="settings-pref-row">
+                    <div className="settings-pref-meta">
+                      <div className="settings-pref-title">ccswitch 路径</div>
+                      <div className="settings-pref-desc">标题栏快捷启动 ccswitch</div>
+                    </div>
+                    <div className="settings-pref-control settings-pref-control--stretch">
+                      <div className="settings-pref-path">
+                        <input
+                          type="text"
+                          className="settings-text-input"
+                          placeholder="例如: C:\Program Files\ccswitch\ccswitch.exe"
+                          value={ccswitchPath}
+                          onChange={(e) => setCcswitchPath(e.target.value)}
+                        />
+                        <button type="button" className="settings-pref-btn" onClick={() => setShowFilePicker(true)}>
+                          浏览
                         </button>
-                      ))}
+                      </div>
                     </div>
                   </div>
-                  <div className="settings-group">
-                    <div className="settings-group-label">字号</div>
-                    <div className="slider-row">
-                      <input type="range" min="10.0" max="24.0" step="0.5" className="settings-slider" value={previewFontSize} onChange={(e) => setPreviewFontSize(parseFloat(e.target.value))} />
-                      <span className="slider-value">{previewFontSize.toFixed(1)}px</span>
-                    </div>
-                  </div>
-                </section>
+                </div>
+                </div>
 
-                <section className="settings-section">
-                  <div className="settings-section-head">
-                    <h3 className="settings-section-title">外部工具</h3>
-                    <p className="settings-section-desc">标题栏快捷启动 ccswitch</p>
-                  </div>
-                  <div className="settings-group">
-                    <div className="settings-group-label">ccswitch.exe 路径</div>
-                    <div className="settings-path-row">
-                      <input
-                        type="text"
-                        className="settings-text-input"
-                        placeholder="例如: C:\Program Files\ccswitch\ccswitch.exe"
-                        value={ccswitchPath}
-                        onChange={(e) => setCcswitchPath(e.target.value)}
-                      />
-                      <button type="button" className="settings-secondary-btn" onClick={() => setShowFilePicker(true)}>
-                        浏览
-                      </button>
+                <div className="settings-pref-group">
+                <div className="settings-pref-card-label">
+                  <Bell size={12} aria-hidden />
+                  <span>通知</span>
+                </div>
+                <div className="settings-pref-card">
+                  <div className="settings-pref-row">
+                    <div className="settings-pref-meta">
+                      <div className="settings-pref-title">系统通知</div>
+                      <div className="settings-pref-desc">AI 回答结束且后台时提示</div>
                     </div>
-                  </div>
-                </section>
-              </div>
-            )}
-
-            {activeMenu === "notifications" && (
-              <div className="settings-content">
-                <section className="settings-section">
-                  <div className="settings-section-head">
-                    <h3 className="settings-section-title">系统通知</h3>
-                    <p className="settings-section-desc">AI 回答结束且后台时提示</p>
-                  </div>
-                  <div className="settings-group">
-                    <div className="settings-switch-row">
+                    <div className="settings-pref-control">
                       <label className="switch-container">
                         <input type="checkbox" checked={notifyOnComplete} onChange={(e) => setNotifyOnComplete(e.target.checked)} />
                         <span className="switch-slider" />
                       </label>
-                      <span className="switch-label">回答完毕时发送系统通知</span>
                     </div>
                   </div>
-                  <div className="settings-group">
-                    <div className="settings-group-label">通知阈值（持续超过此时长才通知）</div>
-                    <div className="slider-row">
-                      <input type="range" min="0.5" max="10.0" step="0.5" className="settings-slider" value={notifyThreshold} onChange={(e) => setNotifyThreshold(parseFloat(e.target.value))} />
-                      <span className="slider-value">{notifyThreshold.toFixed(1)}s</span>
+                  <div className="settings-pref-row">
+                    <div className="settings-pref-meta">
+                      <div className="settings-pref-title">通知阈值</div>
+                      <div className="settings-pref-desc">持续超过此时长才通知</div>
+                    </div>
+                    <div className="settings-pref-control">
+                      <div className="settings-pref-slider">
+                        <input
+                          type="range"
+                          min="0.5"
+                          max="10.0"
+                          step="0.5"
+                          className="settings-slider"
+                          value={notifyThreshold}
+                          onChange={(e) => setNotifyThreshold(parseFloat(e.target.value))}
+                        />
+                        <span className="settings-pref-value">{notifyThreshold.toFixed(1)}s</span>
+                      </div>
                     </div>
                   </div>
-                </section>
-
-                <section className="settings-section">
-                  <div className="settings-section-head">
-                    <h3 className="settings-section-title">提示音</h3>
-                    <p className="settings-section-desc">需先启用系统通知</p>
-                  </div>
-                  <div className="settings-group">
-                    <div className="settings-switch-row">
+                  <div className="settings-pref-row">
+                    <div className="settings-pref-meta">
+                      <div className="settings-pref-title">提示音</div>
+                      <div className="settings-pref-desc">回答完毕时播放提示音（需先启用系统通知）</div>
+                    </div>
+                    <div className="settings-pref-control">
                       <label className="switch-container">
                         <input type="checkbox" checked={playSound} onChange={(e) => setPlaySound(e.target.checked)} />
                         <span className="switch-slider" />
                       </label>
-                      <span className="switch-label">回答完毕时播放提示音</span>
                     </div>
                   </div>
-                  <div className="settings-group">
-                    <div className="settings-group-label">音色</div>
-                    <div className="settings-btn-group wrap-group">
-                      {(["默认", "清脆铃声", "钟声", "叮咚", "成功提示"] as const).map((tone) => {
-                        const toneKey = {
-                          默认: "default",
-                          清脆铃声: "chime",
-                          钟声: "bell",
-                          叮咚: "ding",
-                          成功提示: "success",
-                        }[tone];
-                        const isActive = soundTone === toneKey;
-                        return (
-                          <button
-                            key={tone}
-                            type="button"
-                            className={`settings-toggle-btn ${isActive ? "active" : ""}`}
-                            onClick={() => {
-                              const finalTone = toneKey || "default";
-                              setSoundTone(finalTone);
-                              triggerPreview(finalTone, soundVolume);
-                            }}
-                          >
-                            {tone}
-                          </button>
-                        );
-                      })}
+                  <div className="settings-pref-row">
+                    <div className="settings-pref-meta">
+                      <div className="settings-pref-title">音色</div>
+                      <div className="settings-pref-desc">点击即可试听，选择后作为默认提示音</div>
+                    </div>
+                    <div className="settings-pref-control">
+                      <div className="settings-pref-segmented">
+                        {(["默认", "清脆铃声", "钟声", "叮咚", "成功提示"] as const).map((tone) => {
+                          const toneKey = {
+                            默认: "default",
+                            清脆铃声: "chime",
+                            钟声: "bell",
+                            叮咚: "ding",
+                            成功提示: "success",
+                          }[tone];
+                          const isActive = soundTone === toneKey;
+                          return (
+                            <button
+                              key={tone}
+                              type="button"
+                              className={`settings-pref-segment ${isActive ? "is-active" : ""}`}
+                              onClick={() => {
+                                const finalTone = toneKey || "default";
+                                setSoundTone(finalTone);
+                                triggerPreview(finalTone, soundVolume);
+                              }}
+                            >
+                              {tone}
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
                   </div>
-                  <div className="settings-group">
-                    <div className="settings-group-label">音量</div>
-                    <div className="slider-row">
-                      <input
-                        type="range"
-                        min="0"
-                        max="100"
-                        className="settings-slider"
-                        value={soundVolume}
-                        onChange={(e) => setSoundVolume(parseInt(e.target.value, 10))}
-                        onMouseUp={() => triggerPreview(soundTone, soundVolume)}
-                      />
-                      <span className="slider-value">{soundVolume}%</span>
+                  <div className="settings-pref-row">
+                    <div className="settings-pref-meta">
+                      <div className="settings-pref-title">音量</div>
+                      <div className="settings-pref-desc">松开滑块即可试听</div>
+                    </div>
+                    <div className="settings-pref-control">
+                      <div className="settings-pref-slider">
+                        <input
+                          type="range"
+                          min="0"
+                          max="100"
+                          className="settings-slider"
+                          value={soundVolume}
+                          onChange={(e) => setSoundVolume(parseInt(e.target.value, 10))}
+                          onMouseUp={() => triggerPreview(soundTone, soundVolume)}
+                        />
+                        <span className="settings-pref-value">{soundVolume}%</span>
+                      </div>
                     </div>
                   </div>
-                </section>
-              </div>
-            )}
+                </div>
+                </div>
 
-            {activeMenu === "shortcuts" && (
-              <div className="settings-content">
-                <section className="settings-section">
-                  <div className="settings-section-head">
-                    <h3 className="settings-section-title">状态栏快捷短语</h3>
-                    <p className="settings-section-desc">最多 3 条，显示在窗口底部状态栏</p>
-                  </div>
-                  <div className="settings-group">
-                    <div className="settings-switch-row">
+                <div className="settings-pref-group">
+                <div className="settings-pref-card-label">
+                  <Keyboard size={12} aria-hidden />
+                  <span>快捷短语</span>
+                </div>
+                <div className="settings-pref-card">
+                  <div className="settings-pref-row">
+                    <div className="settings-pref-meta">
+                      <div className="settings-pref-title">状态栏快捷短语</div>
+                      <div className="settings-pref-desc">在窗口底部状态栏显示最多 3 条常用短语，点击一键填入或发送</div>
+                    </div>
+                    <div className="settings-pref-control">
                       <label className="switch-container">
-                        <input type="checkbox" checked={shortcutsEnabled} onChange={(e) => setShortcutsEnabled(e.target.checked)} />
+                        <input
+                          type="checkbox"
+                          checked={shortcutsEnabled}
+                          onChange={(e) => setShortcutsEnabled(e.target.checked)}
+                        />
                         <span className="switch-slider" />
                       </label>
-                      <span className="switch-label">启用快捷短语</span>
                     </div>
                   </div>
                   {shortcutsEnabled && (
-                    <div className="settings-group settings-shortcut-list">
-                      {shortcutsList.map((item, idx) => (
-                        <div key={idx} className="settings-shortcut-row">
-                          <span className="settings-shortcut-index">#{idx + 1}</span>
-                          <input
-                            type="text"
-                            className="settings-text-input"
-                            placeholder="显示名称"
-                            value={item.title}
-                            onChange={(e) => {
-                              const next = [...shortcutsList];
-                              next[idx] = { ...next[idx], title: e.target.value };
-                              setShortcutsList(next);
-                            }}
-                          />
-                          <input
-                            type="text"
-                            className="settings-text-input settings-text-input-wide"
-                            placeholder="发送内容"
-                            value={item.content}
-                            onChange={(e) => {
-                              const next = [...shortcutsList];
-                              next[idx] = { ...next[idx], content: e.target.value };
-                              setShortcutsList(next);
-                            }}
-                          />
-                        </div>
-                      ))}
+                    <div className="settings-pref-row settings-pref-row--stack">
+                      <div className="settings-shortcut-list">
+                        {shortcutsList.map((item, idx) => (
+                          <div key={idx} className="settings-shortcut-row">
+                            <span className="settings-shortcut-index">#{idx + 1}</span>
+                            <input
+                              type="text"
+                              className="settings-text-input"
+                              placeholder="显示名称"
+                              value={item.title}
+                              onChange={(e) => {
+                                const next = [...shortcutsList];
+                                next[idx] = { ...next[idx], title: e.target.value };
+                                setShortcutsList(next);
+                              }}
+                            />
+                            <input
+                              type="text"
+                              className="settings-text-input settings-text-input-wide"
+                              placeholder="发送内容"
+                              value={item.content}
+                              onChange={(e) => {
+                                const next = [...shortcutsList];
+                                next[idx] = { ...next[idx], content: e.target.value };
+                                setShortcutsList(next);
+                              }}
+                            />
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   )}
-                </section>
+                </div>
+                </div>
               </div>
             )}
 
