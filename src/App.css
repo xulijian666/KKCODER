@@ -2452,7 +2452,7 @@ input:checked + .switch-slider:before {
 .queue-floating {
   position: absolute;
   right: 14px;
-  bottom: 64px; /* 位于输入栏上方 */
+  bottom: 96px; /* 位于两行式输入栏上方 */
   z-index: 50;
   pointer-events: none;
 }
@@ -4354,7 +4354,9 @@ body.preview-resizing .preview-resize-handle::after {
 .md-code-copy:hover {
   opacity: 1;
   color: var(--color-primary);
-  border-color: color-mix(in srgb, var(--color-primary) 45%, transparent);
+  /* 不用高亮边框：背景微染 */
+  background: color-mix(in srgb, var(--color-primary) 10%, transparent);
+  border-color: var(--border-color);
 }
 .md-code-copy.is-copied {
   opacity: 1;
@@ -5053,6 +5055,31 @@ body.preview-resizing .preview-resize-handle::after {
 .chat-reasoning summary::-webkit-details-marker {
   display: none;
 }
+/* 思考中（live）：标题主题色 + 脉冲动效点；完成后恢复默认灰 */
+.chat-reasoning.is-live summary,
+.chat-reasoning.is-live .chat-reasoning-title {
+  color: var(--color-primary);
+}
+.chat-reasoning-live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  margin-left: 2px;
+  flex-shrink: 0;
+  animation: chat-reasoning-dot-pulse 1.2s ease-in-out infinite;
+}
+@keyframes chat-reasoning-dot-pulse {
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.2);
+  }
+}
 .chat-reasoning-body {
   font-size: 12.5px;
   color: var(--text-secondary);
@@ -5141,7 +5168,8 @@ body.preview-resizing .preview-resize-handle::after {
   transition: border-color 0.15s ease;
 }
 .chat-tool-list-summary:hover {
-  border-color: var(--color-primary);
+  /* hover 不再高亮边框：背景微染 */
+  background-color: var(--bg-hover-item);
 }
 .chat-tool-list-label {
   font-size: 12px;
@@ -5250,32 +5278,54 @@ body.preview-resizing .preview-resize-handle::after {
 
 .chat-input-bar {
   display: flex;
-  align-items: flex-end;
-  gap: 8px;
-  padding: 8px;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px 8px;
 }
+/* 底部按钮区：独立一行、紧凑；textarea 独占一行全宽不被挤压 */
+.chat-input-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+}
+.chat-input-toolbar-spacer {
+  flex: 1;
+}
+/* 外层容器：仅负责定位（补全菜单/附件条），不带边框——输入框与按钮区视觉分离 */
 .chat-composer {
   position: relative;
   flex: 0 0 auto;
   margin: 0 12px 10px;
+}
+/* 独立输入框壳：textarea 自带边框，与下方按钮区分开 */
+.chat-input-shell {
   border: 1px solid var(--border-color);
   border-radius: 8px;
   background: var(--bg-main);
   box-shadow: 0 4px 18px rgba(0, 0, 0, 0.12);
 }
-.chat-composer:focus-within {
-  border-color: var(--color-primary);
+.chat-input-shell:focus-within {
+  /* 聚焦不再变边框色：柔和主题色光晕（叠加基础投影） */
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--color-primary) 12%, transparent),
+    0 4px 18px rgba(0, 0, 0, 0.12);
 }
-.chat-composer.is-dragging {
+.chat-input-shell:hover:not(:focus-within) {
+  /* hover 显示效果：阴影加深一层，不用高亮边框 */
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.16);
+}
+.chat-input-shell.is-dragging {
   border-color: var(--color-primary);
   box-shadow: inset 0 0 0 1px var(--color-primary);
 }
 .chat-input {
-  flex: 1;
+  width: 100%;
+  flex: none;
   resize: none;
-  min-height: 36px;
+  min-height: 32px;
   max-height: 140px;
-  padding: 8px 10px;
+  padding: 7px 10px;
   border: none;
   border-radius: 6px;
   background: transparent;
@@ -5295,17 +5345,18 @@ body.preview-resizing .preview-resize-handle::after {
 .chat-model-select {
   position: relative;
   display: inline-flex;
-  align-self: flex-end;
 }
 .chat-model-select-btn {
   display: flex;
   align-items: center;
   gap: 5px;
-  height: 36px;
+  height: 26px;
+  /* 固定宽度：模型名长短变化不引起布局抖动 */
+  width: 170px;
   max-width: 170px;
-  padding: 0 9px;
+  padding: 0 7px;
   border: 1px solid var(--border-color);
-  border-radius: 8px;
+  border-radius: 6px;
   background: var(--bg-sidebar);
   color: var(--text-secondary);
   cursor: pointer;
@@ -5313,13 +5364,16 @@ body.preview-resizing .preview-resize-handle::after {
   flex-shrink: 0;
 }
 .chat-model-select-btn:hover {
-  border-color: var(--color-primary);
+  /* hover 不再高亮边框：背景微染 + 轻微上浮阴影，更柔和 */
+  background-color: var(--bg-hover-item);
   color: var(--text-primary);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.07);
 }
 .chat-model-select-btn.active {
-  border-color: var(--color-primary);
+  /* 打开态：背景淡主题色 + 柔和投影，不用高亮边框 */
   color: var(--color-primary);
   background: color-mix(in srgb, var(--color-primary) 8%, var(--bg-sidebar));
+  box-shadow: 0 1px 4px color-mix(in srgb, var(--color-primary) 20%, transparent);
 }
 /* AI 思考中：模型选择器禁用（不可切换模型） */
 .chat-model-select-btn.is-disabled,
@@ -5329,7 +5383,7 @@ body.preview-resizing .preview-resize-handle::after {
   pointer-events: none;
 }
 .chat-model-select-label {
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 600;
   font-family: var(--font-mono);
   white-space: nowrap;
@@ -5356,14 +5410,30 @@ body.preview-resizing .preview-resize-handle::after {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
   border: 1px solid var(--color-primary);
   background: var(--color-primary);
   color: #ffffff;
   cursor: pointer;
   flex-shrink: 0;
+  transition:
+    filter 0.15s ease,
+    box-shadow 0.15s ease,
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+.chat-send-btn:hover:not(:disabled):not(.is-esc-armed) {
+  /* hover 质感：轻微提亮 + 主题色投影，不用边框高亮 */
+  filter: brightness(1.07);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--color-primary) 40%, transparent);
+}
+.chat-send-btn.is-cancel:hover:not(:disabled):not(.is-esc-armed) {
+  /* 终止态（描边）：hover 淡染主题色背景 */
+  background: color-mix(in srgb, var(--color-primary) 10%, transparent);
+  filter: none;
+  box-shadow: none;
 }
 .chat-send-btn:disabled {
   opacity: 0.5;
@@ -5926,6 +5996,121 @@ body.preview-resizing .preview-resize-handle::after {
 .chat-question-actions button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* 粘贴标签预览/编辑弹窗 */
+.chat-paste-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(8, 12, 20, 0.45);
+  backdrop-filter: blur(3px);
+  animation: chat-question-fade-in 0.15s ease-out;
+}
+.chat-paste-card {
+  display: flex;
+  flex-direction: column;
+  width: min(680px, 100%);
+  max-height: min(75vh, 560px);
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-main);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.32);
+  animation: chat-question-pop 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.chat-paste-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-sidebar);
+  flex-shrink: 0;
+}
+.chat-paste-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.chat-paste-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.chat-paste-close:hover {
+  background-color: var(--bg-hover-item);
+  color: var(--text-primary);
+}
+.chat-paste-editor {
+  flex: 1;
+  min-height: 220px;
+  padding: 10px 12px;
+  border: none;
+  outline: none;
+  resize: none;
+  background: var(--bg-sidebar);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+  tab-size: 2;
+}
+.chat-paste-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+.chat-paste-actions-right {
+  display: flex;
+  gap: 6px;
+}
+.chat-paste-actions button {
+  min-height: 26px;
+  padding: 3px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+.chat-paste-actions button:hover {
+  background-color: var(--bg-hover-item);
+}
+.chat-paste-actions button.is-primary {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  color: #ffffff;
+}
+.chat-paste-actions button.is-primary:hover {
+  background: var(--color-primary);
+  filter: brightness(1.06);
+}
+.chat-paste-actions button.chat-paste-delete {
+  color: #ef4444;
+  border-color: color-mix(in srgb, #ef4444 40%, transparent);
+}
+.chat-paste-actions button.chat-paste-delete:hover {
+  background: rgba(239, 68, 68, 0.1);
 }
 
 @media (max-width: 640px) {

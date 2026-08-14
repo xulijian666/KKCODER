@@ -29,8 +29,10 @@ export interface PreviewContextMenuState {
   y: number;
   startLine: number;
   endLine: number;
-  /** 预览模式下的选中文本：存在时以文本形式插入对话，而非行号标签 */
+  /** 选中文本：以文本形式插入对话，而非行号标签 */
   selectedText?: string;
+  /** 源码视图选中的内容携带来源文件路径 */
+  sourcePath?: string;
 }
 
 function escapeRegExp(value: string): string {
@@ -233,15 +235,11 @@ function getSelectionLineRange(selection: Selection): { startLine: number; endLi
   return { startLine, endLine };
 }
 
-function buildConversationTag(filePath: string, startLine: number, endLine: number): string {
-  const rangeText = startLine === endLine ? `L${startLine}` : `L${startLine}-L${endLine}`;
-  return `"${filePath}":${rangeText} `;
-}
-
 export interface UseFilePreviewOptions {
   projectPath: string | undefined;
   activeSessionId: string;
-  onInsertConversationTag: (text: string) => void;
+  /** 第二参 sourcePath：源码视图选中的内容携带来源文件路径 */
+  onInsertConversationTag: (text: string, sourcePath?: string) => void;
 }
 
 export function useFilePreview({
@@ -555,16 +553,13 @@ export function useFilePreview({
   const insertSelectionToConversation = useCallback(
     (selection: Selection) => {
       if (!previewFile || !activeSessionId) return;
-      // 预览模式渲染结果与源码行号并不一一对应，直接以选中文本加入对话（等价复制粘贴）
-      if (markdownMode === "preview" && previewFile.path.toLowerCase().endsWith(".md")) {
-        const text = selection.toString().trim();
-        if (!text) return;
-        onInsertConversationTag(text);
-        return;
-      }
-      const range = getSelectionLineRange(selection);
-      if (!range) return;
-      onInsertConversationTag(buildConversationTag(previewFile.path, range.startLine, range.endLine));
+      // 预览模式与源码模式统一：以选中文本加入对话（等价复制粘贴），
+      // 由输入框按行数折叠为 [Pasted text #N +M lines] 标签。
+      // 源码视图（源文件选取）携带来源文件路径，md 预览是渲染视图不带
+      const text = selection.toString().trim();
+      if (!text) return;
+      const sourcePath = markdownMode === "source" ? previewFile.path : undefined;
+      onInsertConversationTag(text, sourcePath);
     },
     [activeSessionId, markdownMode, onInsertConversationTag, previewFile],
   );
@@ -742,27 +737,17 @@ export function useFilePreview({
       let menuY = event.clientY;
       if (menuX + 160 > window.innerWidth) menuX = Math.max(0, menuX - 160);
 
-      // 预览模式：渲染结果与源码行号不一一对应，菜单携带选中文本而非行号
-      if (markdownMode === "preview" && previewFile.path.toLowerCase().endsWith(".md")) {
-        const selectedText = selection.toString().trim();
-        if (!selectedText) return;
-        setPreviewContextMenu({
-          x: menuX,
-          y: menuY,
-          startLine: 0,
-          endLine: 0,
-          selectedText,
-        });
-        return;
-      }
-
-      const lineRange = getSelectionLineRange(selection);
-      if (!lineRange) return;
+      // 预览与源码模式统一：菜单携带选中文本（等价复制粘贴，输入框按行数折叠为标签）；
+      // 源码视图（源文件选取）额外携带来源文件路径
+      const selectedText = selection.toString().trim();
+      if (!selectedText) return;
       setPreviewContextMenu({
         x: menuX,
         y: menuY,
-        startLine: lineRange.startLine,
-        endLine: lineRange.endLine,
+        startLine: 0,
+        endLine: 0,
+        selectedText,
+        sourcePath: markdownMode === "source" ? previewFile.path : undefined,
       });
     },
     [markdownMode, previewFile],
@@ -1281,7 +1266,7 @@ export const FilePreviewPanel: React.FC<FilePreviewPanelProps> = ({
 export interface FilePreviewContextMenuProps {
   previewContextMenu: PreviewContextMenuState | null;
   previewFile: PreviewFileState | null;
-  onInsertConversationTag: (text: string) => void;
+  onInsertConversationTag: (text: string, sourcePath?: string) => void;
   onClose: () => void;
   onClearSelection: () => void;
 }
@@ -1309,14 +1294,9 @@ export const FilePreviewContextMenu: React.FC<FilePreviewContextMenuProps> = ({
       <button
         onClick={() => {
           if (previewContextMenu.selectedText) {
-            onInsertConversationTag(previewContextMenu.selectedText);
-          } else {
             onInsertConversationTag(
-              buildConversationTag(
-                previewFile.path,
-                previewContextMenu.startLine,
-                previewContextMenu.endLine,
-              ),
+              previewContextMenu.selectedText,
+              previewContextMenu.sourcePath,
             );
           }
           onClearSelection();

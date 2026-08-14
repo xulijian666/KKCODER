@@ -76,7 +76,9 @@ interface ChatMessage {
   text: string;
   /** 该条消息发送时实际使用的模型（selectedModel 或供应商默认），仅用户消息带 */
   model?: string;
-  reasoning?: string;
+  /** 思考过程分段（对齐 cc-gui：相邻思考合并一段，被工具调用打断则开新段）。
+   *  afterToolCount = 该段开始前已有的工具数，用于与工具卡片交错渲染 */
+  reasoning?: Array<{ text: string; afterToolCount: number }>;
   tools: ToolCardData[];
   status: "streaming" | "done" | "error";
   costUsd?: number;
@@ -347,31 +349,15 @@ type ChatAction =
   | { type: "send:failed"; id: string; message: string }
   | { type: "turn:started" }
   | { type: "text:delta"; text: string }
+  /** 开新思考段：reasoning 流被工具调用打断后到达时触发 */
+  | { type: "reasoning:segment" }
   | { type: "reasoning:delta"; text: string }
   | { type: "tool:started"; card: ToolCardData }
   | { type: "tool:input"; id: string; input?: unknown }
   | { type: "tool:completed"; id: string; name?: string; output?: string; error?: string }
   | { type: "turn:finished"; costUsd?: number; isError?: boolean; elapsedSec?: number }
   /** silent：用户主动取消，不把消息标红显示错误 */
-  | { type: "turn:error"; message: string; silent?: boolean }
-  /** 取消回退：模型尚无任何输出时，撤回最后一条用户消息（连同空的 assistant 占位） */
-  | { type: "cancel:rollback" };
-
-/** 模型无任何输出（正文首字未出）时，撤回最后一条用户消息；否则原样返回 */
-function trimLastUserTurn(messages: ChatMessage[]): ChatMessage[] {
-  let list = messages;
-  const last = list[list.length - 1];
-  if (last && last.role === "assistant") {
-    // 只看正文：思考过程/工具调用不算"已回复"，正文首字未出即视为未回复、可回退
-    const hasOutput = Boolean(last.text);
-    if (hasOutput) return messages; // 正文已有内容：保留现场，不回退
-    list = list.slice(0, -1); // 移除空的 assistant 占位
-  }
-  if (list.length === 0) return messages;
-  const prev = list[list.length - 1];
-  if (prev.role !== "user") return messages; // 尾部不是刚发的用户消息：不回退
-  return list.slice(0, -1);
-}
+  | { type: "turn:error"; message: string; silent?: boolean };
 
 function patchLast(
   state: ChatMessage[],
@@ -414,6 +400,7 @@ function messagesReducer(state: ChatMessage[], action: ChatAction): ChatMessage[
           role: "assistant",
           text: action.text,
           contextUsage: action.contextUsage ?? null,
+          reasoning: [],
           tools: [],
           status: "done",
         },
@@ -425,18 +412,31 @@ function messagesReducer(state: ChatMessage[], action: ChatAction): ChatMessage[
           id: generateUUID(),
           role: "assistant",
           text: "",
-          reasoning: "",
+          reasoning: [],
           tools: [],
           status: "streaming",
         },
       ];
     case "text:delta":
       return patchLast(state, (m) => ({ ...m, text: m.text + action.text }));
-    case "reasoning:delta":
+    case "reasoning:segment":
+      // 开新段：记录当前已有工具数，渲染时与工具卡片交错
       return patchLast(state, (m) => ({
         ...m,
-        reasoning: (m.reasoning ?? "") + action.text,
+        reasoning: [...(m.reasoning ?? []), { text: "", afterToolCount: m.tools.length }],
       }));
+    case "reasoning:delta":
+      return patchLast(state, (m) => {
+        const segments = m.reasoning ?? [];
+        if (segments.length === 0) {
+          return { ...m, reasoning: [{ text: action.text, afterToolCount: 0 }] };
+        }
+        const last = segments[segments.length - 1];
+        return {
+          ...m,
+          reasoning: [...segments.slice(0, -1), { ...last, text: last.text + action.text }],
+        };
+      });
     case "tool:started":
       return patchLast(state, (m) => ({
         ...m,
@@ -478,8 +478,6 @@ function messagesReducer(state: ChatMessage[], action: ChatAction): ChatMessage[
         status: action.silent ? "done" : "error",
         error: action.silent ? undefined : action.message,
       }));
-    case "cancel:rollback":
-      return trimLastUserTurn(state);
   }
 }
 
@@ -869,6 +867,72 @@ const QuestionCard: React.FC<{
   );
 };
 
+/** 粘贴标签预览/编辑弹窗：全宽等宽文本编辑，Enter 无关、Ctrl/Cmd+Enter 保存、Esc 取消 */
+const PasteEditModal: React.FC<{
+  initialText: string;
+  onSave: (text: string) => void;
+  onDelete: () => void;
+  onCancel: () => void;
+}> = ({ initialText, onSave, onDelete, onCancel }) => {
+  const [text, setText] = useState(initialText);
+  const editorRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    editorRef.current?.focus();
+    editorRef.current?.select();
+  }, []);
+
+  return (
+    <div className="chat-paste-overlay" onMouseDown={(event) => event.stopPropagation()}>
+      <div className="chat-paste-card">
+        <div className="chat-paste-head">
+          <span className="chat-paste-title">粘贴文本预览 / 编辑</span>
+          <button
+            type="button"
+            className="chat-paste-close"
+            onClick={onCancel}
+            title="关闭（Esc）"
+          >
+            <X size={13} />
+          </button>
+        </div>
+        <textarea
+          ref={editorRef}
+          className="chat-paste-editor"
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          spellCheck={false}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              // 阻止冒泡：不触发全局「终止生成」交互
+              event.stopPropagation();
+              onCancel();
+              return;
+            }
+            if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+              event.preventDefault();
+              onSave(text);
+            }
+          }}
+        />
+        <div className="chat-paste-actions">
+          <button type="button" className="chat-paste-delete" onClick={onDelete}>
+            删除该标签
+          </button>
+          <div className="chat-paste-actions-right">
+            <button type="button" onClick={onCancel}>
+              取消
+            </button>
+            <button type="button" className="is-primary" onClick={() => onSave(text)}>
+              保存（Ctrl+Enter）
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 /**
  * 单条消息视图。React.memo：消息对象引用不变时跳过重渲染，
  * 避免输入框打字等无关重渲染导致 markdown 重新计算/HTML 代码块 DOM 被重注入
@@ -895,23 +959,55 @@ const MessageView: React.FC<{ message: ChatMessage }> = React.memo(({ message })
       </div>
     );
   }
+  // 思考显示设置：聚合（全部合并为一块，默认）/ 分开（被工具打断的多段思考各自成块并交错工具卡）
+  const splitReasoning = localStorage.getItem("kkcoder_setting_split_reasoning") === "true";
+  const reasoningSegments = (message.reasoning ?? []).filter((seg) => seg.text.trim().length > 0);
+  const isLive = message.status === "streaming";
+  const mergedReasoning = reasoningSegments.map((seg) => seg.text).join("\n\n");
+  // 单个思考块：live 时标题「思考中」+ 脉冲点动效，完成时「思考完成」
+  const reasoningBlock = (text: string, key: string | number) => (
+    <details className={`chat-reasoning ${isLive ? "is-live" : ""}`} key={key}>
+      <summary>
+        <BrainCircuit size={13} />
+        <span className="chat-reasoning-title">{isLive ? "思考中" : "思考完成"}</span>
+        {isLive && <span className="chat-reasoning-live-dot" />}
+      </summary>
+      <div
+        className="chat-reasoning-body markdown-body"
+        dangerouslySetInnerHTML={{ __html: renderChatMarkdownToHtml(text) }}
+      />
+    </details>
+  );
+  // 分开显示：多段思考与工具卡片交错渲染（工具平铺为独立卡片，对齐 cc-gui 的独立块视觉）
+  const blocks: React.ReactNode[] = [];
+  if (splitReasoning && reasoningSegments.length > 1) {
+    let toolCursor = 0;
+    reasoningSegments.forEach((seg, index) => {
+      // 本段开始前应已出现的工具（afterToolCount 为开段时已有的工具数）
+      while (toolCursor < Math.min(seg.afterToolCount, message.tools.length)) {
+        const tool = message.tools[toolCursor];
+        blocks.push(<ToolCard key={tool.id} card={tool} />);
+        toolCursor += 1;
+      }
+      blocks.push(reasoningBlock(seg.text, `reasoning-${index}`));
+    });
+    while (toolCursor < message.tools.length) {
+      const tool = message.tools[toolCursor];
+      blocks.push(<ToolCard key={tool.id} card={tool} />);
+      toolCursor += 1;
+    }
+  }
+
   return (
     <div className="chat-msg chat-msg-assistant">
-      {message.reasoning && (
-        <details className="chat-reasoning">
-          <summary>
-            <BrainCircuit size={13} />
-            <span>思考过程</span>
-          </summary>
-          <div
-            className="chat-reasoning-body markdown-body"
-            dangerouslySetInnerHTML={{
-              __html: renderChatMarkdownToHtml(message.reasoning),
-            }}
-          />
-        </details>
+      {blocks.length > 0 ? (
+        blocks
+      ) : (
+        <>
+          {reasoningSegments.length > 0 && reasoningBlock(mergedReasoning, "reasoning-merged")}
+          {message.tools.length > 0 && <ToolList tools={message.tools} />}
+        </>
       )}
-      {message.tools.length > 0 && <ToolList tools={message.tools} />}
       {message.contextUsage ? (
         <ContextUsageCard data={message.contextUsage} />
       ) : message.text ? (
@@ -986,6 +1082,19 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
   const [draggingImage, setDraggingImage] = useState(false);
   // 思考中已运行秒数：从发送消息起计时，与完成时耗时（turnStartTimeRef）同源
   const [streamingElapsed, setStreamingElapsed] = useState(0);
+  // 粘贴折叠：>3 行的大段文本折叠为 [Pasted text #N +M lines] 标签（可读性），
+  // 原文暂存于此，发送时还原为完整文本；sourcePath 为源码视图选取时的来源文件
+  const pastedTextsRef = useRef<
+    Array<{ id: number; text: string; lines: number; sourcePath?: string }>
+  >([]);
+  const nextPasteIdRef = useRef(1);
+  // 文件引用标签：添加文件到上下文（"path" 引用）时登记，支持退格整体删除
+  const fileRefsRef = useRef<Array<{ id: number; text: string }>>([]);
+  const nextFileRefIdRef = useRef(1);
+  // 粘贴标签预览/编辑弹窗：当前编辑的标签 id（null = 关闭）
+  const [pasteEditId, setPasteEditId] = useState<number | null>(null);
+  // 思考分段：工具事件（started/completed）到达后置 true，下一个 reasoning:delta 开新段
+  const toolEventSeenRef = useRef(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -1029,6 +1138,8 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
     const handleEvent = (payload: ChatStreamEvent) => {
       switch (payload.type) {
         case "turn:started":
+          // 新的一轮：重置工具打断标记，避免上一轮残留导致误开新思考段
+          toolEventSeenRef.current = false;
           dispatch({ type: "turn:started" });
           break;
         case "text:delta":
@@ -1038,10 +1149,16 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
           break;
         case "reasoning:delta":
           if (payload.text) {
+            // 思考流被工具调用打断后到达 → 开新段（对齐 cc-gui：工具分隔的思考各自成块）
+            if (toolEventSeenRef.current) {
+              toolEventSeenRef.current = false;
+              dispatch({ type: "reasoning:segment" });
+            }
             dispatch({ type: "reasoning:delta", text: payload.text });
           }
           break;
         case "tool:started":
+          toolEventSeenRef.current = true;
           dispatch({
             type: "tool:started",
             card: {
@@ -1062,6 +1179,7 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
           }
           break;
         case "tool:completed":
+          toolEventSeenRef.current = true;
           if (payload.toolId) {
             dispatch({
               type: "tool:completed",
@@ -1112,8 +1230,8 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
           userCancelledRef.current = false;
           log(`[chat] turn:error silent=${silentCancel} message=${payload.message ?? ""}`);
           if (silentCancel) {
-            // 模型首字未出（无任何输出）：撤回用户气泡，内容回到输入框
-            rollbackLastUserTurn();
+            // 主动取消：界面消息一律保留（不撤销任何输出），仅把提示词恢复回输入框
+            restoreDraftAfterCancel();
           }
           dispatch({
             type: "turn:error",
@@ -1184,16 +1302,22 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
     };
     void initialize();
 
-    // 与 CLI 终端一致：文件树/预览面板「添加到对话」经全局事件注入当前输入框
+    // 与 CLI 终端一致：文件树/预览面板「添加到对话」经全局事件注入当前输入框。
+    // kind=text：选中内容，等价复制粘贴（>3 行折叠为 [Pasted text #N +M lines] 标签；
+    //   源码视图选取时 sourcePath 携带来源文件路径，发送时随包裹标记带出）；
+    // kind=file：文件路径引用，登记为可整体删除的引用标签。
     const handleInsertConversationTag = (event: Event) => {
-      const detail = (event as CustomEvent<{ sessionId: string; text: string }>).detail;
+      const detail = (event as CustomEvent<{ sessionId: string; text: string; kind?: string; sourcePath?: string }>)
+        .detail;
       if (!detail || detail.sessionId !== sessionId || !detail.text) return;
-      setDraft((prev) => (prev ? `${prev}${detail.text}` : detail.text));
-      const input = inputRef.current;
-      if (input) {
-        input.style.height = "auto";
-        input.style.height = `${Math.min(input.scrollHeight, 140)}px`;
-        input.focus();
+      if (detail.kind === "file") {
+        const id = nextFileRefIdRef.current++;
+        fileRefsRef.current.push({ id, text: detail.text });
+        appendToDraft(detail.text);
+      } else if (countLines(detail.text) > 3) {
+        foldPastedText(detail.text, "end", detail.sourcePath);
+      } else {
+        appendToDraft(detail.text);
       }
     };
     window.addEventListener("kkcoder-insert-conversation-tag", handleInsertConversationTag);
@@ -1310,7 +1434,7 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
     async (
       text: string,
       sendImages: ChatImageAttachment[],
-      options?: { silentFail?: boolean },
+      options?: { silentFail?: boolean; fallbackText?: string },
     ): Promise<boolean> => {
       const msgId = generateUUID();
       // 记录该条消息实际使用的模型：手动选择优先，否则用供应商默认（旋钮映射）
@@ -1319,8 +1443,14 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
       pinnedToBottomRef.current = true;
       // 新一轮对话：清除可能残留的主动取消标记
       userCancelledRef.current = false;
-      // 记录本次发送内容：模型无输出时被取消，可回退恢复输入框
-      lastSentRef.current = { text, images: sendImages };
+      // 记录本次发送内容：取消/停止时恢复回输入框（界面消息一律保留）。
+      // 手动发送传入 fallbackText（发送前的折叠形态 draft，含标签），
+      // 恢复时原样还原，避免包裹标记或展开原文带回输入框；
+      // 队列投递无 fallbackText，用 foldBackPastedTexts 反向折叠兜底。
+      lastSentRef.current = {
+        text: options?.fallbackText ?? foldBackPastedTexts(text),
+        images: sendImages,
+      };
       // 记录本轮开始时间：turn:finished 时计算本次耗时
       turnStartTimeRef.current = Date.now();
       dispatch({ type: "user:sent", text, id: msgId, images: sendImages, model: msgModel });
@@ -1361,7 +1491,8 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
   );
 
   const handleSend = async () => {
-    const text = draft.trim();
+    // 还原粘贴折叠标签（[Pasted text #N +M lines] → 完整原文）后发送
+    const text = restorePastedTexts(draft.trim());
     if ((!text && images.length === 0) || !ready || pendingQuestion) return;
 
     // 内置 slash 命令本地处理：/clear /reset 只清界面，/new 再清上下文。
@@ -1419,7 +1550,8 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
       return;
     }
 
-    await sendText(text, images);
+    // fallbackText = 发送前的折叠形态（含 [Pasted text #N] 标签），取消回退时原样恢复
+    await sendText(text, images, { fallbackText: draft });
   };
 
   // 队列引擎投递任务（GUI 聊天）：收到事件后自动发送，不重复进队列。
@@ -1533,6 +1665,213 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
     if (next.length) setImages((previous) => [...previous, ...next]);
   };
 
+  /** 粘贴文本行数（忽略末尾空行） */
+  const countLines = (text: string) => text.replace(/\n$/, "").split("\n").length;
+
+  /** 大段粘贴折叠：把 >3 行的文本替换为占位标签，原文存 ref，发送时还原。
+   *  mode: "cursor" 光标处插入（粘贴）；"end" 追加到末尾（添加到对话事件）。
+   *  sourcePath：源码视图选取时携带的来源文件路径（发送时随包裹标记带出）。
+   *  当前文本优先读 DOM value（受控 textarea 最新值），避免 mount-once 监听器闭包读到旧 draft */
+  const foldPastedText = (text: string, mode: "cursor" | "end" = "cursor", sourcePath?: string) => {
+    const el = inputRef.current;
+    const current = el?.value ?? draft;
+    const id = nextPasteIdRef.current++;
+    const lines = countLines(text);
+    pastedTextsRef.current.push({ id, text, lines, sourcePath });
+    const label = `[Pasted text #${id} +${lines} lines]`;
+    const start = mode === "end" ? current.length : (el?.selectionStart ?? current.length);
+    const end = mode === "end" ? current.length : (el?.selectionEnd ?? current.length);
+    const next = current.slice(0, start) + label + current.slice(end);
+    setDraft(next);
+    setCompletionTrigger(null);
+    // 光标移到标签之后，恢复输入框高度自适应
+    window.setTimeout(() => {
+      if (!el) return;
+      el.focus();
+      const pos = start + label.length;
+      el.setSelectionRange(pos, pos);
+      el.style.height = "auto";
+      el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
+    }, 0);
+  };
+
+  /** 追加文本到输入框末尾（智能空格分隔），聚焦并恢复高度自适应 */
+  const appendToDraft = (text: string) => {
+    const el = inputRef.current;
+    const current = el?.value ?? draft;
+    const separator = current && !current.endsWith(" ") && !current.endsWith("\n") ? " " : "";
+    const next = `${current}${separator}${text}`;
+    setDraft(next);
+    window.setTimeout(() => {
+      if (!el) return;
+      el.focus();
+      const pos = next.length;
+      el.setSelectionRange(pos, pos);
+      el.style.height = "auto";
+      el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
+    }, 0);
+  };
+
+  /** 生成粘贴块的发送形态（restore 与 foldBack 共用同一格式，保证匹配一致）：
+   *  [Pasted text #N +M lines]（来自 xxx）
+   *  <<<PASTE_BLOCK:N source="xxx">>>
+   *  ……完整原文……
+   *  <<<END_PASTE_BLOCK:N>>>
+   */
+  const buildPasteWrapped = (item: {
+    id: number;
+    text: string;
+    lines: number;
+    sourcePath?: string;
+  }) => {
+    const label = `[Pasted text #${item.id} +${item.lines} lines]`;
+    const sourceSuffix = item.sourcePath ? `（来自 ${item.sourcePath}）` : "";
+    const sourceAttr = item.sourcePath ? ` source="${item.sourcePath}"` : "";
+    return `${label}${sourceSuffix}\n<<<PASTE_BLOCK:${item.id}${sourceAttr}>>>\n${item.text}\n<<<END_PASTE_BLOCK:${item.id}>>>`;
+  };
+
+  /** 发送前还原所有折叠标签为原文，并用特殊语义包裹标记包住粘贴块，便于 AI 识别整体性 */
+  const restorePastedTexts = (text: string) => {
+    let result = text;
+    for (const item of pastedTextsRef.current) {
+      const label = `[Pasted text #${item.id} +${item.lines} lines]`;
+      result = result.replaceAll(label, buildPasteWrapped(item));
+    }
+    return result;
+  };
+
+  /** 反向折叠：把发送文本中的整个粘贴块（标签头 + 包裹 + 原文）还原为单个标签。
+   *  仅用于队列投递文本的回退兜底；手动发送的回退直接用发送前的折叠 draft（fallbackText） */
+  const foldBackPastedTexts = (text: string) => {
+    let result = text;
+    for (const item of pastedTextsRef.current) {
+      const label = `[Pasted text #${item.id} +${item.lines} lines]`;
+      result = result.replaceAll(buildPasteWrapped(item), label);
+    }
+    return result;
+  };
+
+  /** 找出 draft 中所有真实粘贴标签的区间（仅识别 ref 中登记过的，手打相似文本不误判） */
+  const findPasteLabelSpans = (
+    text: string,
+  ): Array<{ start: number; end: number; id: number; lines: number }> => {
+    const spans: Array<{ start: number; end: number; id: number; lines: number }> = [];
+    const re = /\[Pasted text #(\d+) \+(\d+) lines\]/g;
+    let match: RegExpExecArray | null;
+    while ((match = re.exec(text)) !== null) {
+      const id = Number(match[1]);
+      const lines = Number(match[2]);
+      if (pastedTextsRef.current.some((item) => item.id === id && item.lines === lines)) {
+        spans.push({ start: match.index, end: match.index + match[0].length, id, lines });
+      }
+    }
+    return spans;
+  };
+
+  /** 找出 draft 中所有登记的"文件引用"区间（仅匹配 ref 中登记过的文本，不误伤手打内容） */
+  const findFileRefSpans = (text: string): Array<{ start: number; end: number; id: number }> => {
+    const spans: Array<{ start: number; end: number; id: number }> = [];
+    for (const item of fileRefsRef.current) {
+      let index = text.indexOf(item.text);
+      while (index >= 0) {
+        spans.push({ start: index, end: index + item.text.length, id: item.id });
+        index = text.indexOf(item.text, index + item.text.length);
+      }
+    }
+    return spans;
+  };
+
+  /** 保存标签编辑：更新原文与行数，行数变化时同步更新输入框中的标签文本 */
+  const savePasteEdit = (id: number, newText: string) => {
+    const item = pastedTextsRef.current.find((p) => p.id === id);
+    if (!item) return;
+    const oldLabel = `[Pasted text #${item.id} +${item.lines} lines]`;
+    item.text = newText;
+    item.lines = countLines(newText);
+    const newLabel = `[Pasted text #${item.id} +${item.lines} lines]`;
+    setPasteEditId(null);
+    const next = draft.replace(oldLabel, newLabel);
+    setDraft(next);
+    // 光标移到新标签之后
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus();
+      const pos = next.indexOf(newLabel) + newLabel.length;
+      el.setSelectionRange(pos, pos);
+    });
+  };
+
+  /** 删除标签：原文从 ref 移除，输入框中的标签一并删除 */
+  const removePasteItem = (id: number) => {
+    const index = pastedTextsRef.current.findIndex((p) => p.id === id);
+    if (index >= 0) {
+      const item = pastedTextsRef.current[index];
+      const label = `[Pasted text #${item.id} +${item.lines} lines]`;
+      pastedTextsRef.current.splice(index, 1);
+      setDraft(draft.replace(label, ""));
+    }
+    setPasteEditId(null);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  };
+
+  /** 粘贴标签键盘交互：←/→ 整体跳过标签，Backspace 光标贴标签后时整体删除。返回 true 表示已处理 */
+  const handlePasteLabelKey = (e: React.KeyboardEvent<HTMLTextAreaElement>): boolean => {
+    const el = inputRef.current;
+    if (!el || el.selectionStart !== el.selectionEnd) return false;
+    const pos = el.selectionStart ?? 0;
+    const spans = findPasteLabelSpans(draft);
+    if (e.key === "ArrowLeft") {
+      // 光标在标签末尾向左 → 整体跳过到标签前
+      const span = spans.find((s) => s.end === pos);
+      if (span) {
+        e.preventDefault();
+        el.setSelectionRange(span.start, span.start);
+        return true;
+      }
+    } else if (e.key === "ArrowRight") {
+      // 光标在标签开头向右 → 整体跳过到标签后
+      const span = spans.find((s) => s.start === pos);
+      if (span) {
+        e.preventDefault();
+        el.setSelectionRange(span.end, span.end);
+        return true;
+      }
+    } else if (e.key === "Backspace") {
+      // 光标紧贴标签末尾按退格 → 整体删除整个标签
+      const span = spans.find((s) => s.end === pos);
+      if (span) {
+        e.preventDefault();
+        setDraft(draft.slice(0, span.start) + draft.slice(span.end));
+        requestAnimationFrame(() => {
+          el.focus();
+          el.setSelectionRange(span.start, span.start);
+          el.style.height = "auto";
+          el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
+        });
+        return true;
+      }
+      // 光标紧贴文件引用末尾按退格 → 整体删除该引用
+      const fileSpans = findFileRefSpans(draft);
+      const fileSpan = fileSpans.find((s) => s.end === pos);
+      if (fileSpan) {
+        e.preventDefault();
+        setDraft(draft.slice(0, fileSpan.start) + draft.slice(fileSpan.end));
+        // 同步移除登记，避免手动输入相同文本被误判
+        const refIndex = fileRefsRef.current.findIndex((item) => item.id === fileSpan.id);
+        if (refIndex >= 0) fileRefsRef.current.splice(refIndex, 1);
+        requestAnimationFrame(() => {
+          el.focus();
+          el.setSelectionRange(fileSpan.start, fileSpan.start);
+          el.style.height = "auto";
+          el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
+        });
+        return true;
+      }
+    }
+    return false;
+  };
+
   const disarmEsc = useCallback(() => {
     escArmedRef.current = false;
     setEscArmed(false);
@@ -1556,23 +1895,9 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
     }, 2500);
   }, []);
 
-  /** 取消回退：模型无任何输出时撤回刚发的用户消息，并把内容恢复到输入框 */
-  const rollbackLastUserTurn = useCallback(() => {
-    const trimmed = trimLastUserTurn(messagesRef.current);
-    if (trimmed === messagesRef.current) {
-      const tail = messagesRef.current
-        .slice(-2)
-        .map((m) => ({
-          role: m.role,
-          textLen: m.text?.length ?? 0,
-          reasoningLen: m.reasoning?.length ?? 0,
-          tools: m.tools?.length ?? 0,
-        }));
-      log(`[chat] rollback skipped (tail=${JSON.stringify(tail)})`);
-      return;
-    }
-    log("[chat] rollback: removing last user turn");
-    dispatch({ type: "cancel:rollback" });
+  /** 取消/停止：界面消息一律保留（不撤销任何已输出的内容），
+   *  仅把用户刚发送的提示词恢复回输入框（折叠标签形态），便于修改后重新发送 */
+  const restoreDraftAfterCancel = useCallback(() => {
     const sent = lastSentRef.current;
     if (sent) {
       setDraft(sent.text);
@@ -1590,11 +1915,11 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
     setCancelling(true);
     invoke("chat_cancel", { sessionId })
       .then(() => {
-        // 兜底：若后端没有活跃 turn（不会发 turn:error），且模型无任何输出，
-        // 则自行撤回用户消息并恢复输入框。
+        // 兜底：若后端没有活跃 turn（不会发 turn:error），
+        // 则自行把提示词恢复回输入框（界面消息保留）
         window.setTimeout(() => {
           if (!userCancelledRef.current) return; // 已收到 turn:error 并处理过
-          rollbackLastUserTurn();
+          restoreDraftAfterCancel();
         }, 600);
       })
       .catch((err) => {
@@ -1602,7 +1927,7 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
         setCancelling(false);
         userCancelledRef.current = false;
       });
-  }, [cancelling, disarmEsc, rollbackLastUserTurn, sessionId]);
+  }, [cancelling, disarmEsc, restoreDraftAfterCancel, sessionId]);
 
   // 运行中两次 ESC 终止：第一次按下 → 终止按钮显示 ESC 提示；第二次按下 → 终止任务。
   // 仅在当前会话运行中且本 tab 激活时生效；问题弹窗打开期间不劫持 ESC。
@@ -1647,6 +1972,8 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
       e.stopPropagation();
       return;
     }
+    // 粘贴标签：←/→ 整体跳过、Backspace 整体删除（光标贴标签后时）
+    if (handlePasteLabelKey(e)) return;
     if (completionTrigger) {
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
@@ -1763,79 +2090,102 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
           </div>
         )}
         <div className="chat-input-bar">
-          <ModelSelector
-            selectedModel={selectedModel}
-            modelInfo={modelInfo}
-            onSelectModel={onSelectModel}
-            onSelectProvider={onSelectProvider}
-            onRefreshModelInfo={onRefreshModelInfo}
-            disabled={busy}
-          />
-          <textarea
-            ref={inputRef}
-            className="chat-input"
-            value={draft}
-            onChange={(event) => {
-              setDraft(event.target.value);
-              updateCompletion(event.target.value, event.target.selectionStart);
-              event.target.style.height = "auto";
-              event.target.style.height = `${Math.min(event.target.scrollHeight, 140)}px`;
-            }}
-            onClick={(event) =>
-              updateCompletion(event.currentTarget.value, event.currentTarget.selectionStart)
-            }
-            onKeyDown={handleKeyDown}
-            onCompositionStart={() => {
-              composingRef.current = true;
-              setCompletionTrigger(null);
-            }}
-            onCompositionEnd={(event) => {
-              composingRef.current = false;
-              // 组合结束后重新检测，让补全菜单正常响应方向键
-              updateCompletion(event.currentTarget.value, event.currentTarget.selectionStart);
-            }}
-            onPaste={(event) => {
-              const pastedImages = [...event.clipboardData.files].filter((file) =>
-                file.type.startsWith("image/"),
-              );
-              if (pastedImages.length) {
-                event.preventDefault();
-                void addImageFiles(pastedImages);
+          {/* 独立输入框：textarea 自带边框壳，与下方按钮区分开 */}
+          <div className={`chat-input-shell ${draggingImage ? "is-dragging" : ""}`}>
+            <textarea
+              ref={inputRef}
+              className="chat-input"
+              value={draft}
+              onChange={(event) => {
+                setDraft(event.target.value);
+                updateCompletion(event.target.value, event.target.selectionStart);
+                event.target.style.height = "auto";
+                event.target.style.height = `${Math.min(event.target.scrollHeight, 140)}px`;
+              }}
+              onClick={(event) => {
+                const pos = event.currentTarget.selectionStart ?? 0;
+                const selEnd = event.currentTarget.selectionEnd ?? pos;
+                updateCompletion(event.currentTarget.value, pos);
+                // 点击粘贴标签内部（无选区时）：打开预览/编辑弹窗
+                if (pos === selEnd) {
+                  const spans = findPasteLabelSpans(event.currentTarget.value);
+                  const span = spans.find((s) => pos >= s.start && pos < s.end);
+                  if (span) setPasteEditId(span.id);
+                }
+              }}
+              onKeyDown={handleKeyDown}
+              onCompositionStart={() => {
+                composingRef.current = true;
+                setCompletionTrigger(null);
+              }}
+              onCompositionEnd={(event) => {
+                composingRef.current = false;
+                // 组合结束后重新检测，让补全菜单正常响应方向键
+                updateCompletion(event.currentTarget.value, event.currentTarget.selectionStart);
+              }}
+              onPaste={(event) => {
+                const pastedImages = [...event.clipboardData.files].filter((file) =>
+                  file.type.startsWith("image/"),
+                );
+                if (pastedImages.length) {
+                  event.preventDefault();
+                  void addImageFiles(pastedImages);
+                  return;
+                }
+                // 大段文本（>3 行）折叠为 [Pasted text #N +M lines] 标签：
+                // 提升提示词可读性，发送时自动还原全部文字
+                const pastedText = event.clipboardData.getData("text/plain");
+                if (pastedText && countLines(pastedText) > 3) {
+                  event.preventDefault();
+                  foldPastedText(pastedText);
+                }
+              }}
+              placeholder={pendingQuestion ? "请先完成弹出的问题" : "输入消息，@ 引用文件，/ 使用技能或命令"}
+              rows={1}
+              // 思考中（busy）不禁用：可继续打字，发送时自动进队列（发送按钮此时为「终止」）
+              disabled={!ready || !!pendingQuestion}
+            />
+          </div>
+          {/* 按钮区：独立一行，紧凑布局；textarea 独占一行全宽不被挤压 */}
+          <div className="chat-input-toolbar">
+            <ModelSelector
+              selectedModel={selectedModel}
+              modelInfo={modelInfo}
+              onSelectModel={onSelectModel}
+              onSelectProvider={onSelectProvider}
+              onRefreshModelInfo={onRefreshModelInfo}
+              disabled={busy}
+            />
+            <div className="chat-input-toolbar-spacer" />
+            <button
+              type="button"
+              className={`chat-send-btn ${busy ? "is-cancel" : ""} ${escArmed ? "is-esc-armed" : ""}`}
+              onClick={busy ? handleCancel : () => void handleSend()}
+              disabled={
+                cancelling ||
+                (!busy && (!ready || !!pendingQuestion || (!draft.trim() && images.length === 0)))
               }
-            }}
-            placeholder={pendingQuestion ? "请先完成弹出的问题" : "输入消息，@ 引用文件，/ 使用技能或命令"}
-            rows={1}
-            // 思考中（busy）不禁用：可继续打字，发送时自动进队列（发送按钮此时为「终止」）
-            disabled={!ready || !!pendingQuestion}
-          />
-          <button
-            type="button"
-            className={`chat-send-btn ${busy ? "is-cancel" : ""} ${escArmed ? "is-esc-armed" : ""}`}
-            onClick={busy ? handleCancel : () => void handleSend()}
-            disabled={
-              cancelling ||
-              (!busy && (!ready || !!pendingQuestion || (!draft.trim() && images.length === 0)))
-            }
-            title={
-              cancelling
-                ? "正在取消"
-                : busy
-                  ? escArmed
-                    ? "再按一次 ESC 终止任务（或点击直接终止）"
-                    : "终止生成（按 ESC 两次）"
-                  : "发送"
-            }
-          >
-            {busy ? (
-              escArmed ? (
-                <span className="chat-cancel-esc">ESC</span>
+              title={
+                cancelling
+                  ? "正在取消"
+                  : busy
+                    ? escArmed
+                      ? "再按一次 ESC 终止任务（或点击直接终止）"
+                      : "终止生成（按 ESC 两次）"
+                    : "发送"
+              }
+            >
+              {busy ? (
+                escArmed ? (
+                  <span className="chat-cancel-esc">ESC</span>
+                ) : (
+                  <Square size={13} />
+                )
               ) : (
-                <Square size={15} />
-              )
-            ) : (
-              <Send size={15} />
-            )}
-          </button>
+                <Send size={13} />
+              )}
+            </button>
+          </div>
         </div>
       </div>
       {busy && lastMsg?.role === "assistant" && lastMsg.status === "streaming" && (
@@ -1850,6 +2200,19 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
           error={questionError}
           onSubmit={(answers) => void answerQuestion(answers)}
           onSkip={() => void answerQuestion({})}
+        />
+      )}
+
+      {/* 粘贴标签预览/编辑弹窗 */}
+      {pasteEditId != null && (
+        <PasteEditModal
+          initialText={pastedTextsRef.current.find((item) => item.id === pasteEditId)?.text ?? ""}
+          onSave={(text) => savePasteEdit(pasteEditId, text)}
+          onDelete={() => removePasteItem(pasteEditId)}
+          onCancel={() => {
+            setPasteEditId(null);
+            requestAnimationFrame(() => inputRef.current?.focus());
+          }}
         />
       )}
 

@@ -216,6 +216,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
     const val = localStorage.getItem(COLLAPSE_TOOLS_KEY);
     return val === null ? true : val === "true";
   });
+  // 思考过程显示：聚合（合并为一块，默认）/ 分开（被工具打断的多段思考各自成块）
+  const SPLIT_REASONING_KEY = "kkcoder_setting_split_reasoning";
+  const [splitReasoning, setSplitReasoning] = useState<boolean>(() => {
+    return localStorage.getItem(SPLIT_REASONING_KEY) === "true";
+  });
   const [terminalSchemeMode, setTerminalSchemeMode] = useState<TerminalSchemeMode>(() => {
     return resolveTerminalSchemeMode(localStorage.getItem(TERMINAL_SCHEME_MODE_KEY));
   });
@@ -430,6 +435,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
   useEffect(() => {
     localStorage.setItem(COLLAPSE_TOOLS_KEY, String(collapseToolCards));
   }, [collapseToolCards]);
+
+  useEffect(() => {
+    localStorage.setItem(SPLIT_REASONING_KEY, String(splitReasoning));
+  }, [splitReasoning]);
 
   useEffect(() => {
     localStorage.setItem(TERMINAL_SCHEME_MODE_KEY, terminalSchemeMode);
@@ -776,6 +785,17 @@ return (
                       <span className="switch-slider" />
                     </label>
                     <span className="switch-label">命令记录自动折叠（多条命令时折叠为一行摘要）</span>
+                  </div>
+                  <div className="settings-switch-row">
+                    <label className="switch-container">
+                      <input
+                        type="checkbox"
+                        checked={splitReasoning}
+                        onChange={(e) => setSplitReasoning(e.target.checked)}
+                      />
+                      <span className="switch-slider" />
+                    </label>
+                    <span className="switch-label">分开显示多段思考（被工具调用打断的思考各自成块；关闭则合并为一块）</span>
                   </div>
                 </section>
               </div>

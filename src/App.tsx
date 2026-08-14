@@ -736,18 +736,24 @@ function App() {
     return () => clearTimeout(timer);
   }, [showProjectTree, treeBoundSession?.path, setProjectTreeWidth]);
 
-  const insertConversationTagToBoundTerminal = useCallback((text: string) => {
-    if (!treeBoundSessionId || !text) return;
-    window.dispatchEvent(new CustomEvent("kkcoder-insert-conversation-tag", {
-      detail: { sessionId: treeBoundSessionId, text },
-    }));
-    requestActiveTerminalFocus({ delayMs: 40, sessionId: treeBoundSessionId });
-  }, [treeBoundSessionId]);
+  const insertConversationTagToBoundTerminal = useCallback(
+    (text: string, sourcePath?: string) => {
+      if (!treeBoundSessionId || !text) return;
+      // kind=text：选中内容（等价复制粘贴），输入框按行数折叠为标签；
+      // sourcePath：源码视图选中时携带来源文件路径
+      window.dispatchEvent(new CustomEvent("kkcoder-insert-conversation-tag", {
+        detail: { sessionId: treeBoundSessionId, text, kind: "text", sourcePath },
+      }));
+      requestActiveTerminalFocus({ delayMs: 40, sessionId: treeBoundSessionId });
+    },
+    [treeBoundSessionId],
+  );
 
   const handleInsertPathToSession = useCallback((sessionId: string, text: string) => {
     if (!sessionId || !text) return;
+    // kind=file：文件路径引用，输入框登记为可整体删除的引用标签
     window.dispatchEvent(new CustomEvent("kkcoder-insert-conversation-tag", {
-      detail: { sessionId, text },
+      detail: { sessionId, text, kind: "file" },
     }));
     requestActiveTerminalFocus({ delayMs: 40, sessionId });
   }, []);
