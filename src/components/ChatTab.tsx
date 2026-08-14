@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
+  ArrowUp,
   BrainCircuit,
   Check,
   ChevronRight,
@@ -13,12 +14,14 @@ import {
   File,
   FileText,
   Folder,
+  MessageSquare,
   PencilLine,
   Search,
   Send,
   Sparkles,
   Square,
   Terminal as TerminalIcon,
+  Trash2,
   Wrench,
   X,
 } from "lucide-react";
@@ -54,12 +57,12 @@ interface ChatTabProps {
   onUserSubmittedInput?: (sessionId: string, submittedAt?: string) => void;
   /** AI 思考中发送的消息自动加入队列（App 层队列引擎），空闲后自动投递回来 */
   onEnqueuePrompt?: (sessionId: string, prompt: string) => void;
-  /** 浮动队列：当前会话的排队任务（聊天区右下角，不占布局） */
+  /** 当前会话的排队任务 */
   queueTasks?: Array<{ id: string; prompt: string }>;
-  queuePanelOpen?: boolean;
-  onToggleQueuePanel?: () => void;
   onRemoveQueueTask?: (sessionId: string, taskId: string) => void;
-  onClearQueue?: (sessionId: string) => void;
+  onUpdateQueueTask?: (sessionId: string, taskId: string, newPrompt: string) => void;
+  onPauseQueue?: (sessionId: string) => void;
+  onResumeQueue?: (sessionId: string) => void;
 }
 
 interface ToolCardData {
@@ -1061,10 +1064,10 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
     onUserSubmittedInput,
     onEnqueuePrompt,
     queueTasks,
-    queuePanelOpen = false,
-    onToggleQueuePanel,
     onRemoveQueueTask,
-    onClearQueue,
+    onUpdateQueueTask,
+    onPauseQueue,
+    onResumeQueue,
   } = props;
 
   const [messages, dispatch] = useReducer(messagesReducer, []);
@@ -1096,6 +1099,39 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
   const [draggingImage, setDraggingImage] = useState(false);
   // 思考中已运行秒数：从发送消息起计时，与完成时耗时（turnStartTimeRef）同源
   const [streamingElapsed, setStreamingElapsed] = useState(0);
+  // 队列项行内编辑状态
+  const [editingQueueTaskId, setEditingQueueTaskId] = useState<string | null>(null);
+  const [editingQueueText, setEditingQueueText] = useState("");
+  // 发送历史：↑/↓ 加载本会话之前发送过的消息（localStorage 持久，跨重启保留）
+  const SEND_HISTORY_KEY_PREFIX = "kkcoder_chat_send_history_";
+  const sendHistoryRef = useRef<string[]>([]);
+  const historyCursorRef = useRef(-1);
+  const historyDraftBackupRef = useRef("");
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(SEND_HISTORY_KEY_PREFIX + sessionId);
+      sendHistoryRef.current = raw ? (JSON.parse(raw) as string[]) : [];
+    } catch {
+      sendHistoryRef.current = [];
+    }
+    historyCursorRef.current = -1;
+    historyDraftBackupRef.current = "";
+  }, [sessionId]);
+  const pushSendHistory = useCallback(
+    (text: string) => {
+      const list = sendHistoryRef.current;
+      if (list[list.length - 1] === text) return;
+      list.push(text);
+      if (list.length > 10) list.splice(0, list.length - 10);
+      try {
+        localStorage.setItem(SEND_HISTORY_KEY_PREFIX + sessionId, JSON.stringify(list));
+      } catch {
+        // localStorage 满/不可用时静默放弃持久化，会话内仍可浏览
+      }
+      historyCursorRef.current = -1;
+    },
+    [sessionId],
+  );
   // 粘贴折叠：>3 行的大段文本折叠为 [Pasted text #N +M lines] 标签（可读性），
   // 原文暂存于此，发送时还原为完整文本；sourcePath 为源码视图选取时的来源文件
   const pastedTextsRef = useRef<
@@ -1584,6 +1620,7 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
         return;
       }
       onEnqueuePrompt?.(sessionId, text);
+      pushSendHistory(text);
       setDraft("");
       setCompletionTrigger(null);
       log(`[chat] busy: queued prompt "${text}" for session ${sessionId}`);
@@ -1592,7 +1629,11 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
     }
 
     // fallbackText = 发送前的折叠形态（含 [Pasted text #N] 标签），取消回退时原样恢复
-    await sendText(text, images, { fallbackText: draft });
+    const sent = await sendText(text, images, { fallbackText: draft });
+    if (sent) {
+      // 发送成功才记入历史：↑/↓ 可把之前发过的消息重新加载到输入框
+      pushSendHistory(text);
+    }
   };
 
   // 队列引擎投递任务（GUI 聊天）：收到事件后自动发送，不重复进队列。
@@ -1664,6 +1705,58 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
       setQuestionError(formatFeedbackError(error, "提交回答失败"));
     } finally {
       setQuestionSubmitting(false);
+    }
+  };
+
+  const handleStartEditQueueTask = (task: { id: string; prompt: string }) => {
+    setEditingQueueTaskId(task.id);
+    setEditingQueueText(task.prompt);
+  };
+
+  const handleSaveEditQueueTask = (taskId: string) => {
+    const trimmed = editingQueueText.trim();
+    if (trimmed) {
+      onUpdateQueueTask?.(sessionId, taskId, trimmed);
+    }
+    setEditingQueueTaskId(null);
+  };
+
+  const handleCancelEditQueueTask = () => {
+    setEditingQueueTaskId(null);
+  };
+
+  const handleInterruptAndSendQueueTask = async (task: { id: string; prompt: string }) => {
+    if (editingQueueTaskId === task.id) {
+      setEditingQueueTaskId(null);
+    }
+    // 1. 立即锁定该会话的队列调度引擎，防止在终止当前 turn 时错误触发第 1 条排队任务
+    onPauseQueue?.(sessionId);
+
+    // 2. 仅将当前被点击选中的 task (例如第 2 条) 从队列中移除，其余任务（如第 1 条、第 3 条）严格保留
+    onRemoveQueueTask?.(sessionId, task.id);
+
+    try {
+      // 3. 如果当前有正在运行的 AI 生成，立即终止当前的 turn
+      if (busyRef.current) {
+        log(`[chat] interrupt & send: cancelling active turn for session ${sessionId}`);
+        userCancelledRef.current = true;
+        disarmEsc();
+        try {
+          await invoke("chat_cancel", { sessionId });
+        } catch (err) {
+          log(`[chat] cancel before interrupt failed: ${err}`);
+        }
+        // 等待 160ms 确保后端取消并重置 turn 状态
+        await new Promise((resolve) => setTimeout(resolve, 160));
+      }
+
+      // 4. 立即把该排队消息作为新指令发送给 AI
+      log(`[chat] interrupt & send: dispatching "${task.prompt}"`);
+      await sendText(task.prompt, [], {});
+    } finally {
+      // 5. 新任务已发出（busy 已被置为 true），解除队列暂停锁定；
+      // 本轮生成自然结束后，队列调度引擎会自动按顺序继续执行队列中剩下的第 1 条、第 3 条任务
+      onResumeQueue?.(sessionId);
     }
   };
 
@@ -2042,6 +2135,57 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
         return;
       }
     }
+    // 发送历史浏览：↑ 加载上一条（更早）已发送消息到输入框，↓ 下一条，到末尾恢复原草稿。
+    // 仅加载到输入框供编辑，按回车才真正发送；补全菜单打开时 ↑/↓ 优先服务补全导航。
+    if (e.key === "ArrowUp" && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+      const el = e.currentTarget;
+      // 光标不在首行时不拦截（保留默认光标上移），输入框为空时直接浏览
+      const firstLineEnd = draft.indexOf("\n");
+      const firstLineLimit = firstLineEnd === -1 ? draft.length : firstLineEnd;
+      if (draft && (el.selectionStart ?? 0) > firstLineLimit) return;
+      const list = sendHistoryRef.current;
+      if (list.length === 0) return;
+      e.preventDefault();
+      if (historyCursorRef.current < 0) {
+        // 首次进入浏览：暂存当前草稿，跳到最近发送的一条
+        historyDraftBackupRef.current = draft;
+        historyCursorRef.current = list.length - 1;
+      } else if (historyCursorRef.current > 0) {
+        historyCursorRef.current -= 1;
+      }
+      setDraft(list[historyCursorRef.current]);
+      requestAnimationFrame(() => {
+        const target = inputRef.current;
+        if (target) target.setSelectionRange(target.value.length, target.value.length);
+      });
+      return;
+    }
+    if (e.key === "ArrowDown" && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+      if (historyCursorRef.current < 0) return;
+      e.preventDefault();
+      historyCursorRef.current += 1;
+      if (historyCursorRef.current >= sendHistoryRef.current.length) {
+        // 已到最新一条之后：退出浏览，恢复进入浏览前的草稿
+        historyCursorRef.current = -1;
+        setDraft(historyDraftBackupRef.current);
+      } else {
+        setDraft(sendHistoryRef.current[historyCursorRef.current]);
+      }
+      requestAnimationFrame(() => {
+        const target = inputRef.current;
+        if (target) target.setSelectionRange(target.value.length, target.value.length);
+      });
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+      e.preventDefault();
+      if (draft.trim()) {
+        void handleSend();
+      } else if (queueTasks && queueTasks.length > 0) {
+        void handleInterruptAndSendQueueTask(queueTasks[0]);
+      }
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       void handleSend();
@@ -2146,6 +2290,92 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
             onHover={setCompletionIndex}
           />
         )}
+        {/* 排队队列栏：吸附在输入框顶部，支持编辑、删除、插话发送 */}
+        {queueTasks && queueTasks.length > 0 && (
+          <div className="chat-composer-queue">
+            {queueTasks.map((task) => {
+              const isEditing = editingQueueTaskId === task.id;
+              return (
+                <div key={task.id} className="chat-composer-queue-item">
+                  {isEditing ? (
+                    <div className="chat-composer-queue-edit-row">
+                      <MessageSquare size={13} className="chat-composer-queue-icon" />
+                      <input
+                        type="text"
+                        className="chat-composer-queue-edit-input"
+                        value={editingQueueText}
+                        onChange={(e) => setEditingQueueText(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            handleSaveEditQueueTask(task.id);
+                          } else if (e.key === "Escape") {
+                            e.preventDefault();
+                            handleCancelEditQueueTask();
+                          }
+                        }}
+                        autoFocus
+                      />
+                      <div className="chat-composer-queue-actions">
+                        <button
+                          type="button"
+                          className="chat-composer-queue-btn chat-composer-queue-btn-confirm"
+                          onClick={() => handleSaveEditQueueTask(task.id)}
+                          title="保存修改 (Enter)"
+                        >
+                          <Check size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          className="chat-composer-queue-btn chat-composer-queue-btn-cancel"
+                          onClick={handleCancelEditQueueTask}
+                          title="取消编辑 (Esc)"
+                        >
+                          <X size={13} />
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="chat-composer-queue-row">
+                      <div className="chat-composer-queue-main">
+                        <MessageSquare size={13} className="chat-composer-queue-icon" />
+                        <span className="chat-composer-queue-text" title={task.prompt}>
+                          {task.prompt}
+                        </span>
+                      </div>
+                      <div className="chat-composer-queue-actions">
+                        <button
+                          type="button"
+                          className="chat-composer-queue-btn"
+                          onClick={() => handleStartEditQueueTask(task)}
+                          title="编辑排队消息"
+                        >
+                          <PencilLine size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          className="chat-composer-queue-btn chat-composer-queue-btn-delete"
+                          onClick={() => onRemoveQueueTask?.(sessionId, task.id)}
+                          title="删除排队消息"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          className="chat-composer-queue-btn chat-composer-queue-btn-send"
+                          onClick={() => void handleInterruptAndSendQueueTask(task)}
+                          title="插话发送：暂停当前生成并立即发送本条消息"
+                        >
+                          <ArrowUp size={13} />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
         <div className={`chat-composer-island ${draggingImage ? "is-dragging" : ""}`}>
           {!!images.length && (
             <div className="chat-attachment-strip">
@@ -2173,6 +2403,8 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
             className="chat-input"
             value={draft}
             onChange={(event) => {
+              // 用户手动输入（非 ↑/↓ 加载历史）即退出历史浏览模式
+              historyCursorRef.current = -1;
               setDraft(event.target.value);
               updateCompletion(event.target.value, event.target.selectionStart);
               event.target.style.height = "auto";
@@ -2304,73 +2536,6 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
             requestAnimationFrame(() => inputRef.current?.focus());
           }}
         />
-      )}
-
-      {/* 浮动队列：聊天区右下角，点击丝滑展开（不占布局、不顶对话） */}
-      {queueTasks && queueTasks.length > 0 && (
-        <div className="queue-floating">
-          <button
-            type="button"
-            className={`queue-float-btn ${queuePanelOpen ? "is-open" : ""}`}
-            onClick={onToggleQueuePanel}
-            title={queuePanelOpen ? "收起队列" : "展开队列"}
-          >
-            <svg className="queue-title-svg-icon" xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-              <line x1="8" y1="6" x2="21" y2="6"></line>
-              <line x1="8" y1="12" x2="21" y2="12"></line>
-              <line x1="8" y1="18" x2="21" y2="18"></line>
-              <line x1="3" y1="6" x2="3.01" y2="6"></line>
-              <line x1="3" y1="12" x2="3.01" y2="12"></line>
-              <line x1="3" y1="18" x2="3.01" y2="18"></line>
-            </svg>
-            <span>队列</span>
-            <span className="queue-float-count">{queueTasks.length}</span>
-          </button>
-          <div className={`queue-float-panel ${queuePanelOpen ? "is-open" : ""}`}>
-            <div className="queue-panel-header">
-              <div className="queue-panel-title">
-                <svg className="queue-title-svg-icon" xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.8, marginRight: "6px" }}>
-                  <line x1="8" y1="6" x2="21" y2="6"></line>
-                  <line x1="8" y1="12" x2="21" y2="12"></line>
-                  <line x1="8" y1="18" x2="21" y2="18"></line>
-                  <line x1="3" y1="6" x2="3.01" y2="6"></line>
-                  <line x1="3" y1="12" x2="3.01" y2="12"></line>
-                  <line x1="3" y1="18" x2="3.01" y2="18"></line>
-                </svg>
-                <span>任务队列 ({queueTasks.length})</span>
-              </div>
-              <button
-                type="button"
-                className="queue-clear-btn"
-                onClick={() => onClearQueue?.(sessionId)}
-                title="全部清空队列"
-              >
-                <svg className="trash-svg-icon" xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="3 6 5 6 21 6"></polyline>
-                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                  <line x1="10" y1="11" x2="10" y2="17"></line>
-                  <line x1="14" y1="11" x2="14" y2="17"></line>
-                </svg>
-              </button>
-            </div>
-            <div className="queue-panel-body">
-              {queueTasks.map((task, index) => (
-                <div key={task.id} className="queue-item">
-                  <span className="queue-item-index">{index + 1}</span>
-                  <span className="queue-item-text">{task.prompt}</span>
-                  <button
-                    type="button"
-                    className="queue-item-delete"
-                    onClick={() => onRemoveQueueTask?.(sessionId, task.id)}
-                    title="删除排队任务"
-                  >
-                    ✕
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
       )}
     </div>
   );

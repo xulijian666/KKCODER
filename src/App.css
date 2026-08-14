@@ -1527,7 +1527,11 @@ body.terminal-split-resizing .terminal-pane-host {
   }
 }
 
-/* 极简滚动条 */
+/* 全局极简滚动条：与对话区完全统一，随主题动态变色 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--text-secondary) 25%, transparent) transparent;
+}
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -1536,11 +1540,11 @@ body.terminal-split-resizing .terminal-pane-host {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
-  border-radius: 3px;
+  background: color-mix(in srgb, var(--text-secondary) 25%, transparent);
+  border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
+  background: color-mix(in srgb, var(--text-secondary) 45%, transparent);
 }
 
 /* ==================== 设置面板 Settings（全屏覆盖，布局参考 CC-GUI settings.part1.css） ==================== */
@@ -2739,186 +2743,126 @@ input:checked + .switch-slider:before {
   border: 1.5px solid var(--bg-sidebar); /* 极简的物理挖空镂空边框，完美贴合任何黑夜白天背景 */
 }
 
-/* 浮动队列面板：聊天区右下角按钮固定不动，面板向上丝滑展开（不占布局、不顶对话窗口） */
-.queue-floating {
-  position: absolute;
-  right: 14px;
-  bottom: 96px; /* 位于两行式输入栏上方 */
-  z-index: 50;
-  pointer-events: none;
-}
-.queue-float-btn {
-  pointer-events: auto;
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 12px;
-  border: 1px solid var(--border-color);
-  border-radius: 999px;
-  background: var(--bg-sidebar);
-  color: var(--text-primary);
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
-  transition: border-color 0.15s ease, transform 0.15s ease;
-}
-.queue-float-btn:hover {
-  border-color: var(--color-primary);
-}
-.queue-float-btn.is-open {
-  border-color: var(--color-primary);
-}
-.queue-float-count {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  border-radius: 9px;
-  background: #ef4444;
-  color: #fff;
-  font-size: 11px;
-  font-weight: 700;
-}
-
-/* 展开面板：锚定按钮上方，向上展开（高度/透明度丝滑过渡） */
-.queue-float-panel {
-  pointer-events: auto;
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 8px);
-  width: 320px;
-  max-height: 0;
-  opacity: 0;
-  transform: translateY(6px) scale(0.98);
-  transform-origin: bottom right;
-  overflow: hidden;
-  background: var(--bg-sidebar);
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
-  transition: max-height 0.28s cubic-bezier(0.16, 1, 0.3, 1),
-    opacity 0.22s ease, transform 0.28s cubic-bezier(0.16, 1, 0.3, 1);
-}
-.queue-float-panel.is-open {
-  max-height: 320px;
-  opacity: 1;
-  transform: translateY(0) scale(1);
-}
-.queue-float-panel .queue-panel-header {
-  padding: 10px 12px 6px;
-}
-.queue-float-panel .queue-panel-body {
-  padding: 4px 10px 10px;
-  max-height: 220px;
-}
-
-.queue-panel-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  border-bottom: 1px dashed var(--border-color);
-  padding-bottom: 6px;
-}
-
-.queue-panel-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--text-primary);
-}
-
-.queue-clear-btn {
-  background: none;
-  border: none;
-  color: var(--text-secondary);
-  cursor: pointer;
-  padding: 4px;
-  border-radius: 4px;
-  transition: all 0.2s;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.queue-clear-btn:hover {
-  background-color: rgba(239, 68, 68, 0.1);
-  color: #ef4444;
-}
-
-.queue-panel-body {
+/* ========== 输入框顶部排队消息卡片（Composer Queue Bar） ========== */
+.chat-composer-queue {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  max-height: 120px;
-  overflow-y: auto;
+  gap: 4px;
+  margin-bottom: 6px;
 }
-
-.queue-item {
+.chat-composer-queue-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  background-color: var(--bg-main);
+  min-height: 36px;
+  padding: 0 10px 0 12px;
   border: 1px solid var(--border-color);
-  border-radius: 4px;
-  padding: 6px 12px;
-  animation: queueSlideIn 0.2s ease-out;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-sidebar) 82%, var(--bg-main));
+  backdrop-filter: blur(8px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  animation: queueItemAppear 0.2s ease-out;
 }
-
-.queue-item-index {
-  font-size: 11px;
+@keyframes queueItemAppear {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.chat-composer-queue-item:hover {
+  border-color: color-mix(in srgb, var(--color-primary) 30%, var(--border-color));
+  background: color-mix(in srgb, var(--bg-sidebar) 92%, var(--bg-main));
+}
+.chat-composer-queue-row,
+.chat-composer-queue-edit-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 8px;
+}
+.chat-composer-queue-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+.chat-composer-queue-icon {
   color: var(--text-secondary);
-  font-weight: 700;
-  background-color: var(--bg-sidebar);
-  width: 18px;
-  height: 18px;
-  border-radius: 9px;
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+.chat-composer-queue-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text-primary);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: text;
+}
+.chat-composer-queue-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.chat-composer-queue-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-}
-
-.queue-item-text {
-  flex: 1;
-  font-size: 12px;
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  text-align: left;
-}
-
-.queue-item-delete {
-  background: none;
+  width: 26px;
+  height: 26px;
+  padding: 0;
   border: none;
+  background: transparent;
+  border-radius: 6px;
   color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 700;
   cursor: pointer;
-  padding: 2px 4px;
-  border-radius: 3px;
-  transition: all 0.2s;
+  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
 }
-
-.queue-item-delete:hover {
+.chat-composer-queue-btn:hover {
+  background-color: var(--bg-hover-item);
+  color: var(--text-primary);
+}
+.chat-composer-queue-btn:active {
+  transform: scale(0.92);
+}
+.chat-composer-queue-btn-delete:hover {
+  background-color: color-mix(in srgb, #ef4444 15%, transparent);
   color: #ef4444;
-  background-color: rgba(239, 68, 68, 0.1);
 }
-
-@keyframes queueSlideIn {
-  from {
-    transform: translateX(-15px);
-    opacity: 0;
-  }
-  to {
-    transform: translateX(0);
-    opacity: 1;
-  }
+.chat-composer-queue-btn-send:hover {
+  background-color: color-mix(in srgb, var(--color-primary) 15%, transparent);
+  color: var(--color-primary);
+}
+.chat-composer-queue-btn-confirm:hover {
+  background-color: color-mix(in srgb, #10b981 15%, transparent);
+  color: #10b981;
+}
+.chat-composer-queue-btn-cancel:hover {
+  background-color: color-mix(in srgb, #ef4444 15%, transparent);
+  color: #ef4444;
+}
+.chat-composer-queue-edit-input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 2px 8px;
+  font-size: 13px;
+  font-family: inherit;
+  background: var(--bg-main);
+  border: 1px solid var(--color-primary);
+  border-radius: 6px;
+  color: var(--text-primary);
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 20%, transparent);
 }
 
 /* ==========================================
@@ -4328,6 +4272,299 @@ body.preview-resizing .preview-resize-handle::after {
   overflow: auto;
   padding: 16px;
   user-select: text;
+}
+
+/* Monaco 代码编辑与图片查看器占满面板，不要 16px 内容边距 */
+.preview-body.code-preview-body,
+.preview-body.image-preview-body {
+  padding: 0;
+  overflow: hidden;
+}
+
+.preview-dirty-dot {
+  color: var(--color-primary);
+  font-size: 12px;
+  flex-shrink: 0;
+  margin-left: -3px;
+  animation: preview-dirty-pop 0.18s ease;
+}
+
+@keyframes preview-dirty-pop {
+  from { transform: scale(0.4); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+.preview-action-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.preview-action-btn.save-file-btn.active {
+  color: var(--color-primary);
+}
+
+/* ========== Monaco 编辑器 / 侧边并排预览 ========== */
+.preview-code-layout {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.preview-code-main {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  position: relative;
+}
+
+.monaco-editor-host {
+  position: absolute;
+  inset: 0;
+}
+
+.monaco-editor-mount {
+  position: absolute;
+  inset: 0;
+}
+
+.monaco-editor-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  font-size: 13px;
+  background-color: var(--bg-main);
+}
+
+.monaco-editor-loading.error {
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+}
+
+.monaco-editor-load-error-title {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.monaco-editor-load-error-detail {
+  max-width: 420px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.monaco-editor-retry-btn {
+  margin-top: 4px;
+}
+
+.preview-side-resizer {
+  flex: 0 0 6px;
+  cursor: col-resize;
+  position: relative;
+  touch-action: none;
+}
+
+.preview-side-resizer::after {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background-color: var(--border-color);
+  transition: background-color 0.15s ease;
+}
+
+.preview-side-resizer:hover::after,
+body.preview-resizing .preview-side-resizer::after {
+  background-color: var(--color-primary);
+}
+
+.preview-side-pane {
+  flex: 0 0 auto;
+  min-width: 120px;
+  height: 100%;
+  overflow: hidden;
+  border-left: 1px solid var(--border-color);
+}
+
+/* ========== HTML 侧边预览 ========== */
+.html-preview-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+}
+
+.html-preview-toolbar {
+  height: 34px;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 0 12px;
+  border-bottom: 1px solid var(--border-color);
+  background-color: var(--bg-sidebar);
+  font-size: 11px;
+  color: var(--text-secondary);
+  user-select: none;
+}
+
+.html-preview-file {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.html-preview-status {
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+
+.html-preview-status.warning {
+  color: var(--color-orange);
+}
+
+.html-preview-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.html-preview-btn,
+.image-preview-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  min-width: 24px;
+  padding: 0 5px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.html-preview-btn:hover,
+.image-preview-btn:hover {
+  background-color: var(--bg-hover-item);
+  color: var(--text-primary);
+}
+
+.html-preview-btn.active,
+.image-preview-btn.active {
+  color: var(--color-primary);
+}
+
+.html-preview-frame-wrap {
+  flex: 1;
+  min-height: 0;
+  background: #ffffff;
+}
+
+.html-preview-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #ffffff;
+}
+
+/* ========== 图片查看器（VS Code media-preview 体验） ========== */
+.image-preview-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.image-preview-toolbar {
+  height: 34px;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 0 12px;
+  border-bottom: 1px solid var(--border-color);
+  background-color: var(--bg-sidebar);
+  font-size: 11px;
+  color: var(--text-secondary);
+  user-select: none;
+}
+
+.image-preview-file {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.image-preview-dimensions {
+  flex-shrink: 0;
+  opacity: 0.85;
+  font-variant-numeric: tabular-nums;
+}
+
+.image-preview-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.image-preview-scale {
+  min-width: 44px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.9;
+}
+
+.image-preview-canvas {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  padding: 24px;
+  background-color: var(--bg-main);
+  background-image:
+    linear-gradient(45deg, rgba(128, 128, 128, 0.1) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(128, 128, 128, 0.1) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(128, 128, 128, 0.1) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(128, 128, 128, 0.1) 75%);
+  background-size: 20px 20px;
+  background-position: 0 0, 0 10px, 10px -10px, -10px 0;
+}
+
+.image-preview-img {
+  display: block;
+  margin: auto;
+  transform-origin: center center;
+  image-rendering: auto;
+}
+
+.image-preview-img.is-fit {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
 }
 
 .preview-text-content {

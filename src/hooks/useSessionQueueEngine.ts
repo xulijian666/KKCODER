@@ -4,6 +4,7 @@ import {
   enqueueSessionTask,
   getSessionQueue,
   removeSessionTask,
+  updateSessionTask,
   MAX_SESSION_QUEUE_SIZE,
   type QueueBySession,
 } from "../utils/sessionQueue";
@@ -38,6 +39,7 @@ export function useSessionQueueEngine({
   const openTabIdsRef = useRef(openTabIds);
   openTabIdsRef.current = openTabIds;
   const dispatchingSessionsRef = useRef<Set<string>>(new Set());
+  const pausedSessionsRef = useRef<Set<string>>(new Set());
 
   const activeQueue = getSessionQueue(queueBySession, activeSessionId);
   const queueModalQueue = getSessionQueue(queueBySession, queueTargetSessionId);
@@ -72,6 +74,7 @@ export function useSessionQueueEngine({
     for (const [sessionId, tasks] of Object.entries(queueBySession)) {
       if (tasks.length === 0) continue;
       if (sessionBusy[sessionId]) continue;
+      if (pausedSessionsRef.current.has(sessionId)) continue;
       if (!openTabIdsRef.current.includes(sessionId)) continue;
       if (dispatchingSessionsRef.current.has(sessionId)) continue;
 
@@ -123,6 +126,18 @@ export function useSessionQueueEngine({
     setQueueBySession((previous) => removeSessionTask(previous, sessionId, taskId));
   }, []);
 
+  const updateQueuedTask = useCallback((sessionId: string, taskId: string, newPrompt: string) => {
+    setQueueBySession((previous) => updateSessionTask(previous, sessionId, taskId, newPrompt));
+  }, []);
+
+  const pauseSessionQueue = useCallback((sessionId: string) => {
+    pausedSessionsRef.current.add(sessionId);
+  }, []);
+
+  const resumeSessionQueue = useCallback((sessionId: string) => {
+    pausedSessionsRef.current.delete(sessionId);
+  }, []);
+
   return {
     queueBySession,
     setQueueBySession,
@@ -140,5 +155,8 @@ export function useSessionQueueEngine({
     enqueuePrompt,
     clearQueueForSession,
     removeQueuedTask,
+    updateQueuedTask,
+    pauseSessionQueue,
+    resumeSessionQueue,
   };
 }

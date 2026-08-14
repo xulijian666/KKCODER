@@ -11,15 +11,29 @@ import React, {
   type SetStateAction,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { FileText, GripVertical, Maximize2, Minimize2, Pin, PinOff, ExternalLink } from "lucide-react";
+import { FileText, GripVertical, Maximize2, Minimize2, Pin, PinOff, ExternalLink, Save } from "lucide-react";
 import { renderMarkdownToHtml, buildMarkdownToc, type MarkdownTocEntry } from "../utils/markdown";
 import { getHighlightedLines } from "../utils/highlighter";
-import { formatFeedbackError, notifyError } from "../utils/appFeedback";
+import { confirmAction, formatFeedbackError, notifyError } from "../utils/appFeedback";
 import { returnFocusToActiveTerminal } from "../utils/terminalFocus";
+import {
+  getFilePreviewKind,
+  getImageMimeType,
+  isBinaryImagePreviewPath,
+  isHtmlPreviewPath,
+  isMarkdownPath,
+} from "../utils/filePreview";
+import { MonacoEditor, type MonacoEditorHandle } from "./MonacoEditor";
+import { HtmlPreview } from "./HtmlPreview";
+import { ImagePreview } from "./ImagePreview";
 
 export interface PreviewFileState {
   path: string;
   content: string;
+  /** text：Monaco/HTML 编辑器内容；image：图片查看器 */
+  kind: "text" | "image";
+  /** 每次点击新文件递增，用于强制重建 Monaco 实例（重命名不递增） */
+  openSeq: number;
   cannotPreview?: boolean;
   errorMsg?: string;
 }
@@ -216,6 +230,10 @@ export function useFilePreview({
   const [activeMatchIndex, setActiveMatchIndex] = useState(0);
   const [matchedLines, setMatchedLines] = useState<number[]>([]);
   const [previewContextMenu, setPreviewContextMenu] = useState<PreviewContextMenuState | null>(null);
+  // Monaco 代码编辑器的未保存状态（只对非 MD 文本文件有意义）
+  const [isCodeDirty, setIsCodeDirty] = useState(false);
+  const openRequestRef = useRef(0);
+  const openSeqRef = useRef(0);
 
   // —— 预览表面三态：peek（瞬态浮层）/ dock（停靠分栏）/ float（自由卡片）——
   const [previewMode, setPreviewMode] = useState<PreviewMode>(readStoredPreviewMode);
@@ -258,11 +276,21 @@ export function useFilePreview({
     }
   }, [floatRect]);
 
-  const closePreview = useCallback(() => {
+  const closePreview = useCallback(async () => {
+    if (isCodeDirty) {
+      const confirmed = await confirmAction({
+        title: "放弃未保存修改？",
+        message: "当前文件有未保存的更改，关闭后将丢失。",
+        confirmText: "放弃并关闭",
+        cancelText: "继续编辑",
+        isDanger: true,
+      });
+      if (!confirmed) return;
+    }
     setPreviewFile(null);
     setMarkdownMode("preview");
     returnFocusToActiveTerminal();
-  }, []);
+  }, [isCodeDirty]);
 
   const resetPreviewRatio = useCallback(() => {
     setPreviewRatio(PREVIEW_RATIO_DEFAULT);
@@ -471,7 +499,14 @@ export function useFilePreview({
 
   useEffect(() => {
     setPreviewFile(null);
+    setIsCodeDirty(false);
+    openSeqRef.current = 0;
   }, [projectPath]);
+
+  // 切换文件后，新文件默认干净；重命名/保存不改变 openSeq
+  useEffect(() => {
+    setIsCodeDirty(false);
+  }, [previewFile?.openSeq]);
 
   useEffect(() => {
     const closeMenu = () => setPreviewContextMenu(null);
@@ -517,8 +552,41 @@ export function useFilePreview({
     [activeSessionId, markdownMode, onInsertConversationTag, previewFile],
   );
 
+  // Monaco 编辑器选区加入对话：文本由编辑器直接给出，始终携带来源文件路径
+  const insertMonacoSelection = useCallback(
+    (text: string) => {
+      if (!previewFile || !activeSessionId) return;
+      const trimmed = text.trim();
+      if (!trimmed) return;
+      onInsertConversationTag(trimmed, previewFile.path);
+    },
+    [activeSessionId, onInsertConversationTag, previewFile],
+  );
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      const isMonacoPreviewFile = !!(
+        previewFile &&
+        previewFile.kind === "text" &&
+        !isMarkdownPath(previewFile.path) &&
+        !previewFile.cannotPreview
+      );
+      const targetInsideMonaco =
+        event.target instanceof HTMLElement && !!event.target.closest(".monaco-editor");
+
+      if (isMonacoPreviewFile) {
+        // Monaco 自带 Ctrl+F / Ctrl+G / Ctrl+A / Ctrl+U（本组件重绑定）/ Ctrl+S / Ctrl+W，
+        // 焦点在编辑器内时全局监听器不要抢快捷键。
+        if (targetInsideMonaco) return;
+        // 焦点在编辑器外：Esc 关闭预览面板，其它按键留给终端/全局。
+        if (event.key === "Escape") {
+          void closePreview();
+          event.preventDefault();
+          event.stopPropagation();
+        }
+        return;
+      }
+
       if (event.key === "Escape") {
         if (showFileSearchBar) {
           setShowFileSearchBar(false);
@@ -531,7 +599,7 @@ export function useFilePreview({
           event.preventDefault();
           event.stopPropagation();
         } else if (previewFile) {
-          closePreview();
+          void closePreview();
           event.preventDefault();
           event.stopPropagation();
         }
@@ -590,15 +658,72 @@ export function useFilePreview({
   const openFile = useCallback(
     async (relativePath: string) => {
       if (!projectPath) return;
-      setMarkdownMode("preview");
 
-      if (relativePath.toLowerCase().endsWith(".svg")) {
+      // 代码编辑器未保存时切换文件，先确认丢弃
+      if (previewFile && isCodeDirty) {
+        const confirmed = await confirmAction({
+          title: "放弃未保存修改？",
+          message: "当前文件有未保存的更改，切换文件后将丢失。",
+          confirmText: "放弃并切换",
+          cancelText: "继续编辑",
+          isDanger: true,
+        });
+        if (!confirmed) return;
+      }
+
+      setMarkdownMode("preview");
+      const requestId = ++openRequestRef.current;
+      const kind = getFilePreviewKind(relativePath);
+
+      const fail = (error: unknown) => {
+        if (openRequestRef.current !== requestId) return;
+        openSeqRef.current += 1;
         setPreviewFile({
           path: relativePath,
           content: "",
+          kind,
+          openSeq: openSeqRef.current,
           cannotPreview: true,
-          errorMsg: "SVG 文件预览已禁用。",
+          errorMsg: error ? String(error) : "无法读取此文件，可能是二进制文件或非UTF-8编码。",
         });
+      };
+
+      if (kind === "image") {
+        try {
+          if (isBinaryImagePreviewPath(relativePath)) {
+            const base64 = await invoke<string>("read_project_file_base64", {
+              projectPath,
+              relativePath,
+            });
+            if (openRequestRef.current !== requestId) return;
+            const mime = getImageMimeType(relativePath) ?? "application/octet-stream";
+            openSeqRef.current += 1;
+            setPreviewFile({
+              path: relativePath,
+              content: `data:${mime};base64,${base64}`,
+              kind,
+              openSeq: openSeqRef.current,
+              cannotPreview: false,
+            });
+          } else {
+            // SVG：UTF-8 文本读取，由 ImagePreview 生成 Blob URL 安全渲染
+            const content = await invoke<string>("read_project_file_content", {
+              projectPath,
+              relativePath,
+            });
+            if (openRequestRef.current !== requestId) return;
+            openSeqRef.current += 1;
+            setPreviewFile({
+              path: relativePath,
+              content,
+              kind,
+              openSeq: openSeqRef.current,
+              cannotPreview: false,
+            });
+          }
+        } catch (error: unknown) {
+          fail(error);
+        }
         return;
       }
 
@@ -607,17 +732,20 @@ export function useFilePreview({
           projectPath,
           relativePath,
         });
-        setPreviewFile({ path: relativePath, content, cannotPreview: false });
-      } catch (error: unknown) {
+        if (openRequestRef.current !== requestId) return;
+        openSeqRef.current += 1;
         setPreviewFile({
           path: relativePath,
-          content: "",
-          cannotPreview: true,
-          errorMsg: error ? String(error) : "无法读取此文件，可能是二进制文件或非UTF-8编码。",
+          content,
+          kind,
+          openSeq: openSeqRef.current,
+          cannotPreview: false,
         });
+      } catch (error: unknown) {
+        fail(error);
       }
     },
-    [projectPath],
+    [isCodeDirty, previewFile, projectPath],
   );
 
   const handlePathRenamed = useCallback((oldPath: string, newPath: string) => {
@@ -630,6 +758,27 @@ export function useFilePreview({
       return previous;
     });
   }, []);
+
+  const saveCodeFile = useCallback(
+    async (content: string): Promise<boolean> => {
+      if (!projectPath || !previewFile) return false;
+      try {
+        await invoke("write_project_file_content", {
+          projectPath,
+          relativePath: previewFile.path,
+          content,
+        });
+        setPreviewFile((previous) =>
+          previous && previous.path === previewFile.path ? { ...previous, content } : previous,
+        );
+        return true;
+      } catch (error) {
+        notifyError(`保存失败：${formatFeedbackError(error)}`);
+        return false;
+      }
+    },
+    [previewFile, projectPath],
+  );
 
   const handleFileSearchChange = (query: string) => {
     setFileSearchQuery(query);
@@ -706,28 +855,39 @@ export function useFilePreview({
     [markdownMode, previewFile],
   );
 
+  const isMdFile = !!previewFile && previewFile.kind === "text" && isMarkdownPath(previewFile.path);
+
   const highlightedData = useMemo(() => {
-    if (!previewFile || previewFile.cannotPreview) return { tokens: [] as unknown[][], isPlain: true };
+    if (!isMdFile || !previewFile || previewFile.cannotPreview) {
+      return { tokens: [] as unknown[][], isPlain: true };
+    }
     return getHighlightedLines(previewFile.content, previewFile.path);
-  }, [previewFile]);
+  }, [isMdFile, previewFile]);
 
   // Markdown 渲染只跟随预览文件变化：拖动宽度、文件内搜索、hover 等重渲染不再重复 parse + Prism 高亮
   const markdownHtml = useMemo(() => {
-    if (!previewFile || previewFile.cannotPreview) return "";
+    if (!isMdFile || !previewFile || previewFile.cannotPreview) return "";
     return renderMarkdownToHtml(previewFile.content);
-  }, [previewFile]);
+  }, [isMdFile, previewFile]);
 
   // 目录导航：仅 .md 文件在预览模式下展示
   const tocEntries = useMemo(() => {
-    if (!previewFile || previewFile.cannotPreview) return [];
-    if (!previewFile.path.toLowerCase().endsWith(".md")) return [];
+    if (!isMdFile || !previewFile || previewFile.cannotPreview) return [];
     return buildMarkdownToc(previewFile.content);
-  }, [previewFile]);
+  }, [isMdFile, previewFile]);
+
+  const isFocusBlocking = !!(
+    previewFile &&
+    previewFile.kind === "text" &&
+    !isMarkdownPath(previewFile.path) &&
+    !previewFile.cannotPreview
+  );
 
   return {
     previewFile,
     openFile,
     handlePathRenamed,
+    isFocusBlocking,
     panelProps: {
       previewFile,
       projectPath,
@@ -748,6 +908,7 @@ export function useFilePreview({
       previewRatio,
       previewMaximized,
       floatRect,
+      isCodeDirty,
       onClose: closePreview,
       onContextMenu: handlePreviewContextMenu,
       onFileSearchChange: handleFileSearchChange,
@@ -757,6 +918,9 @@ export function useFilePreview({
       setShowGoToLineBar,
       setGoToLineNumber,
       setActiveMatchIndex,
+      onCodeDirtyChange: setIsCodeDirty,
+      onSaveCodeFile: saveCodeFile,
+      onInsertSelection: insertMonacoSelection,
       onTogglePin: togglePin,
       onToggleMaximize: toggleMaximize,
       onDetachToFloat: detachToFloat,
@@ -796,6 +960,7 @@ export interface FilePreviewPanelProps {
   previewRatio: number;
   previewMaximized: boolean;
   floatRect: FloatRect;
+  isCodeDirty: boolean;
   onClose: () => void;
   onContextMenu: (event: ReactMouseEvent) => void;
   onFileSearchChange: (query: string) => void;
@@ -805,6 +970,9 @@ export interface FilePreviewPanelProps {
   setShowGoToLineBar: (show: boolean) => void;
   setGoToLineNumber: (value: string) => void;
   setActiveMatchIndex: Dispatch<SetStateAction<number>>;
+  onCodeDirtyChange: (dirty: boolean) => void;
+  onSaveCodeFile: (content: string) => Promise<boolean>;
+  onInsertSelection: (text: string) => void;
   onTogglePin: () => void;
   onToggleMaximize: () => void;
   onDetachToFloat: () => void;
@@ -851,6 +1019,28 @@ function renderToken(
   );
 }
 
+/** 复刻 VS Code codicon open-preview：分栏文档 + 放大镜 */
+function OpenPreviewIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.1"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="1.5" y="1.5" width="8.2" height="13" rx="1" />
+      <path d="M9.7 5h4.8v9.5" />
+      <circle cx="11.5" cy="6.4" r="1.7" />
+      <path d="M13.4 10.2l1.3 1.3" />
+    </svg>
+  );
+}
+
 export const FilePreviewPanel: React.FC<FilePreviewPanelProps> = ({
   previewFile,
   projectPath,
@@ -880,6 +1070,10 @@ export const FilePreviewPanel: React.FC<FilePreviewPanelProps> = ({
   previewRatio,
   previewMaximized,
   floatRect,
+  isCodeDirty,
+  onCodeDirtyChange,
+  onSaveCodeFile,
+  onInsertSelection,
   onTogglePin,
   onToggleMaximize,
   onDetachToFloat,
@@ -889,7 +1083,71 @@ export const FilePreviewPanel: React.FC<FilePreviewPanelProps> = ({
   onStartFloatDrag,
   onStartFloatResize,
 }) => {
+  const [showSidePreview, setShowSidePreview] = useState(false);
+  const [sidePreviewRatio, setSidePreviewRatio] = useState(0.5);
+  const [isResizingSidePreview, setIsResizingSidePreview] = useState(false);
+  const [liveCodeContent, setLiveCodeContent] = useState("");
+  const monacoEditorRef = useRef<MonacoEditorHandle>(null);
+  const previewBodyRef = useRef<HTMLDivElement | null>(null);
+
+  // 切换文件时关闭侧边预览，回到纯编辑器视图
+  const openSeq = previewFile?.openSeq;
+  useEffect(() => {
+    setShowSidePreview(false);
+    setSidePreviewRatio(0.5);
+    setLiveCodeContent(previewFile?.content ?? "");
+  }, [openSeq]);
+
+  useEffect(() => {
+    if (!isResizingSidePreview) return;
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+    document.body.classList.add("preview-resizing");
+
+    const handleMove = (event: PointerEvent | MouseEvent) => {
+      const body = previewBodyRef.current;
+      if (!body) return;
+      const bounds = body.getBoundingClientRect();
+      if (bounds.width <= 0) return;
+      const ratio = (bounds.right - event.clientX) / bounds.width;
+      setSidePreviewRatio(Math.max(0.25, Math.min(0.75, ratio)));
+    };
+    const handleUp = () => {
+      setIsResizingSidePreview(false);
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+      document.body.classList.remove("preview-resizing");
+    };
+
+    document.addEventListener("pointermove", handleMove);
+    document.addEventListener("pointerup", handleUp);
+    document.addEventListener("pointercancel", handleUp);
+    document.addEventListener("mousemove", handleMove as EventListener);
+    document.addEventListener("mouseup", handleUp);
+    return () => {
+      document.removeEventListener("pointermove", handleMove);
+      document.removeEventListener("pointerup", handleUp);
+      document.removeEventListener("pointercancel", handleUp);
+      document.removeEventListener("mousemove", handleMove as EventListener);
+      document.removeEventListener("mouseup", handleUp);
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+      document.body.classList.remove("preview-resizing");
+    };
+  }, [isResizingSidePreview]);
+
+  const startSidePreviewResize = useCallback((event: ReactMouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsResizingSidePreview(true);
+  }, []);
+
   if (!previewFile) return null;
+
+  const isMdFile = previewFile.kind === "text" && isMarkdownPath(previewFile.path);
+  const isMonacoFile = previewFile.kind === "text" && !isMdFile && !previewFile.cannotPreview;
+  const canSidePreview = isMonacoFile && isHtmlPreviewPath(previewFile.path);
+  const fileName = previewFile.path.split(/[/\\]/).pop() || previewFile.path;
 
   const panelStyle: CSSProperties =
     previewMode === "float"
@@ -906,7 +1164,7 @@ export const FilePreviewPanel: React.FC<FilePreviewPanelProps> = ({
 
   return (
     <div
-      className={`file-preview-panel mode-${previewMode} ${previewMaximized ? "is-maximized" : ""}`}
+      className={`file-preview-panel mode-${previewMode} kind-${previewFile.kind} ${previewMaximized ? "is-maximized" : ""}`}
       style={panelStyle}
       onContextMenu={onContextMenu}
     >
@@ -930,14 +1188,15 @@ export const FilePreviewPanel: React.FC<FilePreviewPanelProps> = ({
         )}
         <div className="preview-title-area">
           <FileText size={14} className="preview-file-icon" />
-          <span className="preview-file-name" title={previewFile.path.split("/").pop()}>
-            {previewFile.path.split("/").pop()}
+          <span className="preview-file-name" title={fileName}>
+            {fileName}
           </span>
+          {isCodeDirty && <span className="preview-dirty-dot" title="有未保存的修改">●</span>}
           <span className="preview-file-path" title={previewFile.path}>
             {previewFile.path}
           </span>
         </div>
-        {previewFile.path.endsWith(".md") && !previewFile.cannotPreview && (
+        {isMdFile && !previewFile.cannotPreview && (
           <div className="preview-md-tabs">
             <button
               className={`preview-md-tab ${markdownMode === "preview" ? "active" : ""}`}
@@ -954,6 +1213,25 @@ export const FilePreviewPanel: React.FC<FilePreviewPanelProps> = ({
           </div>
         )}
         <div className="preview-actions">
+          {isMonacoFile && (
+            <button
+              className={`preview-action-btn save-file-btn ${isCodeDirty ? "active" : ""}`}
+              onClick={() => monacoEditorRef.current?.save()}
+              disabled={!isCodeDirty}
+              title="保存 (Ctrl+S)"
+            >
+              <Save size={14} />
+            </button>
+          )}
+          {canSidePreview && (
+            <button
+              className={`preview-action-btn ${showSidePreview ? "active" : ""}`}
+              onClick={() => setShowSidePreview((value) => !value)}
+              title={showSidePreview ? "关闭侧边预览 (Ctrl+K V)" : "打开预览到侧边 (Ctrl+K V)"}
+            >
+              <OpenPreviewIcon size={14} />
+            </button>
+          )}
           {previewMode !== "float" && (
             <button
               className="preview-action-btn"
@@ -990,11 +1268,20 @@ export const FilePreviewPanel: React.FC<FilePreviewPanelProps> = ({
             </button>
           )}
         </div>
-        <button className="preview-close-btn" onClick={onClose} title="关闭文件预览">
+        <button className="preview-close-btn" onClick={() => void onClose()} title="关闭文件预览">
           ×
         </button>
       </div>
-      <div className="preview-body">
+      <div
+        className={`preview-body ${
+          previewFile.kind === "image"
+            ? "image-preview-body"
+            : isMonacoFile
+              ? "code-preview-body"
+              : ""
+        }`}
+        ref={previewBodyRef}
+      >
         {previewFile.cannotPreview ? (
           <div className="preview-error-container">
             <div className="preview-error-icon">⚠️</div>
@@ -1016,7 +1303,7 @@ export const FilePreviewPanel: React.FC<FilePreviewPanelProps> = ({
               直接打开文件
             </button>
           </div>
-        ) : previewFile.path.endsWith(".md") && markdownMode === "preview" ? (
+        ) : isMdFile && markdownMode === "preview" ? (
           <div className="preview-markdown-layout">
             {tocEntries.length > 1 && (
               <nav className="preview-toc" aria-label="目录">
@@ -1040,6 +1327,53 @@ export const FilePreviewPanel: React.FC<FilePreviewPanelProps> = ({
               className="preview-markdown-content"
               dangerouslySetInnerHTML={{ __html: markdownHtml }}
             />
+          </div>
+        ) : previewFile.kind === "image" ? (
+          <ImagePreview
+            projectPath={projectPath}
+            relativePath={previewFile.path}
+            content={previewFile.content}
+          />
+        ) : isMonacoFile ? (
+          <div className={`preview-code-layout ${showSidePreview ? "with-side-preview" : ""}`}>
+            <div className="preview-code-main">
+              <MonacoEditor
+                key={previewFile.openSeq}
+                ref={monacoEditorRef}
+                filePath={previewFile.path}
+                initialValue={previewFile.content}
+                onValueChange={canSidePreview ? setLiveCodeContent : undefined}
+                onDirtyChange={onCodeDirtyChange}
+                onSave={onSaveCodeFile}
+                onInsertSelection={onInsertSelection}
+                onCloseRequest={() => void onClose()}
+                onTogglePreview={
+                  canSidePreview ? () => setShowSidePreview((value) => !value) : undefined
+                }
+              />
+            </div>
+            {showSidePreview && (
+              <>
+                <div
+                  className="preview-side-resizer"
+                  onPointerDown={startSidePreviewResize}
+                  onDoubleClick={() => setSidePreviewRatio(0.5)}
+                  title="拖拽调整预览宽度 · 双击均分"
+                  role="separator"
+                  aria-orientation="vertical"
+                />
+                <div
+                  className="preview-side-pane"
+                  style={{ width: `${sidePreviewRatio * 100}%` }}
+                >
+                  <HtmlPreview
+                    projectPath={projectPath}
+                    relativePath={previewFile.path}
+                    content={liveCodeContent}
+                  />
+                </div>
+              </>
+            )}
           </div>
         ) : (
           <div
@@ -1081,7 +1415,7 @@ export const FilePreviewPanel: React.FC<FilePreviewPanelProps> = ({
         )}
       </div>
 
-      {showFileSearchBar && (
+      {showFileSearchBar && !isMonacoFile && !previewFile.cannotPreview && (
         <div className="file-search-bar-floating">
           <input
             id="file-search-input"
@@ -1143,7 +1477,7 @@ export const FilePreviewPanel: React.FC<FilePreviewPanelProps> = ({
         </div>
       )}
 
-      {showGoToLineBar && (
+      {showGoToLineBar && !isMonacoFile && !previewFile.cannotPreview && (
         <div className="file-search-bar-floating go-to-line-bar">
           <input
             id="go-to-line-input"

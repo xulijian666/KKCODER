@@ -3,7 +3,7 @@
 > **本文件是前端源码的权威总索引。**  
 > 新增 / 删除 / 重命名 / 挪动 `src/` 下的模块时，**必须同步更新本文件**，并视情况更新对应 barrel：`components/index.ts`、`hooks/index.ts`、`utils/index.ts`。
 
-**最后人工维护核对：** 2026-08-12（Claude GUI 聊天模式）
+**最后人工维护核对：** 2026-08-15（Monaco 预览改造）
 
 ---
 
@@ -86,7 +86,10 @@ src/
 | `TabContextMenu.tsx` | 标签右键菜单（含分屏进出） | `TabContextMenu` |
 | `CloseConfirmModal.tsx` | 退出确认（托盘/退出） | `CloseConfirmModal` |
 | `TitleBar.tsx` | 自定义标题栏、主题盘、窗口按钮 | `TitleBar` |
-| `FilePreviewPanel.tsx` | 文件预览 + `useFilePreview` + 右键菜单组件 | `FilePreviewPanel`, `FilePreviewContextMenu`, `useFilePreview`, 相关类型 |
+| `FilePreviewPanel.tsx` | 文件预览编排（MD 渲染 / Monaco 代码编辑 / 图片查看 / HTML 侧边预览）+ `useFilePreview` + 右键菜单组件 | `FilePreviewPanel`, `FilePreviewContextMenu`, `useFilePreview`, 相关类型 |
+| `MonacoEditor.tsx` | 懒加载 Monaco 编辑器封装（VS Code 同款内核：本地 worker、主题跟随、Ctrl+S/W/U、选区入对话） | `MonacoEditor`, `MonacoEditorHandle`, `MonacoEditorProps` |
+| `HtmlPreview.tsx` | HTML 侧边预览（iframe srcdoc + 本地资源内联 + 脚本开关） | `HtmlPreview`, `HtmlPreviewProps` |
+| `ImagePreview.tsx` | 图片/SVG 查看器（fit/缩放/1:1/像素尺寸，VS Code media-preview 体验） | `ImagePreview`, `ImagePreviewProps` |
 | `ProjectTree.tsx` | 右侧项目文件树（支持插入另一侧） | `ProjectTree` |
 | `ProjectTreeBindingBar.tsx` | 分屏下项目树绑定顶栏（跟随/钉左/钉右） | `ProjectTreeBindingBar` |
 | `SettingsModal.tsx` | 全屏设置中心（左侧分组菜单 + 返回应用 + 右侧内容区，布局参考 CC-GUI） | `SettingsModal` |
@@ -136,7 +139,7 @@ src/
 | `log.ts` | 持久化前端日志 | `log` |
 | `pathHelpers.ts` | 路径展示 | `getFolderName` |
 | `theme.ts` | 6 套主题 CSS 变量 / apply | `applyTheme`, `readStoredTheme`, `persistTheme`, `DEFAULT_THEME`, `THEME_STORAGE_KEY` |
-| `sessionQueue.ts` | 队列纯函数 | `clearSessionQueue`, `enqueueSessionTask`, `getSessionQueue`, `removeSessionTask`, `QueueBySession` |
+| `sessionQueue.ts` | 队列纯函数 | `clearSessionQueue`, `enqueueSessionTask`, `getSessionQueue`, `removeSessionTask`, `updateSessionTask`, `QueueBySession` |
 | `enabledAgents.ts` | 助手启用状态（Pi/Codex 已移除，恒为 Claude Code） | `loadEnabledAgents`, `saveEnabledAgents`, `isAgentEnabled`, `getVisibleAgents`, `AgentType`, `EnabledAgents` |
 | `appFeedback.ts` | 静默反馈总线（notify / confirmAction） | `notify`, `notifyInfo`, `notifySuccess`, `notifyWarning`, `notifyError`, `confirmAction`, `formatFeedbackError` |
 | `terminalFocus.ts` | 活动终端焦点契约（request / 判定叠加层 / 可选 sessionId） | `requestActiveTerminalFocus`, `returnFocusToActiveTerminal`, `FOCUS_ACTIVE_TERMINAL_EVENT` |
@@ -156,6 +159,9 @@ src/
 | `nativeTerminalLifecycle.ts` | 原生终端生命周期工厂 | 按需 |
 | `markdown.ts` | Markdown → HTML | 按需 |
 | `highlighter.ts` | 代码高亮行 | 按需 |
+| `filePreview.ts` | 预览类型/图片 MIME/路径工具 | 按需 |
+| `monaco.ts` | 文件扩展名 → Monaco 语言 id、深色主题判定 | 按需 |
+| `htmlPreview.ts` | HTML 预览本地资源内联（CSS/JS/图片/@import/url()） | 按需 |
 | `textFiles.ts` | 可预览文本类型 | 按需 |
 | `materialFileIcons.ts` | 文件图标映射 | 按需 |
 | `*.test.ts` | 上述工具的单元测试 | — |

@@ -630,7 +630,6 @@ function App() {
     setShowQueueModal,
     queueInput,
     setQueueInput,
-    setQueueTargetSessionId,
     sessionBusy,
     setSessionBusy,
     activeQueue,
@@ -639,6 +638,9 @@ function App() {
     enqueuePrompt,
     clearQueueForSession,
     removeQueuedTask,
+    updateQueuedTask,
+    pauseSessionQueue,
+    resumeSessionQueue,
   } = useSessionQueueEngine({
     activeSessionId,
     openTabIds,
@@ -648,9 +650,6 @@ function App() {
 
   clearQueueForSessionRef.current = clearQueueForSession;
   setSessionBusyRef.current = setSessionBusy;
-
-  // 浮动队列面板展开状态（不占布局，点击丝滑展开）
-  const [queuePanelOpen, setQueuePanelOpen] = useState(false);
 
   const handleTriggerShortcut = (content: string) => {
     if (!activeSessionId) return;
@@ -761,6 +760,7 @@ function App() {
   const {
     openFile: handleFileClick,
     handlePathRenamed: handlePreviewPathRenamed,
+    isFocusBlocking: previewFocusBlocking,
     panelProps: filePreviewPanelProps,
     contextMenuProps: filePreviewContextMenuProps,
   } = useFilePreview({
@@ -793,7 +793,8 @@ function App() {
     showCloseConfirmModal ||
     !!activeConfirm ||
     !!tabContextMenu ||
-    !!renamingTabId;
+    !!renamingTabId ||
+    previewFocusBlocking;
 
   useReturnTerminalFocusWhenUnblocked(isTerminalFocusBlocked, 56);
 
@@ -1181,10 +1182,10 @@ function App() {
                             onUserSubmittedInput={handleUserSubmittedInputWithRenameReset}
                             onEnqueuePrompt={enqueuePrompt}
                             queueTasks={s.id === activeSessionId ? activeQueue : []}
-                            queuePanelOpen={queuePanelOpen}
-                            onToggleQueuePanel={() => setQueuePanelOpen((v) => !v)}
                             onRemoveQueueTask={removeQueuedTask}
-                            onClearQueue={clearQueueForSession}
+                            onUpdateQueueTask={updateQueuedTask}
+                            onPauseQueue={pauseSessionQueue}
+                            onResumeQueue={resumeSessionQueue}
                           />
                         ) : useNativeTerminal ? (
                           <CompatibilityTerminalTab
@@ -1300,29 +1301,6 @@ function App() {
                     </button>
                   ))}
                 </div>
-
-                <button
-                  className="queue-status-btn"
-                  onClick={() => {
-                    setQueueInput("");
-                    setQueueTargetSessionId(activeSessionId);
-                    setShowQueueModal(true);
-                  }}
-                  title="点击添加任务到队列"
-                >
-                  <svg className="queue-svg-icon" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.8, marginRight: "4px" }}>
-                    <line x1="8" y1="6" x2="21" y2="6"></line>
-                    <line x1="8" y1="12" x2="21" y2="12"></line>
-                    <line x1="8" y1="18" x2="21" y2="18"></line>
-                    <line x1="3" y1="6" x2="3.01" y2="6"></line>
-                    <line x1="3" y1="12" x2="3.01" y2="12"></line>
-                    <line x1="3" y1="18" x2="3.01" y2="18"></line>
-                  </svg>
-                  <span>队列</span>
-                  {activeQueue.length > 0 && (
-                    <span className="queue-badge">{activeQueue.length}</span>
-                  )}
-                </button>
               </div>
             )}
 

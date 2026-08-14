@@ -22,6 +22,10 @@ pub(crate) fn logs_root() -> std::path::PathBuf {
 }
 
 const MAX_LOG_BYTES: u64 = 20 * 1024 * 1024;
+/// 文本文件预览/编辑读取上限：与 write_project_file_content 的 5MB 写入上限保持一致
+const MAX_TEXT_PREVIEW_BYTES: u64 = 5 * 1024 * 1024;
+/// 图片预览读取上限（base64 后经 IPC 传输，限制在 12MB）
+const MAX_IMAGE_PREVIEW_BYTES: u64 = 12 * 1024 * 1024;
 
 /// 调试日志总开关（设置中心可开/关；默认开启）
 static DEBUG_LOG_ENABLED: std::sync::atomic::AtomicBool =
@@ -2594,7 +2598,9 @@ fn read_project_file_content(project_path: String, relative_path: String) -> Res
     let root = std::path::Path::new(&project_path);
     let full_path = root.join(&relative_path);
 
-    let root_canonical = root.canonicalize().map_err(|e| format!("Failed to canonicalize project root: {}", e))?;
+    let root_canonical = root
+        .canonicalize()
+        .map_err(|e| format!("Failed to canonicalize project root: {}", e))?;
     let full_path_canonical = match full_path.canonicalize() {
         Ok(p) => p,
         Err(e) => return Err(format!("File not found or inaccessible: {}", e)),
@@ -2608,16 +2614,62 @@ fn read_project_file_content(project_path: String, relative_path: String) -> Res
         return Err("Not a file".to_string());
     }
 
-    let mut file = std::fs::File::open(&full_path_canonical).map_err(|e| e.to_string())?;
-    use std::io::Read;
-    let mut buffer = vec![0; 1024 * 1024]; // 1MB limit
-    let bytes_read = file.read(&mut buffer).map_err(|e| e.to_string())?;
-    buffer.truncate(bytes_read);
+    let metadata = std::fs::metadata(&full_path_canonical).map_err(|e| e.to_string())?;
+    if metadata.len() > MAX_TEXT_PREVIEW_BYTES {
+        return Err(format!(
+            "File exceeds {}MB text preview limit",
+            MAX_TEXT_PREVIEW_BYTES / (1024 * 1024)
+        ));
+    }
+
+    let buffer = std::fs::read(&full_path_canonical).map_err(|e| e.to_string())?;
 
     match String::from_utf8(buffer) {
         Ok(content) => Ok(content),
         Err(_) => Err("Binary file or invalid UTF-8 encoding. Preview is disabled.".to_string()),
     }
+}
+
+#[tauri::command]
+fn read_project_file_base64(
+    project_path: String,
+    relative_path: String,
+) -> Result<String, String> {
+    log_to_file(&format!(
+        "read_project_file_base64 called: project_path={}, relative_path={}",
+        project_path, relative_path
+    ));
+    let root = std::path::Path::new(&project_path);
+    let full_path = root.join(&relative_path);
+
+    let root_canonical = root
+        .canonicalize()
+        .map_err(|e| format!("Failed to canonicalize project root: {}", e))?;
+    let full_path_canonical = match full_path.canonicalize() {
+        Ok(p) => p,
+        Err(e) => return Err(format!("File not found or inaccessible: {}", e)),
+    };
+
+    if !full_path_canonical.starts_with(&root_canonical) {
+        return Err("Access denied: File outside project root".to_string());
+    }
+
+    if !full_path_canonical.is_file() {
+        return Err("Not a file".to_string());
+    }
+
+    let metadata = std::fs::metadata(&full_path_canonical).map_err(|e| e.to_string())?;
+    if metadata.len() > MAX_IMAGE_PREVIEW_BYTES {
+        return Err(format!(
+            "File exceeds {}MB image preview limit",
+            MAX_IMAGE_PREVIEW_BYTES / (1024 * 1024)
+        ));
+    }
+
+    let bytes = std::fs::read(&full_path_canonical).map_err(|e| e.to_string())?;
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine as _;
+    Ok(STANDARD.encode(bytes))
 }
 
 #[tauri::command]
@@ -3452,6 +3504,7 @@ pub fn run() {
             read_project_directory,
             search_project_files,
             read_project_file_content,
+            read_project_file_base64,
             write_project_file_content,
             rename_project_entry,
             open_file_in_system,

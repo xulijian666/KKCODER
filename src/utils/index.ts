@@ -40,6 +40,7 @@ export {
   enqueueSessionTask,
   getSessionQueue,
   removeSessionTask,
+  updateSessionTask,
   MAX_SESSION_QUEUE_SIZE,
   type QueueBySession,
 } from "./sessionQueue";

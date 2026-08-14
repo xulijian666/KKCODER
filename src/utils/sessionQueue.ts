@@ -42,6 +42,17 @@ export function removeSessionTask(
   return { ...state, [sessionId]: nextQueue };
 }
 
+export function updateSessionTask(
+  state: QueueBySession,
+  sessionId: string,
+  taskId: string,
+  newPrompt: string,
+): QueueBySession {
+  const queue = getSessionQueue(state, sessionId);
+  const nextQueue = queue.map((task) => (task.id === taskId ? { ...task, prompt: newPrompt } : task));
+  return { ...state, [sessionId]: nextQueue };
+}
+
 export function clearSessionQueue(state: QueueBySession, sessionId: string): QueueBySession {
   if (!(sessionId in state)) return state;
   const next = { ...state };
