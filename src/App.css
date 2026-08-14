@@ -1773,18 +1773,10 @@ body.terminal-split-resizing .terminal-pane-host {
 
 /* ==================== 基础设置 pref 体系（参考 CC-GUI：分组卡片 + Preference Row 高密度） ==================== */
 .settings-basic-surface {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 14px 16px;
-  align-items: start;
-  max-width: 980px;
-}
-
-/* 宽屏（内容区 ≥1120px）时分组卡片横向双列排布，充分利用右侧空间 */
-@media (min-width: 1120px) {
-  .settings-basic-surface {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-width: 780px;
 }
 
 /* 分组：卡片标签 + 卡片 */

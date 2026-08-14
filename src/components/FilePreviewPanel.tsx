@@ -14,7 +14,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { FileText, GripVertical, Maximize2, Minimize2, Pin, PinOff, ExternalLink, Save } from "lucide-react";
 import { renderMarkdownToHtml, buildMarkdownToc, type MarkdownTocEntry } from "../utils/markdown";
 import { getHighlightedLines } from "../utils/highlighter";
-import { confirmAction, formatFeedbackError, notifyError } from "../utils/appFeedback";
+import { confirmAction, formatFeedbackError, notifyError, notifySuccess } from "../utils/appFeedback";
 import { returnFocusToActiveTerminal } from "../utils/terminalFocus";
 import {
   getFilePreviewKind,
@@ -223,6 +223,8 @@ export function useFilePreview({
     const value = localStorage.getItem("kkcoder_setting_preview_font_size");
     return value ? parseFloat(value) : 12.5;
   });
+  // Monaco 编辑器的实时内容：MD 源码/HTML 预览切换时使用最新编辑内容，而不是仅保存后的内容
+  const [previewLiveContent, setPreviewLiveContent] = useState("");
   const [fileSearchQuery, setFileSearchQuery] = useState("");
   const [showFileSearchBar, setShowFileSearchBar] = useState(false);
   const [showGoToLineBar, setShowGoToLineBar] = useState(false);
@@ -500,12 +502,14 @@ export function useFilePreview({
   useEffect(() => {
     setPreviewFile(null);
     setIsCodeDirty(false);
+    setPreviewLiveContent("");
     openSeqRef.current = 0;
   }, [projectPath]);
 
   // 切换文件后，新文件默认干净；重命名/保存不改变 openSeq
   useEffect(() => {
     setIsCodeDirty(false);
+    setPreviewLiveContent(previewFile?.content ?? "");
   }, [previewFile?.openSeq]);
 
   useEffect(() => {
@@ -565,11 +569,12 @@ export function useFilePreview({
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      const isMdPreviewFile = !!previewFile && isMarkdownPath(previewFile.path);
       const isMonacoPreviewFile = !!(
         previewFile &&
         previewFile.kind === "text" &&
-        !isMarkdownPath(previewFile.path) &&
-        !previewFile.cannotPreview
+        !previewFile.cannotPreview &&
+        (!isMdPreviewFile || markdownMode === "source")
       );
       const targetInsideMonaco =
         event.target instanceof HTMLElement && !!event.target.closest(".monaco-editor");
@@ -653,7 +658,7 @@ export function useFilePreview({
 
     window.addEventListener("keydown", handleKeyDown, true);
     return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [closePreview, insertSelectionToConversation, previewFile, showFileSearchBar, showGoToLineBar]);
+  }, [closePreview, insertSelectionToConversation, previewFile, markdownMode, showFileSearchBar, showGoToLineBar]);
 
   const openFile = useCallback(
     async (relativePath: string) => {
@@ -678,6 +683,7 @@ export function useFilePreview({
       const fail = (error: unknown) => {
         if (openRequestRef.current !== requestId) return;
         openSeqRef.current += 1;
+        setPreviewLiveContent("");
         setPreviewFile({
           path: relativePath,
           content: "",
@@ -698,9 +704,11 @@ export function useFilePreview({
             if (openRequestRef.current !== requestId) return;
             const mime = getImageMimeType(relativePath) ?? "application/octet-stream";
             openSeqRef.current += 1;
+            const imageDataUrl = `data:${mime};base64,${base64}`;
+            setPreviewLiveContent(imageDataUrl);
             setPreviewFile({
               path: relativePath,
-              content: `data:${mime};base64,${base64}`,
+              content: imageDataUrl,
               kind,
               openSeq: openSeqRef.current,
               cannotPreview: false,
@@ -713,6 +721,7 @@ export function useFilePreview({
             });
             if (openRequestRef.current !== requestId) return;
             openSeqRef.current += 1;
+            setPreviewLiveContent(content);
             setPreviewFile({
               path: relativePath,
               content,
@@ -734,6 +743,7 @@ export function useFilePreview({
         });
         if (openRequestRef.current !== requestId) return;
         openSeqRef.current += 1;
+        setPreviewLiveContent(content);
         setPreviewFile({
           path: relativePath,
           content,
@@ -762,6 +772,15 @@ export function useFilePreview({
   const saveCodeFile = useCallback(
     async (content: string): Promise<boolean> => {
       if (!projectPath || !previewFile) return false;
+      const fileName = previewFile.path.split(/[/\\]/).pop() || previewFile.path;
+      const confirmed = await confirmAction({
+        title: "确认保存文件修改？",
+        message: `确定要将对文件「${fileName}」的代码修改保存并写入本地磁盘吗？`,
+        confirmText: "确认保存",
+        cancelText: "取消",
+      });
+      if (!confirmed) return false;
+
       try {
         await invoke("write_project_file_content", {
           projectPath,
@@ -771,6 +790,7 @@ export function useFilePreview({
         setPreviewFile((previous) =>
           previous && previous.path === previewFile.path ? { ...previous, content } : previous,
         );
+        notifySuccess(`已成功保存文件「${fileName}」`);
         return true;
       } catch (error) {
         notifyError(`保存失败：${formatFeedbackError(error)}`);
@@ -857,30 +877,33 @@ export function useFilePreview({
 
   const isMdFile = !!previewFile && previewFile.kind === "text" && isMarkdownPath(previewFile.path);
 
+  // Monaco 编辑中的实时内容优先：MD 源码/HTML 编辑未保存时，预览也跟随最新编辑
+  const liveMarkdownSource = isMdFile && previewFile ? (previewLiveContent || previewFile.content) : "";
+
   const highlightedData = useMemo(() => {
     if (!isMdFile || !previewFile || previewFile.cannotPreview) {
       return { tokens: [] as unknown[][], isPlain: true };
     }
-    return getHighlightedLines(previewFile.content, previewFile.path);
-  }, [isMdFile, previewFile]);
+    return getHighlightedLines(liveMarkdownSource, previewFile.path);
+  }, [isMdFile, liveMarkdownSource, previewFile]);
 
   // Markdown 渲染只跟随预览文件变化：拖动宽度、文件内搜索、hover 等重渲染不再重复 parse + Prism 高亮
   const markdownHtml = useMemo(() => {
     if (!isMdFile || !previewFile || previewFile.cannotPreview) return "";
-    return renderMarkdownToHtml(previewFile.content);
-  }, [isMdFile, previewFile]);
+    return renderMarkdownToHtml(liveMarkdownSource);
+  }, [isMdFile, liveMarkdownSource, previewFile]);
 
   // 目录导航：仅 .md 文件在预览模式下展示
   const tocEntries = useMemo(() => {
     if (!isMdFile || !previewFile || previewFile.cannotPreview) return [];
-    return buildMarkdownToc(previewFile.content);
-  }, [isMdFile, previewFile]);
+    return buildMarkdownToc(liveMarkdownSource);
+  }, [isMdFile, liveMarkdownSource, previewFile]);
 
   const isFocusBlocking = !!(
     previewFile &&
     previewFile.kind === "text" &&
-    !isMarkdownPath(previewFile.path) &&
-    !previewFile.cannotPreview
+    !previewFile.cannotPreview &&
+    (!isMarkdownPath(previewFile.path) || markdownMode === "source")
   );
 
   return {
@@ -895,6 +918,8 @@ export function useFilePreview({
       setMarkdownMode,
       previewFontFamily,
       previewFontSize,
+      previewLiveContent,
+      onPreviewLiveContentChange: setPreviewLiveContent,
       fileSearchQuery,
       showFileSearchBar,
       showGoToLineBar,
@@ -947,6 +972,8 @@ export interface FilePreviewPanelProps {
   setMarkdownMode: (mode: "preview" | "source") => void;
   previewFontFamily: string;
   previewFontSize: number;
+  previewLiveContent: string;
+  onPreviewLiveContentChange: (content: string) => void;
   fileSearchQuery: string;
   showFileSearchBar: boolean;
   showGoToLineBar: boolean;
@@ -1048,6 +1075,8 @@ export const FilePreviewPanel: React.FC<FilePreviewPanelProps> = ({
   setMarkdownMode,
   previewFontFamily,
   previewFontSize,
+  previewLiveContent,
+  onPreviewLiveContentChange,
   fileSearchQuery,
   showFileSearchBar,
   showGoToLineBar,
@@ -1086,7 +1115,6 @@ export const FilePreviewPanel: React.FC<FilePreviewPanelProps> = ({
   const [showSidePreview, setShowSidePreview] = useState(false);
   const [sidePreviewRatio, setSidePreviewRatio] = useState(0.5);
   const [isResizingSidePreview, setIsResizingSidePreview] = useState(false);
-  const [liveCodeContent, setLiveCodeContent] = useState("");
   const monacoEditorRef = useRef<MonacoEditorHandle>(null);
   const previewBodyRef = useRef<HTMLDivElement | null>(null);
 
@@ -1095,7 +1123,6 @@ export const FilePreviewPanel: React.FC<FilePreviewPanelProps> = ({
   useEffect(() => {
     setShowSidePreview(false);
     setSidePreviewRatio(0.5);
-    setLiveCodeContent(previewFile?.content ?? "");
   }, [openSeq]);
 
   useEffect(() => {
@@ -1145,7 +1172,10 @@ export const FilePreviewPanel: React.FC<FilePreviewPanelProps> = ({
   if (!previewFile) return null;
 
   const isMdFile = previewFile.kind === "text" && isMarkdownPath(previewFile.path);
-  const isMonacoFile = previewFile.kind === "text" && !isMdFile && !previewFile.cannotPreview;
+  const isMonacoFile =
+    previewFile.kind === "text" &&
+    !previewFile.cannotPreview &&
+    (!isMdFile || markdownMode === "source");
   const canSidePreview = isMonacoFile && isHtmlPreviewPath(previewFile.path);
   const fileName = previewFile.path.split(/[/\\]/).pop() || previewFile.path;
 
@@ -1341,8 +1371,11 @@ export const FilePreviewPanel: React.FC<FilePreviewPanelProps> = ({
                 key={previewFile.openSeq}
                 ref={monacoEditorRef}
                 filePath={previewFile.path}
-                initialValue={previewFile.content}
-                onValueChange={canSidePreview ? setLiveCodeContent : undefined}
+                initialValue={previewLiveContent || previewFile.content}
+                initialDirty={previewLiveContent !== previewFile.content}
+                fontFamily={previewFontFamily}
+                fontSize={previewFontSize}
+                onValueChange={onPreviewLiveContentChange}
                 onDirtyChange={onCodeDirtyChange}
                 onSave={onSaveCodeFile}
                 onInsertSelection={onInsertSelection}
@@ -1369,7 +1402,7 @@ export const FilePreviewPanel: React.FC<FilePreviewPanelProps> = ({
                   <HtmlPreview
                     projectPath={projectPath}
                     relativePath={previewFile.path}
-                    content={liveCodeContent}
+                    content={previewLiveContent}
                   />
                 </div>
               </>

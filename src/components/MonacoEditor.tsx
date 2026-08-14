@@ -155,6 +155,12 @@ export interface MonacoEditorProps {
   /** 每次编辑内容变化回调（供 HTML 实时预览等场景读取最新值） */
   onValueChange?: (value: string) => void;
   onDirtyChange: (dirty: boolean) => void;
+  /** 编辑器字体（跟随设置的“文件预览字体”） */
+  fontFamily?: string;
+  /** 编辑器字号（跟随设置的“文件预览字号”） */
+  fontSize?: number;
+  /** 初始内容是否已是未保存状态（MD 源码切回时保留脏标记） */
+  initialDirty?: boolean;
   /** 保存回调：返回 true 表示保存成功，组件据此同步 dirty 状态 */
   onSave: (content: string) => Promise<boolean>;
   onInsertSelection: (text: string) => void;
@@ -171,6 +177,9 @@ export const MonacoEditor = forwardRef<MonacoEditorHandle, MonacoEditorProps>(
       initialValue,
       onValueChange,
       onDirtyChange,
+      fontFamily,
+      fontSize,
+      initialDirty,
       onSave,
       onInsertSelection,
       onCloseRequest,
@@ -187,6 +196,8 @@ export const MonacoEditor = forwardRef<MonacoEditorHandle, MonacoEditorProps>(
     const savedVersionIdRef = useRef<number>(0);
     const lastDirtyRef = useRef<boolean>(false);
     const suppressDirtyRef = useRef<boolean>(false);
+    const fontFamilyRef = useRef<string | undefined>(fontFamily);
+    const fontSizeRef = useRef<number | undefined>(fontSize);
 
     const onSaveRef = useRef(onSave);
     const onValueChangeRef = useRef(onValueChange);
@@ -201,7 +212,18 @@ export const MonacoEditor = forwardRef<MonacoEditorHandle, MonacoEditorProps>(
       onInsertSelectionRef.current = onInsertSelection;
       onCloseRequestRef.current = onCloseRequest;
       onTogglePreviewRef.current = onTogglePreview;
-    }, [onDirtyChange, onInsertSelection, onSave, onCloseRequest, onTogglePreview, onValueChange]);
+      fontFamilyRef.current = fontFamily;
+      fontSizeRef.current = fontSize;
+    }, [
+      onDirtyChange,
+      onInsertSelection,
+      onSave,
+      onCloseRequest,
+      onTogglePreview,
+      onValueChange,
+      fontFamily,
+      fontSize,
+    ]);
 
     useEffect(() => {
       let cancelled = false;
@@ -256,15 +278,22 @@ export const MonacoEditor = forwardRef<MonacoEditorHandle, MonacoEditorProps>(
       );
       savedVersionIdRef.current = model.getAlternativeVersionId();
       lastDirtyRef.current = false;
+      if (initialDirty) {
+        // 从 MD 预览切回源码且当前内容尚未保存时，保留脏标记
+        savedVersionIdRef.current = -1;
+        lastDirtyRef.current = true;
+        onDirtyChangeRef.current(true);
+      }
 
       const editor = monaco.editor.create(mount, {
         model,
         theme: "kkcoder-app",
         automaticLayout: true,
         minimap: { enabled: true, showSlider: "mouseover" },
-        fontFamily: resolveCssVar("--font-mono", "Consolas, 'Courier New', monospace"),
+        fontFamily:
+          fontFamilyRef.current || resolveCssVar("--font-mono", "Consolas, 'Courier New', monospace"),
         fontLigatures: true,
-        fontSize: 13,
+        fontSize: fontSizeRef.current ?? 13,
         padding: { top: 8 },
         scrollBeyondLastLine: false,
         smoothScrolling: true,
@@ -411,6 +440,17 @@ export const MonacoEditor = forwardRef<MonacoEditorHandle, MonacoEditorProps>(
       }
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [filePath, monacoModule]);
+
+    // 设置里改“文件预览字体/字号”时，实时作用到已打开的 Monaco
+    useEffect(() => {
+      const editor = editorRef.current;
+      if (!editor) return;
+      editor.updateOptions({
+        fontFamily:
+          fontFamilyRef.current || resolveCssVar("--font-mono", "Consolas, 'Courier New', monospace"),
+        fontSize: fontSizeRef.current ?? 13,
+      });
+    }, [fontFamily, fontSize]);
 
     const save = useCallback(() => {
       const editor = editorRef.current;
