@@ -17,6 +17,7 @@ pub struct GitBranchInfo {
     pub has_upstream: bool,
     pub has_remote: bool,
     pub upstream_branch: Option<String>,
+    pub has_changes: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -94,6 +95,7 @@ pub fn get_git_branch_info(cwd: Option<String>) -> Result<GitBranchInfo, String>
             has_upstream: false,
             has_remote: false,
             upstream_branch: None,
+            has_changes: false,
         });
     }
 
@@ -164,6 +166,15 @@ pub fn get_git_branch_info(cwd: Option<String>) -> Result<GitBranchInfo, String>
         _ => (false, None),
     };
 
+    // 6. 检查是否有未提交的代码修改 (git status --porcelain)
+    let status_out = create_git_cmd(cwd_ref)
+        .args(["status", "--porcelain"])
+        .output();
+    let has_changes = match status_out {
+        Ok(out) => !String::from_utf8_lossy(&out.stdout).trim().is_empty(),
+        Err(_) => false,
+    };
+
     Ok(GitBranchInfo {
         is_git_repo: true,
         current_branch,
@@ -172,6 +183,7 @@ pub fn get_git_branch_info(cwd: Option<String>) -> Result<GitBranchInfo, String>
         has_upstream,
         has_remote,
         upstream_branch,
+        has_changes,
     })
 }
 

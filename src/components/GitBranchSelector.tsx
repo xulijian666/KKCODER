@@ -24,6 +24,7 @@ export interface GitBranchInfo {
   hasUpstream: boolean;
   hasRemote: boolean;
   upstreamBranch: string | null;
+  hasChanges: boolean;
 }
 
 export interface GitPullResult {
@@ -84,6 +85,19 @@ export const GitBranchSelector: React.FC<GitBranchSelectorProps> = ({
   useEffect(() => {
     void refreshBranchInfo();
   }, [refreshBranchInfo]);
+
+  // 当文件树刷新（代码生成/修改/保存完成）时，联动刷新 Git 状态与分支未提交改动检测
+  useEffect(() => {
+    const handleGlobalRefresh = (event: Event) => {
+      const customEvent = event as CustomEvent<{ path?: string }>;
+      const targetPath = customEvent.detail?.path;
+      if (!targetPath || !directory || targetPath.toLowerCase().startsWith(directory.toLowerCase())) {
+        void refreshBranchInfo();
+      }
+    };
+    window.addEventListener("kkcoder-refresh-project-tree", handleGlobalRefresh);
+    return () => window.removeEventListener("kkcoder-refresh-project-tree", handleGlobalRefresh);
+  }, [directory, refreshBranchInfo]);
 
   // 点击外侧关闭下拉菜单
   useEffect(() => {
@@ -335,6 +349,7 @@ ${pushInstruction}`;
 
   const hasRemote = branchInfo.hasRemote;
   const hasUpstream = branchInfo.hasUpstream;
+  const hasChanges = branchInfo.hasChanges;
   const canPull = hasRemote && hasUpstream;
 
   const pullButtonTitle = !hasRemote
@@ -342,6 +357,10 @@ ${pushInstruction}`;
     : !hasUpstream
       ? "当前分支未关联远程上游分支 (No Upstream)"
       : `从 ${branchInfo.upstreamBranch || "远程"} 拉取最新更新 (git pull)`;
+
+  const commitButtonTitle = hasChanges
+    ? "智能提交：让 AI 分析当前变更、排除异常文件、生成规范 Commit 并询问推送"
+    : "工作区干净，暂无需要提交的代码修改 (Working tree clean)";
 
   const filteredBranches = (branchInfo.branches || []).filter((b) =>
     b.toLowerCase().includes(searchQuery.toLowerCase()),
@@ -355,7 +374,7 @@ ${pushInstruction}`;
           className={`chat-branch-select-btn ${open ? "active" : ""} ${disabled ? "is-disabled" : ""}`}
           onClick={toggle}
           disabled={disabled}
-          title={`当前 Git 分支：${branchInfo.currentBranch || "未知"} ${hasUpstream ? `(↑ ${branchInfo.upstreamBranch})` : ""} · 点击切换或拉取`}
+          title={`当前 Git 分支：${branchInfo.currentBranch || "未知"} ${hasUpstream ? `(${branchInfo.upstreamBranch})` : ""} · 点击切换或拉取`}
         >
           <GitBranch size={12} className="chat-branch-icon" />
           <span className="chat-branch-select-label">
@@ -404,9 +423,10 @@ ${pushInstruction}`;
                 </button>
                 <button
                   type="button"
-                  className="branch-action-btn branch-smart-commit-btn"
-                  onClick={handleSmartCommit}
-                  title="智能提交：让 AI 分析当前变更、排除异常文件、生成规范 Commit 并询问推送"
+                  className={`branch-action-btn branch-smart-commit-btn ${!hasChanges ? "is-disabled" : ""}`}
+                  onClick={hasChanges ? handleSmartCommit : undefined}
+                  disabled={!hasChanges}
+                  title={commitButtonTitle}
                 >
                   <Sparkles size={11} className="branch-sparkles-icon" />
                   <span>智能提交</span>
