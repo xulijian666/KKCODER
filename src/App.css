@@ -5198,19 +5198,6 @@ body.preview-resizing .preview-resize-handle::after {
   cursor: pointer;
 }
 
-.chat-cursor {
-  display: inline-block;
-  width: 2px;
-  height: 15px;
-  background: var(--color-primary);
-  margin-left: 1px;
-  animation: chat-blink 1s steps(2) infinite;
-}
-@keyframes chat-blink {
-  50% {
-    opacity: 0;
-  }
-}
 .chat-typing {
   display: flex;
   gap: 4px;
@@ -5403,7 +5390,7 @@ body.preview-resizing .preview-resize-handle::after {
   letter-spacing: 0.06em;
 }
 
-/* AI 思考中：消息流末尾的转圈指示 */
+/* AI 思考中：消息流末尾统一的三点跳动指示 */
 .chat-thinking {
   display: flex;
   align-items: center;
@@ -5413,22 +5400,18 @@ body.preview-resizing .preview-resize-handle::after {
   font-size: 12.5px;
   user-select: none;
 }
-.chat-thinking-spinner {
-  width: 15px;
-  height: 15px;
-  border: 2px solid color-mix(in srgb, var(--color-primary) 28%, transparent);
-  border-top-color: var(--color-primary);
-  border-radius: 50%;
-  animation: chat-thinking-spin 0.8s linear infinite;
-  flex-shrink: 0;
-}
-@keyframes chat-thinking-spin {
-  to { transform: rotate(360deg); }
-}
-.chat-thinking-text {
+/* 思考中的运行秒数（从发送起算，与完成时耗时一致） */
+.chat-thinking-elapsed {
+  font-size: 11.5px;
   font-weight: 500;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums; /* 等宽数字：秒数变化不抖动 */
 }
-.chat-thinking.is-esc-armed .chat-thinking-text {
+/* ESC 待确认：三点与秒数变红提示 */
+.chat-thinking.is-esc-armed .chat-typing span {
+  background-color: #ef4444;
+}
+.chat-thinking.is-esc-armed .chat-thinking-elapsed {
   color: #ef4444;
 }
 

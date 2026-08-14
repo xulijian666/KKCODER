@@ -921,16 +921,7 @@ const MessageView: React.FC<{ message: ChatMessage }> = React.memo(({ message })
             __html: renderChatMarkdownToHtml(message.text),
           }}
         />
-      ) : message.status === "streaming" ? (
-        <div className="chat-typing">
-          <span />
-          <span />
-          <span />
-        </div>
       ) : null}
-      {message.status === "streaming" && message.text && (
-        <span className="chat-cursor" />
-      )}
       {message.status === "done" && message.elapsedSec != null && (
         <div className="chat-cost">
           <span className="chat-cost-elapsed">耗时 {formatElapsed(message.elapsedSec)}</span>
@@ -993,6 +984,8 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
   const [images, setImages] = useState<ChatImageAttachment[]>([]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [draggingImage, setDraggingImage] = useState(false);
+  // 思考中已运行秒数：从发送消息起计时，与完成时耗时（turnStartTimeRef）同源
+  const [streamingElapsed, setStreamingElapsed] = useState(0);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -1287,6 +1280,23 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
       el.scrollTop = el.scrollHeight;
     }
   }, [messages]);
+
+  // 思考计时：从发送消息（turnStartTimeRef）起每 500ms 刷新「已运行 N 秒」，
+  // 与完成时「耗时 X 秒」同一时间起点、同一取整（Math.round），保证两者一致
+  useEffect(() => {
+    if (!busy) {
+      setStreamingElapsed(0);
+      return;
+    }
+    const timer = window.setInterval(() => {
+      if (turnStartTimeRef.current > 0) {
+        setStreamingElapsed(
+          Math.max(0, Math.round((Date.now() - turnStartTimeRef.current) / 1000)),
+        );
+      }
+    }, 500);
+    return () => window.clearInterval(timer);
+  }, [busy]);
 
   const handleScroll = () => {
     const el = scrollRef.current;
@@ -1602,7 +1612,13 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
       return;
     }
     const handleGlobalKeyDown = (event: KeyboardEvent) => {
-      if (isEditableFocusTarget(event.target)) return;
+      if (isEditableFocusTarget(event.target)) {
+        // 仅当焦点在本会话聊天输入框、思考中（busy）且按的是 ESC 时才接管终止交互
+        // （输入法组合中除外，ESC 留给候选窗；补全菜单的 ESC 已在输入框内
+        // stopPropagation 处理，不会走到这里）；其他可编辑元素（搜索框等）不劫持
+        if (event.target !== inputRef.current) return;
+        if (!busy || event.key !== "Escape" || composingRef.current) return;
+      }
       if (event.key !== "Escape") {
         // 按下其他键视为放弃 ESC 终止意图
         if (escArmedRef.current) disarmEsc();
@@ -1625,8 +1641,12 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
   }, [armEsc, busy, disarmEsc, handleCancel, isActive, pendingQuestion]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // 输入法组合输入期间把箭头/回车让给输入法候选窗
-    if (e.nativeEvent.isComposing) return;
+    // 输入法组合输入期间把箭头/回车让给输入法候选窗；
+    // 阻止冒泡：组合中的 ESC 用于取消候选窗，不应触发全局「终止生成」交互
+    if (e.nativeEvent.isComposing) {
+      e.stopPropagation();
+      return;
+    }
     if (completionTrigger) {
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
@@ -1649,6 +1669,7 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
       }
       if (e.key === "Escape") {
         e.preventDefault();
+        e.stopPropagation(); // 只关补全菜单，不触发全局 ESC 终止交互
         setCompletionTrigger(null);
         return;
       }
@@ -1673,13 +1694,19 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
         {messages.map((m) => (
           <MessageView key={m.id} message={m} />
         ))}
-        {/* AI 思考中：消息流末尾的转圈指示（比闪烁光标显眼） */}
+        {/* AI 思考中：消息流末尾统一的三点跳动指示 + 从发送起的运行秒数 */}
         {busy && (
           <div className={`chat-thinking ${escArmed ? "is-esc-armed" : ""}`}>
-            <span className="chat-thinking-spinner" />
-            <span className="chat-thinking-text">
-              {escArmed ? "再按一次 ESC 终止任务" : "AI 正在思考…"}
-            </span>
+            <div className="chat-typing">
+              <span />
+              <span />
+              <span />
+            </div>
+            {streamingElapsed > 0 && (
+              <span className="chat-thinking-elapsed">
+                已运行 {streamingElapsed} 秒
+              </span>
+            )}
           </div>
         )}
       </div>

@@ -71,9 +71,6 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
               : "选择模型 / 供应商")
         }
       >
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-          <path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"></path>
-        </svg>
         <span className="chat-model-select-label">{displayModel}</span>
         {routeEnabled && (
           <span className="chat-model-route-dot" title="CC Switch 路由开关已开启" />

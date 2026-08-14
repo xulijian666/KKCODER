@@ -31,7 +31,6 @@ const BUILTIN_COMMANDS: &[(&str, &str)] = &[
     ("import", "导入一段对话历史继续"),
     ("share", "生成当前对话的分享链接"),
     ("compact", "压缩对话历史以释放上下文空间"),
-    ("model", "切换使用的模型"),
     ("mcp", "管理 MCP 服务器"),
     ("init", "初始化项目的 CLAUDE.md 配置"),
     ("help", "查看可用的命令与帮助"),
