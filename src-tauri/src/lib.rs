@@ -3478,6 +3478,7 @@ pub fn run() {
             get_frp_status,
             git::get_git_branch_info,
             git::switch_git_branch,
+            git::stash_and_switch_git_branch,
             git::create_git_branch,
             git::pull_git_updates,
             git::init_git_repo

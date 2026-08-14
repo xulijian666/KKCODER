@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
@@ -753,7 +754,7 @@ const QuestionCard: React.FC<{
   if (!question) return null;
   const selected = selections[question.id] ?? new Set<string>();
 
-  return (
+  return createPortal(
     <div className="chat-question-overlay">
       <div
         className="chat-question-card chat-question-modal"
@@ -761,33 +762,35 @@ const QuestionCard: React.FC<{
         aria-modal="true"
         aria-label="Claude 需要你的选择"
       >
-        {/* 中部可滚动：标题/问题/选项；底部操作栏固定在弹窗内始终可见 */}
-        <div className="chat-question-scroll">
-          <div className="chat-question-header">
-            <div>
-              <span className="chat-question-kicker">Claude 需要你的选择</span>
-              <strong>{question.header || "选择"}</strong>
-            </div>
-            {request.questions.length > 1 && (
-              <span className="chat-question-progress">
-                {activeQuestion + 1}/{request.questions.length}
-              </span>
-            )}
+        {/* 顶部固定栏：标题与多题切换标签 */}
+        <div className="chat-question-header">
+          <div>
+            <span className="chat-question-kicker">Claude 需要你的选择</span>
+            <strong>{question.header || "选择"}</strong>
           </div>
           {request.questions.length > 1 && (
-            <div className="chat-question-tabs" role="tablist">
-              {request.questions.map((item, index) => (
-                <button
-                  type="button"
-                  key={item.id}
-                  className={index === activeQuestion ? "is-active" : ""}
-                  onClick={() => setActiveQuestion(index)}
-                >
-                  {item.header || `问题 ${index + 1}`}
-                </button>
-              ))}
-            </div>
+            <span className="chat-question-progress">
+              {activeQuestion + 1}/{request.questions.length}
+            </span>
           )}
+        </div>
+        {request.questions.length > 1 && (
+          <div className="chat-question-tabs" role="tablist">
+            {request.questions.map((item, index) => (
+              <button
+                type="button"
+                key={item.id}
+                className={index === activeQuestion ? "is-active" : ""}
+                onClick={() => setActiveQuestion(index)}
+              >
+                {item.header || `问题 ${index + 1}`}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* 中部内容区：固定高度弹性区域，切换题目时外框高度恒定不变，杜绝窗口上下抖动 */}
+        <div className="chat-question-scroll">
           <div className="chat-question-text">{question.question}</div>
           <div className="chat-question-options">
             {question.options.map((option, index) => {
@@ -864,7 +867,8 @@ const QuestionCard: React.FC<{
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 };
 
@@ -883,7 +887,7 @@ const PasteEditModal: React.FC<{
     editorRef.current?.select();
   }, []);
 
-  return (
+  return createPortal(
     <div className="chat-paste-overlay" onMouseDown={(event) => event.stopPropagation()}>
       <div className="chat-paste-card">
         <div className="chat-paste-head">
@@ -930,7 +934,8 @@ const PasteEditModal: React.FC<{
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 };
 
@@ -2043,8 +2048,6 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
     }
   };
 
-  const lastMsg = messages[messages.length - 1];
-
   return (
     <div className="chat-root">
       <div className="chat-messages" ref={scrollRef} onScroll={handleScroll}>
@@ -2275,9 +2278,9 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
           </div>
         </div>
       </div>
-      {busy && lastMsg?.role === "assistant" && lastMsg.status === "streaming" && (
-        <div className={`chat-busy-hint ${escArmed ? "is-esc-armed" : ""}`}>
-          {escArmed ? "再按一次 ESC 终止任务" : "AI 正在生成…"}
+      {busy && escArmed && (
+        <div className="chat-busy-hint is-esc-armed">
+          再按一次 ESC 终止任务
         </div>
       )}
       {pendingQuestion && (

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import {
   AlertTriangle,
@@ -7,6 +8,7 @@ import {
   Download,
   GitBranch,
   Loader2,
+  Package,
   Search,
   Sparkles,
   X,
@@ -57,6 +59,11 @@ export const GitBranchSelector: React.FC<GitBranchSelectorProps> = ({
     output: string;
     currentBranch: string;
   } | null>(null);
+  const [switchBlockData, setSwitchBlockData] = useState<{
+    targetBranch: string;
+    errorOutput: string;
+  } | null>(null);
+  const [stashingSwitch, setStashingSwitch] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -140,8 +147,54 @@ export const GitBranchSelector: React.FC<GitBranchSelectorProps> = ({
       void refreshBranchInfo();
     } catch (err) {
       const msg = String(err);
-      notifyWarning(`切换分支失败: ${msg}`);
+      if (
+        msg.includes("overwritten by checkout") ||
+        msg.includes("stash them before you switch") ||
+        msg.includes("commit your changes")
+      ) {
+        setSwitchBlockData({
+          targetBranch: branchName,
+          errorOutput: msg,
+        });
+        setOpen(false);
+      } else {
+        notifyWarning(`切换分支失败: ${msg}`);
+      }
     }
+  };
+
+  // 暂存未提交改动并切换分支 (git stash push -> git checkout <target>)
+  const handleStashAndSwitch = async () => {
+    if (!switchBlockData) return;
+    setStashingSwitch(true);
+    try {
+      const res = await invoke<string>("stash_and_switch_git_branch", {
+        branch: switchBlockData.targetBranch,
+        cwd: directory,
+      });
+      notifyInfo(res || `已暂存改动并成功切换至分支 ${switchBlockData.targetBranch}`);
+      setSwitchBlockData(null);
+      void refreshBranchInfo();
+    } catch (err) {
+      notifyWarning(`暂存并切换失败: ${err}`);
+    } finally {
+      setStashingSwitch(false);
+    }
+  };
+
+  // 触发 AI 在切换分支前智能提交
+  const handleAiCommitBeforeSwitch = () => {
+    if (!switchBlockData) return;
+    const target = switchBlockData.targetBranch;
+    const prompt = `我准备切换到 Git 分支 \`${target}\`，但当前工作区有未提交的代码修改：
+
+\`\`\`git
+${switchBlockData.errorOutput}
+\`\`\`
+
+请帮我对当前所有修改文件进行智能分析，生成规范的 Git Commit 提交信息并完成提交。提交完成后请帮我切换到分支 \`${target}\`。`;
+    onTriggerSmartCommit?.(prompt);
+    setSwitchBlockData(null);
   };
 
   // 拉取更新 (git pull)
@@ -331,7 +384,7 @@ ${pushInstruction}`;
                   className={`branch-upstream-badge ${hasUpstream ? "is-tracked" : ""}`}
                   title={pullButtonTitle}
                 >
-                  {hasUpstream ? `↑ ${branchInfo.upstreamBranch}` : hasRemote ? "无上游" : "纯本地"}
+                  {hasUpstream ? branchInfo.upstreamBranch : hasRemote ? "无上游" : "纯本地"}
                 </span>
               </div>
               <div className="branch-dropdown-header-actions">
@@ -423,53 +476,122 @@ ${pushInstruction}`;
       </div>
 
       {/* Git 冲突/错误弹窗：支持一键交给 AI 解决 */}
-      {conflictData && (
-        <div className="git-conflict-modal-overlay" onClick={() => setConflictData(null)}>
-          <div
-            className="git-conflict-modal"
-            onClick={(e) => e.stopPropagation()}
-            role="dialog"
-            aria-modal="true"
-          >
-            <div className="git-conflict-modal-header">
-              <div className="git-conflict-modal-title">
-                <AlertTriangle size={16} className="git-conflict-icon" />
-                <span>Git 拉取冲突 / 更新异常</span>
+      {conflictData &&
+        createPortal(
+          <div className="git-conflict-modal-overlay" onClick={() => setConflictData(null)}>
+            <div
+              className="git-conflict-modal"
+              onClick={(e) => e.stopPropagation()}
+              role="dialog"
+              aria-modal="true"
+            >
+              <div className="git-conflict-modal-header">
+                <div className="git-conflict-modal-title">
+                  <AlertTriangle size={16} className="git-conflict-icon" />
+                  <span>Git 拉取冲突 / 更新异常</span>
+                </div>
+                <button
+                  type="button"
+                  className="git-conflict-close"
+                  onClick={() => setConflictData(null)}
+                >
+                  <X size={14} />
+                </button>
               </div>
-              <button
-                type="button"
-                className="git-conflict-close"
-                onClick={() => setConflictData(null)}
-              >
-                <X size={14} />
-              </button>
+              <div className="git-conflict-modal-desc">
+                在拉取分支 <code>{conflictData.currentBranch}</code> 时产生冲突或遇到不可自动合并的改动。您可以将错误信息直接发送给 AI 助手，由 AI 为您分析有冲突的文件并执行修复。
+              </div>
+              <div className="git-conflict-log">
+                <pre>{conflictData.output}</pre>
+              </div>
+              <div className="git-conflict-modal-footer">
+                <button
+                  type="button"
+                  className="git-conflict-btn-cancel"
+                  onClick={() => setConflictData(null)}
+                >
+                  稍后自行处理
+                </button>
+                <button
+                  type="button"
+                  className="git-conflict-btn-ai"
+                  onClick={handleResolveConflictWithAi}
+                >
+                  <Sparkles size={13} />
+                  <span>让 AI 解决冲突</span>
+                </button>
+              </div>
             </div>
-            <div className="git-conflict-modal-desc">
-              在拉取分支 <code>{conflictData.currentBranch}</code> 时产生冲突或遇到不可自动合并的改动。您可以将错误信息直接发送给 AI 助手，由 AI 为您分析有冲突的文件并执行修复。
+          </div>,
+          document.body,
+        )}
+
+      {/* 切换分支受阻（有未提交改动）弹窗 */}
+      {switchBlockData &&
+        createPortal(
+          <div className="git-conflict-modal-overlay" onClick={() => setSwitchBlockData(null)}>
+            <div
+              className="git-conflict-modal"
+              onClick={(e) => e.stopPropagation()}
+              role="dialog"
+              aria-modal="true"
+            >
+              <div className="git-conflict-modal-header">
+                <div className="git-conflict-modal-title">
+                  <AlertTriangle size={16} className="git-conflict-icon" />
+                  <span>切换分支受阻：检测到未提交的代码改动</span>
+                </div>
+                <button
+                  type="button"
+                  className="git-conflict-close"
+                  onClick={() => setSwitchBlockData(null)}
+                >
+                  <X size={14} />
+                </button>
+              </div>
+              <div className="git-conflict-modal-desc">
+                当前工作区包含未提交的代码修改。切换到 <code>{switchBlockData.targetBranch}</code> 会覆盖这些文件。您可以选择<strong>自动暂存并切换</strong>，或让 AI 帮您<strong>智能提交后再切换</strong>。
+              </div>
+              <div className="git-conflict-log">
+                <pre>{switchBlockData.errorOutput}</pre>
+              </div>
+              <div className="git-conflict-modal-footer">
+                <button
+                  type="button"
+                  className="git-conflict-btn-cancel"
+                  onClick={() => setSwitchBlockData(null)}
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  className="branch-action-btn branch-smart-commit-btn"
+                  style={{ padding: "6px 12px", fontSize: "12px", borderRadius: "6px" }}
+                  onClick={handleAiCommitBeforeSwitch}
+                  title="发送提示词让 AI 整理并提交当前代码，随后切换分支"
+                >
+                  <Sparkles size={13} className="branch-sparkles-icon" />
+                  <span>让 AI 提交后切换</span>
+                </button>
+                <button
+                  type="button"
+                  className="git-conflict-btn-ai"
+                  onClick={handleStashAndSwitch}
+                  disabled={stashingSwitch}
+                  title="执行 git stash 暂存修改并切换至目标分支"
+                >
+                  {stashingSwitch ? (
+                    <Loader2 size={13} className="chat-spin-icon" />
+                  ) : (
+                    <Package size={13} />
+                  )}
+                  <span>{stashingSwitch ? "正在暂存并切换..." : "暂存改动并切换分支"}</span>
+                </button>
+              </div>
             </div>
-            <div className="git-conflict-log">
-              <pre>{conflictData.output}</pre>
-            </div>
-            <div className="git-conflict-modal-footer">
-              <button
-                type="button"
-                className="git-conflict-btn-cancel"
-                onClick={() => setConflictData(null)}
-              >
-                稍后自行处理
-              </button>
-              <button
-                type="button"
-                className="git-conflict-btn-ai"
-                onClick={handleResolveConflictWithAi}
-              >
-                <Sparkles size={13} />
-                <span>让 AI 解决冲突</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body,
+        )}
     </>
   );
 };

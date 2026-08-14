@@ -6113,7 +6113,7 @@ body.preview-resizing .preview-resize-handle::after {
   bottom: calc(100% + 8px);
   left: 0;
   right: auto;
-  width: 280px;
+  width: 340px;
   max-height: min(72vh, 460px);
   overflow: hidden;
   background-color: var(--bg-main);
@@ -6131,7 +6131,7 @@ body.preview-resizing .preview-resize-handle::after {
   animation: composer-popup-in 0.16s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 .branch-init-dropdown {
-  width: 290px;
+  width: 300px;
   padding: 14px;
 }
 .branch-init-card {
@@ -6215,6 +6215,8 @@ body.preview-resizing .preview-resize-handle::after {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  max-width: 110px;
+  flex-shrink: 0;
 }
 .branch-upstream-badge {
   font-size: 9.5px;
@@ -6223,10 +6225,13 @@ body.preview-resizing .preview-resize-handle::after {
   background: var(--bg-sidebar);
   border: 1px solid var(--border-color);
   border-radius: 4px;
-  padding: 1px 4px;
-  line-height: 13px;
+  padding: 1px 5px;
+  line-height: 14px;
   white-space: nowrap;
-  flex-shrink: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 85px;
+  flex-shrink: 1;
 }
 .branch-upstream-badge.is-tracked {
   color: #10b981;
@@ -6264,19 +6269,18 @@ body.preview-resizing .preview-resize-handle::after {
   border-color: color-mix(in srgb, var(--color-primary) 40%, transparent);
 }
 .branch-smart-commit-btn {
-  background: color-mix(in srgb, var(--color-primary) 8%, var(--bg-sidebar));
-  color: var(--color-primary);
-  border-color: color-mix(in srgb, var(--color-primary) 28%, var(--border-color));
-  font-weight: 600;
+  background: var(--bg-sidebar);
+  color: var(--text-secondary);
+  border-color: var(--border-color);
 }
 .branch-smart-commit-btn:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--color-primary) 16%, var(--bg-sidebar));
-  border-color: var(--color-primary);
-  color: var(--color-primary);
-  box-shadow: 0 1px 4px color-mix(in srgb, var(--color-primary) 20%, transparent);
+  background-color: var(--bg-hover-item);
+  border-color: color-mix(in srgb, var(--color-primary) 30%, var(--border-color));
+  color: var(--text-primary);
 }
 .branch-sparkles-icon {
   color: var(--color-primary);
+  opacity: 0.85;
   flex-shrink: 0;
 }
 .branch-action-btn.is-disabled,
@@ -6998,12 +7002,13 @@ body.preview-resizing .preview-resize-handle::after {
 .chat-question-overlay {
   position: fixed;
   inset: 0;
-  z-index: 1200;
+  z-index: 99999;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: rgba(8, 12, 20, 0.55);
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(8px);
   animation: chat-question-fade-in 0.15s ease-out;
 }
 @keyframes chat-question-fade-in {
@@ -7013,26 +7018,41 @@ body.preview-resizing .preview-resize-handle::after {
 .chat-question-card.chat-question-modal {
   display: flex;
   flex-direction: column;
-  width: min(560px, 100%);
-  max-height: min(80vh, 640px);
+  width: min(680px, 92vw);
+  height: min(640px, 88vh);
+  max-height: min(88vh, 760px);
   overflow: hidden;
-  border: 1px solid var(--color-primary);
-  border-radius: 10px;
-  background: var(--bg-main);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.32);
-  animation: chat-question-pop 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
+  border: 1px solid color-mix(in srgb, var(--border-color) 80%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--bg-main) 96%, var(--bg-sidebar));
+  box-shadow:
+    0 24px 48px -12px rgba(0, 0, 0, 0.45),
+    0 0 0 1px rgba(255, 255, 255, 0.06);
+  animation: chat-question-pop 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 @keyframes chat-question-pop {
-  from { opacity: 0; transform: translateY(10px) scale(0.98); }
+  from { opacity: 0; transform: translateY(12px) scale(0.97); }
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
 .chat-question-scroll {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.chat-question-scroll::-webkit-scrollbar {
+  width: 5px;
+}
+.chat-question-scroll::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--text-secondary) 20%, transparent);
+  border-radius: 4px;
+}
+.chat-question-scroll::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--text-secondary) 40%, transparent);
 }
 .chat-question-error {
-  padding: 2px 12px 0;
+  padding: 2px 20px 0;
   color: #ef4444;
   font-size: 12px;
 }
@@ -7040,86 +7060,117 @@ body.preview-resizing .preview-resize-handle::after {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  padding: 10px 12px;
+  gap: 12px;
+  padding: 12px 20px;
   border-bottom: 1px solid var(--border-color);
+  background: color-mix(in srgb, var(--bg-sidebar) 75%, var(--bg-main));
 }
 .chat-question-header > div {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
 }
 .chat-question-header strong {
   overflow: hidden;
-  font-size: 13px;
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--text-primary);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.chat-question-kicker,
+.chat-question-kicker {
+  color: var(--color-primary);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+}
 .chat-question-progress {
   color: var(--text-secondary);
-  font-size: 10.5px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text-secondary) 10%, transparent);
 }
 .chat-question-tabs {
   display: flex;
   gap: 4px;
-  padding: 7px 10px 0;
+  padding: 6px 16px 0;
   overflow-x: auto;
 }
 .chat-question-tabs button {
   min-width: 80px;
-  padding: 5px 8px;
+  padding: 6px 10px;
   border: none;
   border-bottom: 2px solid transparent;
   background: transparent;
   color: var(--text-secondary);
+  font-size: 12px;
   cursor: pointer;
+  transition: all 0.15s ease;
 }
 .chat-question-tabs button.is-active {
   border-bottom-color: var(--color-primary);
   color: var(--text-primary);
+  font-weight: 600;
 }
 .chat-question-text {
-  padding: 12px 12px 8px;
+  padding: 14px 20px 10px;
   color: var(--text-primary);
   font-size: 13.5px;
-  line-height: 1.55;
+  font-weight: 500;
+  line-height: 1.6;
 }
 .chat-question-options {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 0 12px 12px;
+  gap: 8px;
+  padding: 0 20px 16px;
 }
 .chat-question-option {
   display: grid;
-  grid-template-columns: 26px minmax(0, 1fr);
+  grid-template-columns: 28px minmax(0, 1fr);
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   min-height: 48px;
-  padding: 7px 9px;
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  background: var(--bg-sidebar);
+  padding: 8px 14px;
+  border: 1px solid color-mix(in srgb, var(--border-color) 80%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-sidebar) 55%, var(--bg-main));
   color: var(--text-primary);
   text-align: left;
   cursor: pointer;
+  transition: all 0.16s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.chat-question-option:hover {
+  background-color: var(--bg-hover-item);
+  border-color: color-mix(in srgb, var(--color-primary) 35%, var(--border-color));
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+.chat-question-option:active {
+  transform: translateY(0) scale(0.99);
 }
 .chat-question-option.is-selected {
   border-color: var(--color-primary);
   background: color-mix(in srgb, var(--color-primary) 10%, var(--bg-sidebar));
+  box-shadow: 0 0 0 1px var(--color-primary);
 }
 .chat-question-marker {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   border: 1px solid var(--border-color);
-  border-radius: 50%;
+  border-radius: 6px;
   color: var(--text-secondary);
   font-size: 11px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  background: color-mix(in srgb, var(--text-secondary) 6%, transparent);
+  transition: all 0.15s ease;
 }
 .chat-question-option.is-selected .chat-question-marker {
   border-color: var(--color-primary);
@@ -7133,51 +7184,75 @@ body.preview-resizing .preview-resize-handle::after {
   gap: 2px;
 }
 .chat-question-option strong {
-  font-size: 12.5px;
+  font-size: 13px;
+  font-weight: 600;
 }
 .chat-question-option small {
   color: var(--text-secondary);
-  font-size: 11px;
-  line-height: 1.4;
+  font-size: 11.5px;
+  line-height: 1.45;
+  margin-top: 1px;
 }
 .chat-question-custom {
-  min-height: 56px;
+  min-height: 48px;
+  height: 48px;
   resize: vertical;
-  padding: 8px 9px;
+  padding: 8px 12px;
   border: 1px solid var(--border-color);
-  border-radius: 6px;
-  background: var(--bg-sidebar);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-sidebar) 55%, var(--bg-main));
   color: var(--text-primary);
+  font-size: 12.5px;
   font-family: inherit;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.chat-question-custom:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 20%, transparent);
 }
 .chat-question-actions {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding: 9px 12px;
+  gap: 10px;
+  padding: 12px 20px;
   border-top: 1px solid var(--border-color);
+  background: color-mix(in srgb, var(--bg-sidebar) 65%, var(--bg-main));
 }
 .chat-question-actions > div {
   display: flex;
-  gap: 6px;
+  gap: 8px;
 }
 .chat-question-actions button {
-  min-height: 30px;
-  padding: 5px 10px;
+  min-height: 32px;
+  padding: 0 14px;
   border: 1px solid var(--border-color);
-  border-radius: 5px;
-  background: transparent;
+  border-radius: 7px;
+  background: var(--bg-sidebar);
   color: var(--text-primary);
+  font-size: 12.5px;
+  font-weight: 500;
   cursor: pointer;
+  transition: all 0.15s ease;
+}
+.chat-question-actions button:hover:not(:disabled) {
+  background-color: var(--bg-hover-item);
+  border-color: color-mix(in srgb, var(--text-primary) 20%, var(--border-color));
 }
 .chat-question-actions button.is-primary {
   border-color: var(--color-primary);
   background: var(--color-primary);
   color: #ffffff;
+  font-weight: 600;
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--color-primary) 25%, transparent);
+}
+.chat-question-actions button.is-primary:hover:not(:disabled) {
+  background: var(--color-primary-hover, var(--color-primary));
+  box-shadow: 0 3px 12px color-mix(in srgb, var(--color-primary) 35%, transparent);
 }
 .chat-question-actions button:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: not-allowed;
 }
 
@@ -7185,7 +7260,7 @@ body.preview-resizing .preview-resize-handle::after {
 .chat-paste-overlay {
   position: fixed;
   inset: 0;
-  z-index: 1200;
+  z-index: 99999;
   display: flex;
   align-items: center;
   justify-content: center;

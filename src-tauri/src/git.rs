@@ -216,6 +216,41 @@ pub fn switch_git_branch(branch: String, cwd: Option<String>) -> Result<(), Stri
     }
 }
 
+/// 暂存当前未提交改动并切换到目标分支 (git stash push -> git checkout <branch>)
+#[tauri::command]
+pub fn stash_and_switch_git_branch(branch: String, cwd: Option<String>) -> Result<String, String> {
+    let branch = branch.trim();
+    if branch.is_empty() {
+        return Err("分支名不能为空".to_string());
+    }
+    let cwd_ref = cwd.as_deref();
+
+    // 1. git stash push
+    let stash_msg = format!("KKCoder 切换分支至 {} 前自动暂存", branch);
+    let stash_out = create_git_cmd(cwd_ref)
+        .args(["stash", "push", "-m", &stash_msg])
+        .output()
+        .map_err(|e| format!("执行 git stash 失败: {e}"))?;
+
+    if !stash_out.status.success() {
+        let err = String::from_utf8_lossy(&stash_out.stderr).trim().to_string();
+        return Err(if err.is_empty() { "暂存本地修改失败".to_string() } else { err });
+    }
+
+    // 2. git checkout <branch>
+    let checkout_out = create_git_cmd(cwd_ref)
+        .args(["checkout", branch])
+        .output()
+        .map_err(|e| format!("执行 git checkout 失败: {e}"))?;
+
+    if checkout_out.status.success() {
+        Ok(format!("已暂存本地改动并成功切换至分支 {}", branch))
+    } else {
+        let err = String::from_utf8_lossy(&checkout_out.stderr).trim().to_string();
+        Err(if err.is_empty() { "切换分支失败".to_string() } else { err })
+    }
+}
+
 /// 新建并切换到分支 (git checkout -b <name>)
 #[tauri::command]
 pub fn create_git_branch(branch: String, cwd: Option<String>) -> Result<(), String> {
