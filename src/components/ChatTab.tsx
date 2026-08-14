@@ -4,7 +4,6 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   BrainCircuit,
   Check,
-  ChevronDown,
   ChevronRight,
   CircleCheck,
   CircleX,
@@ -481,17 +480,21 @@ function messagesReducer(state: ChatMessage[], action: ChatAction): ChatMessage[
   }
 }
 
-const toolIcon = (name: string) => {
+const getToolMeta = (name: string) => {
   const n = name.toLowerCase();
-  if (n.includes("bash") || n.includes("terminal") || n.includes("powershell")) {
-    return <TerminalIcon size={13} />;
+  if (n.includes("bash") || n.includes("terminal") || n.includes("powershell") || n.includes("exec") || n.includes("command")) {
+    return { type: "terminal", label: "终端", icon: <TerminalIcon size={13} /> };
   }
-  if (n.includes("read")) return <FileText size={13} />;
-  if (n.includes("write") || n.includes("edit")) return <PencilLine size={13} />;
-  if (n.includes("glob") || n.includes("grep") || n.includes("search")) {
-    return <Search size={13} />;
+  if (n.includes("read") || n.includes("view") || n.includes("cat")) {
+    return { type: "read", label: "读取", icon: <FileText size={13} /> };
   }
-  return <Wrench size={13} />;
+  if (n.includes("write") || n.includes("edit") || n.includes("patch") || n.includes("replace") || n.includes("create")) {
+    return { type: "write", label: "编辑", icon: <PencilLine size={13} /> };
+  }
+  if (n.includes("glob") || n.includes("grep") || n.includes("search") || n.includes("find") || n.includes("list")) {
+    return { type: "search", label: "检索", icon: <Search size={13} /> };
+  }
+  return { type: "generic", label: "工具", icon: <Wrench size={13} /> };
 };
 
 const truncate = (text: string, max: number) =>
@@ -512,13 +515,13 @@ const ToolCard: React.FC<{ card: ToolCardData }> = ({ card }) => {
     ? JSON.stringify(card.input, null, 1)
     : "";
   const output = card.output ?? card.error ?? "";
+  const meta = getToolMeta(card.name);
   const statusLabel =
     card.status === "running"
       ? "运行中"
       : card.status === "error"
-        ? "出错"
+        ? "失败"
         : "完成";
-  // 所有工具统一：完成 → 绿√，失败 → 红X，运行中无图标
   const showDoneCheck = card.status === "done";
   const showErrorCross = card.status === "error";
 
@@ -529,28 +532,25 @@ const ToolCard: React.FC<{ card: ToolCardData }> = ({ card }) => {
   };
 
   return (
-    <div className={`chat-tool-card status-${card.status}`}>
+    <div className={`chat-tool-card status-${card.status} type-${meta.type}`}>
       <button
         type="button"
         className="chat-tool-head"
         onClick={() => setOpen(!open)}
       >
-        <span className="chat-tool-icon">{toolIcon(card.name)}</span>
+        <span className={`chat-tool-icon type-${meta.type}`}>{meta.icon}</span>
         <span className="chat-tool-name">{card.name}</span>
         <span className="chat-tool-status">
+          {card.status === "running" && <span className="chat-tool-status-spinner" />}
           {showDoneCheck && (
-            <CircleCheck size={13} className="chat-tool-status-check" />
+            <CircleCheck size={12} className="chat-tool-status-check" />
           )}
           {showErrorCross && (
-            <CircleX size={13} className="chat-tool-status-cross" />
+            <CircleX size={12} className="chat-tool-status-cross" />
           )}
-          {statusLabel}
+          <span>{statusLabel}</span>
         </span>
-        {open ? (
-          <ChevronDown className="chat-tool-chevron" size={13} />
-        ) : (
-          <ChevronRight className="chat-tool-chevron" size={13} />
-        )}
+        <ChevronRight className={`chat-tool-chevron ${open ? "is-open" : ""}`} size={13} />
       </button>
       {open && (
         <div className="chat-tool-body">
@@ -604,20 +604,20 @@ const ToolList: React.FC<{ tools: ToolCardData[] }> = ({ tools }) => {
         type="button"
         className="chat-tool-list-summary"
         onClick={() => setCollapsed((value) => !value)}
-        title={collapsed ? "点击展开全部命令" : "收起命令列表"}
+        title={collapsed ? "点击展开全部工具调用" : "收起工具调用列表"}
       >
-        <span className="chat-tool-icon">{toolIcon("terminal")}</span>
+        <span className="chat-tool-icon type-terminal"><TerminalIcon size={13} /></span>
         <span className="chat-tool-list-label">
-          {tools.length} 个命令 · 完成 {doneCount}
+          {tools.length} 个工具操作 · 完成 {doneCount}
           {hasRunning && <span className="chat-tool-list-running"> · 运行中</span>}
         </span>
-        {collapsed ? (
-          <ChevronRight className="chat-tool-chevron" size={13} />
-        ) : (
-          <ChevronDown className="chat-tool-chevron" size={13} />
-        )}
+        <ChevronRight className={`chat-tool-chevron ${collapsed ? "" : "is-open"}`} size={13} />
       </button>
-      {!collapsed && tools.map((tool) => <ToolCard key={tool.id} card={tool} />)}
+      {!collapsed && (
+        <div className="chat-tool-list-items">
+          {tools.map((tool) => <ToolCard key={tool.id} card={tool} />)}
+        </div>
+      )}
     </div>
   );
 };
@@ -950,9 +950,13 @@ const MessageView: React.FC<{ message: ChatMessage }> = React.memo(({ message })
               ))}
             </div>
           )}
-          {message.text}
+          <div className="chat-bubble-user-text">{message.text}</div>
         </div>
-        {message.model && <div className="chat-msg-model">模型：{message.model}</div>}
+        {message.model && (
+          <div className="chat-msg-meta">
+            <span className="chat-msg-model-badge">{message.model}</span>
+          </div>
+        )}
         {message.error && (
           <div className="chat-msg-error">{message.error}</div>
         )}
@@ -964,13 +968,17 @@ const MessageView: React.FC<{ message: ChatMessage }> = React.memo(({ message })
   const reasoningSegments = (message.reasoning ?? []).filter((seg) => seg.text.trim().length > 0);
   const isLive = message.status === "streaming";
   const mergedReasoning = reasoningSegments.map((seg) => seg.text).join("\n\n");
-  // 单个思考块：live 时标题「思考中」+ 脉冲点动效，完成时「思考完成」
+  // 单个思考块：live 时标题「思考中」+ 脉冲点动效，完成时「思考过程」+ 箭头
   const reasoningBlock = (text: string, key: string | number) => (
     <details className={`chat-reasoning ${isLive ? "is-live" : ""}`} key={key}>
       <summary>
-        <BrainCircuit size={13} />
-        <span className="chat-reasoning-title">{isLive ? "思考中" : "思考完成"}</span>
-        {isLive && <span className="chat-reasoning-live-dot" />}
+        <BrainCircuit size={13} className="chat-reasoning-icon" />
+        <span className="chat-reasoning-title">{isLive ? "思考中" : "思考过程"}</span>
+        {isLive ? (
+          <span className="chat-reasoning-live-dot" />
+        ) : (
+          <ChevronRight size={12} className="chat-reasoning-chevron" />
+        )}
       </summary>
       <div
         className="chat-reasoning-body markdown-body"
@@ -2014,8 +2022,47 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
       <div className="chat-messages" ref={scrollRef} onScroll={handleScroll}>
         {messages.length === 0 && (
           <div className="chat-empty">
-            <div className="chat-empty-title">Claude 聊天</div>
-            {!ready && <div className="chat-empty-desc">正在加载对话…</div>}
+            {!ready ? (
+              <div className="chat-empty-loading">
+                <div className="chat-empty-spinner" />
+                <div className="chat-empty-title">正在加载对话…</div>
+                <div className="chat-empty-desc">正在连接 Claude 代理与工作区</div>
+              </div>
+            ) : (
+              <div className="chat-empty-welcome">
+                <div className="chat-empty-badge">
+                  <Sparkles size={20} className="chat-empty-badge-icon" />
+                </div>
+                <h2 className="chat-empty-title">今天想构建什么？</h2>
+                <p className="chat-empty-desc">随时输入指令开始编程，支持多模态与上下文精准引用</p>
+                <div className="chat-starters">
+                  {[
+                    { label: "检查未提交代码改动", prompt: "检查当前工作区未提交的代码改动并分析其影响" },
+                    { label: "分析项目架构与模块", prompt: "分析当前项目的整体架构、主要模块与技术栈" },
+                    { label: "为关键功能编写测试", prompt: "为当前项目中的核心功能编写单元测试" },
+                    { label: "代码审查与重构建议", prompt: "审查最近的代码改动并给出极简重构与优化建议" },
+                  ].map((starter, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      className="chat-starter-btn"
+                      onClick={() => {
+                        setDraft(starter.prompt);
+                        requestAnimationFrame(() => inputRef.current?.focus());
+                      }}
+                    >
+                      <span className="chat-starter-text">{starter.label}</span>
+                      <span className="chat-starter-arrow">→</span>
+                    </button>
+                  ))}
+                </div>
+                <div className="chat-empty-shortcuts">
+                  <span><code>@</code> 引用文件</span>
+                  <span><code>/</code> 快捷技能</span>
+                  <span>支持拖拽图片</span>
+                </div>
+              </div>
+            )}
           </div>
         )}
         {messages.map((m) => (
@@ -2068,86 +2115,81 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
             onHover={setCompletionIndex}
           />
         )}
-        {!!images.length && (
-          <div className="chat-attachment-strip">
-            {images.map((image) => (
-              <div className="chat-attachment" key={image.id} title={image.name}>
-                <img src={image.dataUrl} alt={image.name} />
-                <button
-                  type="button"
-                  onClick={() => setImages((current) => current.filter((item) => item.id !== image.id))}
-                  title="移除图片"
-                >
-                  <X size={12} />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-        {(attachmentError || draggingImage) && (
-          <div className={`chat-attachment-hint ${attachmentError ? "is-error" : ""}`}>
-            {attachmentError || "松开以添加图片"}
-          </div>
-        )}
-        <div className="chat-input-bar">
-          {/* 独立输入框：textarea 自带边框壳，与下方按钮区分开 */}
-          <div className={`chat-input-shell ${draggingImage ? "is-dragging" : ""}`}>
-            <textarea
-              ref={inputRef}
-              className="chat-input"
-              value={draft}
-              onChange={(event) => {
-                setDraft(event.target.value);
-                updateCompletion(event.target.value, event.target.selectionStart);
-                event.target.style.height = "auto";
-                event.target.style.height = `${Math.min(event.target.scrollHeight, 140)}px`;
-              }}
-              onClick={(event) => {
-                const pos = event.currentTarget.selectionStart ?? 0;
-                const selEnd = event.currentTarget.selectionEnd ?? pos;
-                updateCompletion(event.currentTarget.value, pos);
-                // 点击粘贴标签内部（无选区时）：打开预览/编辑弹窗
-                if (pos === selEnd) {
-                  const spans = findPasteLabelSpans(event.currentTarget.value);
-                  const span = spans.find((s) => pos >= s.start && pos < s.end);
-                  if (span) setPasteEditId(span.id);
-                }
-              }}
-              onKeyDown={handleKeyDown}
-              onCompositionStart={() => {
-                composingRef.current = true;
-                setCompletionTrigger(null);
-              }}
-              onCompositionEnd={(event) => {
-                composingRef.current = false;
-                // 组合结束后重新检测，让补全菜单正常响应方向键
-                updateCompletion(event.currentTarget.value, event.currentTarget.selectionStart);
-              }}
-              onPaste={(event) => {
-                const pastedImages = [...event.clipboardData.files].filter((file) =>
-                  file.type.startsWith("image/"),
-                );
-                if (pastedImages.length) {
-                  event.preventDefault();
-                  void addImageFiles(pastedImages);
-                  return;
-                }
-                // 大段文本（>3 行）折叠为 [Pasted text #N +M lines] 标签：
-                // 提升提示词可读性，发送时自动还原全部文字
-                const pastedText = event.clipboardData.getData("text/plain");
-                if (pastedText && countLines(pastedText) > 3) {
-                  event.preventDefault();
-                  foldPastedText(pastedText);
-                }
-              }}
-              placeholder={pendingQuestion ? "请先完成弹出的问题" : "输入消息，@ 引用文件，/ 使用技能或命令"}
-              rows={1}
-              // 思考中（busy）不禁用：可继续打字，发送时自动进队列（发送按钮此时为「终止」）
-              disabled={!ready || !!pendingQuestion}
-            />
-          </div>
-          {/* 按钮区：独立一行，紧凑布局；textarea 独占一行全宽不被挤压 */}
-          <div className="chat-input-toolbar">
+        <div className={`chat-composer-island ${draggingImage ? "is-dragging" : ""}`}>
+          {!!images.length && (
+            <div className="chat-attachment-strip">
+              {images.map((image) => (
+                <div className="chat-attachment" key={image.id} title={image.name}>
+                  <img src={image.dataUrl} alt={image.name} />
+                  <button
+                    type="button"
+                    onClick={() => setImages((current) => current.filter((item) => item.id !== image.id))}
+                    title="移除图片"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          {(attachmentError || draggingImage) && (
+            <div className={`chat-attachment-hint ${attachmentError ? "is-error" : ""}`}>
+              {attachmentError || "松开以添加图片"}
+            </div>
+          )}
+          <textarea
+            ref={inputRef}
+            className="chat-input"
+            value={draft}
+            onChange={(event) => {
+              setDraft(event.target.value);
+              updateCompletion(event.target.value, event.target.selectionStart);
+              event.target.style.height = "auto";
+              event.target.style.height = `${Math.min(event.target.scrollHeight, 160)}px`;
+            }}
+            onClick={(event) => {
+              const pos = event.currentTarget.selectionStart ?? 0;
+              const selEnd = event.currentTarget.selectionEnd ?? pos;
+              updateCompletion(event.currentTarget.value, pos);
+              // 点击粘贴标签内部（无选区时）：打开预览/编辑弹窗
+              if (pos === selEnd) {
+                const spans = findPasteLabelSpans(event.currentTarget.value);
+                const span = spans.find((s) => pos >= s.start && pos < s.end);
+                if (span) setPasteEditId(span.id);
+              }
+            }}
+            onKeyDown={handleKeyDown}
+            onCompositionStart={() => {
+              composingRef.current = true;
+              setCompletionTrigger(null);
+            }}
+            onCompositionEnd={(event) => {
+              composingRef.current = false;
+              // 组合结束后重新检测，让补全菜单正常响应方向键
+              updateCompletion(event.currentTarget.value, event.currentTarget.selectionStart);
+            }}
+            onPaste={(event) => {
+              const pastedImages = [...event.clipboardData.files].filter((file) =>
+                file.type.startsWith("image/"),
+              );
+              if (pastedImages.length) {
+                event.preventDefault();
+                void addImageFiles(pastedImages);
+                return;
+              }
+              // 大段文本（>3 行）折叠为 [Pasted text #N +M lines] 标签：
+              // 提升提示词可读性，发送时自动还原全部文字
+              const pastedText = event.clipboardData.getData("text/plain");
+              if (pastedText && countLines(pastedText) > 3) {
+                event.preventDefault();
+                foldPastedText(pastedText);
+              }
+            }}
+            placeholder={pendingQuestion ? "请先完成弹出的问题" : "输入消息，@ 引用文件，/ 触发技能，回车发送..."}
+            rows={1}
+            disabled={!ready || !!pendingQuestion}
+          />
+          <div className="chat-composer-toolbar">
             <ModelSelector
               selectedModel={selectedModel}
               modelInfo={modelInfo}
@@ -2156,7 +2198,7 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
               onRefreshModelInfo={onRefreshModelInfo}
               disabled={busy}
             />
-            <div className="chat-input-toolbar-spacer" />
+            <div className="chat-composer-toolbar-spacer" />
             <button
               type="button"
               className={`chat-send-btn ${busy ? "is-cancel" : ""} ${escArmed ? "is-esc-armed" : ""}`}
@@ -2172,14 +2214,14 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
                     ? escArmed
                       ? "再按一次 ESC 终止任务（或点击直接终止）"
                       : "终止生成（按 ESC 两次）"
-                    : "发送"
+                    : "发送 (Enter)"
               }
             >
               {busy ? (
                 escArmed ? (
                   <span className="chat-cancel-esc">ESC</span>
                 ) : (
-                  <Square size={13} />
+                  <Square size={12} fill="currentColor" />
                 )
               ) : (
                 <Send size={13} />
