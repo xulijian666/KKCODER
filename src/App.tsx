@@ -15,13 +15,14 @@ import {
   TitleBar,
   FilePreviewPanel,
   FilePreviewContextMenu,
+  preloadMonaco,
   SessionTabBar,
   TabContextMenu,
   CloseConfirmModal,
   AppToastHost,
   ConfirmModal,
 } from "./components";
-import kkcoderLogo from "./assets/brand/kkcoder-logo.svg";
+import { ExtensionsPanel } from "./features/extensions/ExtensionsPanel";
 
 import {
   updateSessionLastUserMessageAt,
@@ -114,7 +115,6 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showMdEditor, setShowMdEditor] = useState(false);
   const [editingFilePath, setEditingFilePath] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState("");
   const [isInitLoaded, setIsInitLoaded] = useState(false);
   const [claudeVersion, setClaudeVersion] = useState<string>(() => {
     return localStorage.getItem(CLAUDE_VERSION_CACHE_KEY) || "Claude Code";
@@ -131,12 +131,21 @@ function App() {
   const [showProjectTree, setShowProjectTree] = useState<boolean>(() => {
     return localStorage.getItem("kkcoder_show_project_tree") === "true";
   });
+  const [showExtensions, setShowExtensions] = useState<boolean>(false);
   const projectTreeAsideRef = useRef<HTMLElement>(null);
 
   // 启动时同步调试日志开关到后端（设置中心「调试」页可切换）
   useEffect(() => {
     const enabled = localStorage.getItem(DEBUG_LOG_KEY) !== "false";
     invoke("set_debug_log_enabled", { enabled }).catch(() => {});
+  }, []);
+
+  // 应用启动空闲后预加载 Monaco，避免第一次点文件时等“正在加载编辑器…”
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      preloadMonaco();
+    }, 1200);
+    return () => window.clearTimeout(timer);
   }, []);
 
   // 代码块右上角「复制」按钮：全局事件委托（普通代码块 + HTML 预览块）
@@ -818,17 +827,6 @@ function App() {
 
   useTabFlipAnimation(openTabIds);
 
-  const handleOpenFolder = async () => {
-    if (!activeSession) return;
-    try {
-      log(`Opening folder in explorer: ${activeSession.path}`);
-      await invoke("open_project_folder", { path: activeSession.path });
-    } catch (err) {
-      log(`Failed to open folder: ${err}`);
-      notifyError(`无法打开文件夹：${formatFeedbackError(err)}`);
-    }
-  };
-
   const handleActivateTab = useCallback(
     (sessionId: string) => {
       activateSplitSession(sessionId);
@@ -913,8 +911,6 @@ function App() {
           setShowProjectTree(newVal);
           localStorage.setItem("kkcoder_show_project_tree", String(newVal));
         }}
-        sidebarMode={sidebarMode}
-        onToggleSidebarMode={handleToggleSidebarMode}
         onLaunchCcswitch={handleLaunchCcswitch}
         onOpenSettings={() => {
           log("[app] open settings");
@@ -944,8 +940,6 @@ function App() {
           sessions={sessions}
           activeSessionId={activeSessionId}
           onSelectSession={handleSelectSessionWithSplit}
-          searchQuery={searchQuery}
-          onSearchQueryChange={setSearchQuery}
           onDeleteSession={handleDeleteSession}
           openTabIds={openTabIds}
           onRenameSession={handleRenameSession}
@@ -960,6 +954,8 @@ function App() {
           revealed={sidebarRevealed}
           onHoverEnter={revealSidebar}
           onHoverLeave={scheduleSidebarHide}
+          onToggleSidebarMode={handleToggleSidebarMode}
+          onOpenExtensions={() => setShowExtensions(true)}
         />
         {sidebarMode === "fixed" && (
           <div className={`sidebar-resizer ${isResizing ? "dragging" : ""}`} onMouseDown={startResize} />
@@ -1095,11 +1091,15 @@ function App() {
             >
               {openTabIds.length === 0 ? (
                 <div className="empty-state">
-                  <img className="empty-state-logo" src={kkcoderLogo} alt="KKCoder" draggable={false} />
-                  <div className="empty-state-title">KKCoder AI 终端管理器</div>
-                  <div className="empty-state-desc">
-                    当前没有处于活动状态的会话标签。
-                    请选择左上角的 Agent 类型并点击“**新建 AI 终端**”按钮来开启一个托管终端。
+                  <div className="empty-state-cyber-wrap">
+                    <div className="empty-state-cyber-hero">
+                      <span className="empty-state-cyber-prefix">❯</span>
+                      <span className="empty-state-cyber-brand">KKCODER</span>
+                      <span className="empty-state-cyber-cursor" />
+                    </div>
+                    <div className="empty-state-cyber-title">沉浸 · 专注 · 智能终端引擎</div>
+                    <div className="empty-state-cyber-ruler" />
+                    <div className="empty-state-cyber-desc">从左侧选择会话，开启深度编程交互</div>
                   </div>
                 </div>
               ) : (
@@ -1186,6 +1186,7 @@ function App() {
                             onUpdateQueueTask={updateQueuedTask}
                             onPauseQueue={pauseSessionQueue}
                             onResumeQueue={resumeSessionQueue}
+                            onOpenRulesEditor={() => setShowMdEditor(true)}
                           />
                         ) : useNativeTerminal ? (
                           <CompatibilityTerminalTab
@@ -1256,69 +1257,6 @@ function App() {
             <FilePreviewPanel {...filePreviewPanelProps} />
           </div>
 
-          {/* 底部控制状态条 */}
-          <div className="bottom-panel">
-            {activeSession ? (
-              <div className="bottom-panel-left">
-                <button
-                  className="folder-button"
-                  onClick={handleOpenFolder}
-                  title={`项目物理路径: ${activeSession.path}\n点击在 Windows 资源管理器中打开`}
-                >
-                  <svg className="folder-svg-icon" xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="#EAB308" stroke="#EAB308" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.95, marginRight: "4px" }}>
-                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
-                  </svg>
-                  <span>{getFolderName(activeSession.path)}</span>
-                </button>
-
-                <button
-                  className="md-button"
-                  onClick={() => setShowMdEditor(true)}
-                  title="编辑项目规则（默认 CLAUDE.md，保存后同步 AGENTS.md）"
-                >
-                  <svg className="doc-svg-icon" xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: "2px", opacity: 0.85 }}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
-                  <span>规则</span>
-                </button>
-              </div>
-            ) : (
-              <div className="bottom-panel-left" style={{ color: "var(--text-secondary)", fontSize: "12px" }}>
-                无活动项目会话
-              </div>
-            )}
-
-            {/* 中间：快捷短语 + 队列（窄宽时可横向滚动，避免与左右重叠） */}
-            {activeSession && (
-              <div className="bottom-panel-center">
-                <div className="bottom-shortcuts-scroll">
-                  {shortcutsEnabled && shortcutsList.filter(sc => sc.title.trim() && sc.content.trim()).map((sc, idx) => (
-                    <button
-                      key={idx}
-                      className="shortcut-status-btn"
-                      onClick={() => handleTriggerShortcut(sc.content)}
-                      title={`快捷短语: 点击发送 "${sc.content}"`}
-                    >
-                      <span>{sc.title}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <div className="system-meta">
-              {activeSession ? (
-                <span
-                  style={{
-                    fontWeight: 600,
-                    color: "var(--color-orange)",
-                  }}
-                >
-                  {claudeVersion}
-                </span>
-              ) : (
-                <span>{claudeVersion} 准备就绪</span>
-              )}
-            </div>
-          </div>
         </main>
 
         {showProjectTree && !treeBoundSession?.isTemp && (
@@ -1356,6 +1294,7 @@ function App() {
                 }
                 boundPath={treeBoundSession?.path || ""}
                 sameProject={splitSameProject}
+                onClose={() => setShowProjectTree(false)}
               />
               {treeBoundSession && treeBoundSession.path ? (
                 <ProjectTree
@@ -1390,6 +1329,48 @@ function App() {
         <FilePreviewContextMenu {...filePreviewContextMenuProps} />
       </div>
 
+      {/* 底部控制状态条：放在最外层，横跨整个窗口底部，避免被右侧文件树遮挡 */}
+      <div className="bottom-panel">
+        {!activeSession && (
+          <div className="bottom-panel-left" style={{ color: "var(--text-secondary)", fontSize: "12px" }}>
+            无活动项目会话
+          </div>
+        )}
+
+        {/* 中间：快捷短语 + 队列（窄宽时可横向滚动，避免与左右重叠） */}
+        {activeSession && (
+          <div className="bottom-panel-center">
+            <div className="bottom-shortcuts-scroll">
+              {shortcutsEnabled && shortcutsList.filter(sc => sc.title.trim() && sc.content.trim()).map((sc, idx) => (
+                <button
+                  key={idx}
+                  className="shortcut-status-btn"
+                  onClick={() => handleTriggerShortcut(sc.content)}
+                  title={`快捷短语: 点击发送 "${sc.content}"`}
+                >
+                  <span>{sc.title}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="system-meta">
+          {activeSession ? (
+            <span
+              style={{
+                fontWeight: 600,
+                color: "var(--color-orange)",
+              }}
+            >
+              {claudeVersion}
+            </span>
+          ) : (
+            <span>{claudeVersion} 准备就绪</span>
+          )}
+        </div>
+      </div>
+
       {/* 新建会话终端弹窗组件 */}
       <NewSessionModal
         show={showModal}
@@ -1398,20 +1379,26 @@ function App() {
         initialProjectPath={prefilledProjectPath}
       />
 
-      {/* 设置中心弹窗组件 */}
+      {/* 设置中心全屏面板 */}
       <SettingsModal
         show={showSettings}
         onClose={() => setShowSettings(false)}
         onSessionsRenamed={reloadSessions}
       />
 
-      {/* 规则编辑器：默认 CLAUDE.md，保存后同步 AGENTS.md（跟随项目树绑定） */}
+      {/* 拓展中心全屏面板 */}
+      <ExtensionsPanel
+        isOpen={showExtensions}
+        onClose={() => setShowExtensions(false)}
+      />
+
+      {/* 规则编辑器：主规则 RULE.md，保存后自动在 CLAUDE.md / AGENTS.md 顶部建立安全索引 */}
       {treeBoundSession && (
         <MdEditorModal
           show={showMdEditor}
           onClose={() => setShowMdEditor(false)}
           projectPath={treeBoundSession.path}
-          filename="CLAUDE.md"
+          filename="RULE.md"
         />
       )}
 

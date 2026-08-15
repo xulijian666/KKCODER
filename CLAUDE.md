@@ -1,3 +1,8 @@
+<!-- KKCODER:RULES_POINTER_START -->
+> [!IMPORTANT]
+> **Project Rules & Guidelines**: You MUST strictly adhere to all instructions and constraints defined in [`RULE.md`](./RULE.md) before planning or executing any tasks.
+<!-- KKCODER:RULES_POINTER_END -->
+
 # Agent notes (KKCoder)
 
 ## Frontend source index (required)

@@ -1,0 +1,76 @@
+/*
+ * TokenTracker 仪表盘 Tailwind v4 主题入口
+ * 全面重构：注入 KKCoder 主题色调（KK金琥珀主色、深邃石墨黑底、优雅边框）
+ */
+@import "tailwindcss/theme" layer(theme);
+@import "tailwindcss/utilities" layer(utilities);
+
+@custom-variant dark {
+  &:where(.dark, .dark *) {
+    @slot;
+  }
+  &:where([data-theme="dark"], [data-theme="dark"] *) {
+    @slot;
+  }
+  &:where([data-theme="dim"], [data-theme="dim"] *) {
+    @slot;
+  }
+  @media (prefers-color-scheme: dark) {
+    &:where(:root:not([data-theme]) *) {
+      @slot;
+    }
+  }
+}
+
+@theme {
+  /* KKCoder 现代调色板 */
+  --color-oai-black: #0f172a;
+  --color-oai-white: #ffffff;
+  --color-oai-gray-50: #1a1918;
+  --color-oai-gray-100: #232220;
+  --color-oai-gray-200: #33312e;
+  --color-oai-gray-300: #4a4743;
+  --color-oai-gray-400: #7a7670;
+  --color-oai-gray-500: #9e9992;
+  --color-oai-gray-600: #b5b0a8;
+  --color-oai-gray-700: #ccc8c0;
+  --color-oai-gray-800: #e2ded8;
+  --color-oai-gray-900: #f0ece6;
+  --color-oai-gray-950: #fcfaf7;
+
+  /* KKCoder 琥珀金主色 */
+  --color-oai-brand: #f59e0b;
+  --color-oai-brand-dark: #d97706;
+  --color-oai-brand-light: #fbbf24;
+  --color-oai-brand-50: #fffbeb;
+  --color-oai-brand-100: #fef3c7;
+  --color-oai-brand-200: #fde68a;
+  --color-oai-brand-300: #fcd34d;
+  --color-oai-brand-400: #fbbf24;
+  --color-oai-brand-500: #f59e0b;
+  --color-oai-brand-600: #d97706;
+  --color-oai-brand-700: #b45309;
+  --color-oai-brand-800: #92400e;
+  --color-oai-brand-900: #78350f;
+  --color-oai-brand-950: #451a03;
+
+  --color-oai-forest: #10b981;
+  --color-oai-forest-dark: #059669;
+  --color-oai-forest-light: #34d399;
+  --color-oai-forest-50: #ecfdf5;
+
+  --color-oai-amber: #f59e0b;
+  --color-oai-amber-dark: #d97706;
+  --color-oai-amber-light: #fbbf24;
+  --color-oai-amber-50: #fffbeb;
+
+  --color-oai-success: #10b981;
+  --color-oai-warning: #f59e0b;
+  --color-oai-error: #ef4444;
+  --color-oai-info: #3b82f6;
+
+  --color-oai-blue: #3b82f6;
+  --color-oai-blue-dark: #2563eb;
+  --color-oai-blue-light: #60a5fa;
+  --color-oai-blue-50: #eff6ff;
+}

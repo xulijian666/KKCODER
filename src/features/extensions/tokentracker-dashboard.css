@@ -1,0 +1,600 @@
+/*
+ * ============================================================================
+ * KKCoder 专属 TokenTracker 仪表盘全景工匠级视觉重塑
+ * 涵盖：主面板、所有子页面、子弹窗、3D热力图洞察、趋势放大、项目明细、日期选择器
+ * ============================================================================
+ */
+
+.tt-dashboard {
+  /* 基础重置 */
+  background: transparent !important;
+  color: var(--text-primary) !important;
+  font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif) !important;
+  font-size: 13px !important;
+  line-height: 1.5 !important;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  /* 核心语义变量映射 */
+  --oai-black: var(--text-primary);
+  --oai-white: var(--bg-main);
+  
+  --oai-gray-50: var(--bg-main);
+  --oai-gray-100: color-mix(in srgb, var(--bg-sidebar) 75%, var(--bg-main));
+  --oai-gray-200: var(--border-color);
+  --oai-gray-300: color-mix(in srgb, var(--border-color) 80%, var(--text-secondary));
+  --oai-gray-400: var(--text-secondary);
+  --oai-gray-500: var(--text-secondary);
+  --oai-gray-600: var(--text-secondary);
+  --oai-gray-700: var(--border-color);
+  --oai-gray-800: color-mix(in srgb, var(--border-color) 80%, var(--bg-sidebar));
+  --oai-gray-900: var(--bg-sidebar);
+  --oai-gray-950: var(--bg-main);
+
+  --brand-primary: var(--color-primary, #f59e0b);
+  --brand-primary-dark: color-mix(in srgb, var(--color-primary) 85%, #000);
+  --brand-primary-light: color-mix(in srgb, var(--color-primary) 85%, #fff);
+  --brand-500: var(--color-primary, #f59e0b);
+
+  --font-mono: var(--font-mono, "JetBrains Mono", Consolas, Menlo, monospace);
+}
+
+/* 全局移除生硬轮廓与白底 */
+.tt-dashboard *:focus,
+.tt-dashboard *:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+/* 强制清除所有默认 bg-white 产生的死白块 */
+.tt-dashboard .bg-white,
+.tt-dashboard [class*="bg-white"] {
+  background-color: var(--bg-sidebar) !important;
+}
+
+/* ── 1. 主看板卡片基础容器（强制保证 20px~24px 充裕内边距与呼吸感） ───────── */
+.tt-dashboard .rounded-xl,
+.tt-dashboard .rounded-2xl {
+  background: var(--bg-sidebar) !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: 14px !important;
+  padding: 20px 22px !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15) !important;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.tt-dashboard .rounded-xl:hover,
+.tt-dashboard .rounded-2xl:hover {
+  border-color: color-mix(in srgb, var(--color-primary) 25%, var(--border-color)) !important;
+}
+
+/* 消除 Card 内部可能产生的双重 padding 冲突 */
+.tt-dashboard .rounded-xl > .p-5,
+.tt-dashboard .rounded-xl > .p-6,
+.tt-dashboard .rounded-2xl > .p-5,
+.tt-dashboard .rounded-2xl > .p-6 {
+  padding: 0 !important;
+}
+
+/* ── 2. Hero 大数字 (821.2K) 区域 ─────────────────────────────────────────── */
+.tt-dashboard [data-counter-root="true"],
+.tt-dashboard [data-counter-root="true"] * {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.tt-dashboard div[class*="text-5xl"],
+.tt-dashboard div[class*="text-6xl"],
+.tt-dashboard div[class*="text-7xl"] {
+  font-family: var(--font-mono) !important;
+  font-weight: 800 !important;
+  color: var(--text-primary) !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.tt-dashboard div[class*="text-5xl"] button,
+.tt-dashboard div[class*="text-6xl"] button,
+.tt-dashboard div[class*="text-7xl"] button {
+  background: transparent !important;
+  border: none !important;
+}
+
+/* 预估费用展示（极简纯净排版，彻底去除边框与底色） */
+.tt-dashboard span.text-oai-brand,
+.tt-dashboard button span.text-oai-brand,
+.tt-dashboard .text-xl.font-bold.text-oai-brand,
+.tt-dashboard div:has(> button > span.text-oai-brand) {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 6px !important;
+  padding: 4px 8px !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  color: var(--color-primary) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 15px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.02em !important;
+}
+
+.tt-dashboard button:has(span.text-oai-brand):hover {
+  opacity: 0.85;
+  background: transparent !important;
+  border: none !important;
+}
+
+/* ── 3. 时间维度切换（日 / 周 / 月 / 总计 / 自定义） ─────────────────────────── */
+.tt-dashboard .flex.rounded-full,
+.tt-dashboard div[class*="rounded-full"] {
+  background: rgba(0, 0, 0, 0.15) !important;
+  border: 1px solid var(--border-color) !important;
+  padding: 2px !important;
+  border-radius: 8px !important;
+}
+
+.tt-dashboard button[role="tab"],
+.tt-dashboard .flex.rounded-full button,
+.tt-dashboard div[class*="rounded-full"] button {
+  border-radius: 6px !important;
+  font-size: 11.5px !important;
+  font-weight: 600 !important;
+  padding: 3px 10px !important;
+  color: var(--text-secondary) !important;
+  background: transparent !important;
+  border: 1px solid transparent !important;
+  transition: all 0.15s ease !important;
+}
+
+/* 选中的时间按钮 */
+.tt-dashboard button[role="tab"][aria-selected="true"],
+.tt-dashboard .flex.rounded-full button.bg-oai-black,
+.tt-dashboard .flex.rounded-full button.bg-black {
+  background: var(--color-primary) !important;
+  color: #ffffff !important;
+  font-weight: 700 !important;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2) !important;
+}
+
+.tt-dashboard button[role="tab"][aria-selected="false"]:hover,
+.tt-dashboard .flex.rounded-full button:hover {
+  color: var(--text-primary) !important;
+  background: var(--bg-hover-item) !important;
+}
+
+/* ── 4. 供应商占比 Mini Cards（全部 / CLAUDE / ANTIGRAVITY 等） ─────────────── */
+.tt-dashboard div[class*="grid-cols-[repeat"] button,
+.tt-dashboard div[class*="grid-cols-2"] button,
+.tt-dashboard div[class*="grid-cols-3"] button,
+.tt-dashboard div[class*="grid-cols-4"] button {
+  background: color-mix(in srgb, var(--bg-main) 60%, var(--bg-sidebar)) !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: 12px !important;
+  padding: 14px 16px !important;
+  color: var(--text-primary) !important;
+  transition: all 0.18s ease !important;
+}
+
+.tt-dashboard div[class*="grid-cols-[repeat"] button:hover,
+.tt-dashboard div[class*="grid-cols-2"] button:hover,
+.tt-dashboard div[class*="grid-cols-3"] button:hover {
+  background: var(--bg-hover-item) !important;
+  border-color: color-mix(in srgb, var(--color-primary) 35%, var(--border-color)) !important;
+}
+
+/* 选中的供应商卡片 */
+.tt-dashboard div[class*="grid-cols-[repeat"] button[aria-expanded="true"],
+.tt-dashboard div[class*="grid-cols-2"] button[aria-expanded="true"],
+.tt-dashboard div[class*="grid-cols-3"] button[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--color-primary) 12%, var(--bg-sidebar)) !important;
+  border-color: var(--color-primary) !important;
+  box-shadow: 0 0 14px color-mix(in srgb, var(--color-primary) 22%, transparent) !important;
+}
+
+.tt-dashboard div[class*="grid-cols-[repeat"] button span,
+.tt-dashboard div[class*="grid-cols-[repeat"] button div {
+  color: var(--text-primary) !important;
+}
+
+.tt-dashboard div[class*="grid-cols-[repeat"] button div[class*="text-[11px]"] {
+  color: var(--text-secondary) !important;
+}
+
+/* 进度条轨道（CC-GUI 经典多色横向分段进度条 - 加粗至 12px 饱满高度） */
+.tt-dashboard div[role="img"].h-1\.5,
+.tt-dashboard div[role="img"].h-2,
+.tt-dashboard div[role="img"][class*="h-\[7px\]"],
+.tt-dashboard div[role="img"][class*="h-\[12px\]"],
+.tt-dashboard div[role="img"][class*="rounded-full"] {
+  height: 12px !important;
+  border-radius: 999px !important;
+  background: rgba(255, 255, 255, 0.08) !important;
+  border: 1px solid var(--border-color) !important;
+  overflow: hidden !important;
+  display: flex !important;
+  margin-top: 24px !important;
+  margin-bottom: 24px !important;
+}
+
+/* ── 5. 数据明细表格（DataDetails - 宽裕呼吸感） ─────────────────────────── */
+.tt-dashboard table {
+  width: 100% !important;
+  border-collapse: collapse !important;
+}
+
+.tt-dashboard thead {
+  background: color-mix(in srgb, var(--bg-main) 70%, var(--bg-sidebar)) !important;
+}
+
+.tt-dashboard thead tr {
+  background: transparent !important;
+  border-bottom: 1px solid var(--border-color) !important;
+}
+
+.tt-dashboard th {
+  background: transparent !important;
+  padding: 0 !important;
+  border: none !important;
+}
+
+.tt-dashboard th button {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 12px 16px !important;
+  color: var(--text-secondary) !important;
+  font-size: 11.5px !important;
+  font-weight: 600 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.04em !important;
+  border-radius: 0 !important;
+}
+
+.tt-dashboard th button:hover {
+  color: var(--text-primary) !important;
+  background: rgba(255, 255, 255, 0.03) !important;
+}
+
+.tt-dashboard th button span {
+  color: inherit !important;
+}
+
+.tt-dashboard tbody tr {
+  border-bottom: 1px solid color-mix(in srgb, var(--border-color) 45%, transparent) !important;
+  background: transparent !important;
+  transition: background 0.12s ease !important;
+}
+
+.tt-dashboard tbody tr:hover {
+  background: var(--bg-hover-item) !important;
+}
+
+.tt-dashboard td {
+  padding: 12px 16px !important;
+  font-size: 13px !important;
+  font-family: var(--font-mono) !important;
+  color: var(--text-primary) !important;
+  background: transparent !important;
+}
+
+/* ── 6. 左侧 StatsPanel 4个核心指标（宽裕呼吸感） ─────────────────────────── */
+.tt-dashboard .tt-stats-rolling-grid,
+.tt-dashboard .grid-cols-2.lg\:grid-cols-2.xl\:grid-cols-4 {
+  display: grid !important;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  gap: 12px !important;
+  margin-bottom: 20px !important;
+}
+
+.tt-dashboard .tt-stats-rolling-grid > div,
+.tt-dashboard .grid-cols-2.lg\:grid-cols-2.xl\:grid-cols-4 > div {
+  background: color-mix(in srgb, var(--bg-main) 65%, var(--bg-sidebar)) !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: 12px !important;
+  padding: 12px 10px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.tt-dashboard .tt-stats-rolling-grid span[class*="text-sm font-semibold"],
+.tt-dashboard .grid-cols-2.lg\:grid-cols-2.xl\:grid-cols-4 span[class*="text-sm font-semibold"] {
+  font-family: var(--font-mono) !important;
+  font-size: 14px !important;
+  font-weight: 700 !important;
+  color: var(--text-primary) !important;
+}
+
+.tt-dashboard .tt-stats-rolling-grid span[class*="text-\[10px\]"],
+.tt-dashboard .grid-cols-2.lg\:grid-cols-2.xl\:grid-cols-4 span[class*="text-\[10px\]"] {
+  color: var(--text-secondary) !important;
+  font-size: 11px !important;
+}
+
+/* ── 6.1 趋势放大弹窗左侧核心指标区（强制 2 列宽裕网格） ─────────────────────── */
+.tt-dashboard .tt-modal-stats-grid {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 16px !important;
+  padding: 16px 18px !important;
+}
+
+.tt-dashboard .tt-modal-stats-grid > div {
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: flex-start !important;
+  justify-content: center !important;
+}
+
+/* Top 模型排名列表行 */
+.tt-dashboard .mt-5.pt-4.border-t,
+.tt-dashboard .mt-4.pt-3.border-t {
+  margin-top: 20px !important;
+  padding-top: 16px !important;
+  border-top: 1px solid var(--border-color) !important;
+}
+
+.tt-dashboard .mt-5.pt-4.border-t > div,
+.tt-dashboard .mt-4.pt-3.border-t > div {
+  padding: 10px 4px !important;
+  display: flex !important;
+  align-items: center !important;
+}
+
+.tt-dashboard .mt-5.pt-4.border-t .text-xs,
+.tt-dashboard .mt-4.pt-3.border-t .text-xs {
+  font-family: var(--font-mono) !important;
+  color: var(--text-primary) !important;
+}
+
+/* Top 模型名称与明细列表文字深度高亮 */
+.tt-dashboard .mt-5.pt-4.border-t .truncate,
+.tt-dashboard .mt-4.pt-3.border-t .truncate,
+.tt-dashboard [data-model-rank-row] .truncate {
+  color: var(--text-primary) !important;
+  font-family: var(--font-mono) !important;
+  font-weight: 600 !important;
+  font-size: 13px !important;
+}
+
+/* ── 7. 热力图（ActivityHeatmap） ───────────────────────────────────────────── */
+.tt-dashboard rect[data-level],
+.tt-dashboard [data-level] {
+  rx: 3px !important;
+  ry: 3px !important;
+}
+
+.tt-dashboard rect[data-level="0"],
+.tt-dashboard [data-level="0"] {
+  fill: color-mix(in srgb, var(--bg-main) 85%, var(--border-color)) !important;
+}
+
+.tt-dashboard rect[data-level="1"],
+.tt-dashboard [data-level="1"] {
+  fill: color-mix(in srgb, var(--color-primary) 30%, var(--bg-main)) !important;
+}
+
+.tt-dashboard rect[data-level="2"],
+.tt-dashboard [data-level="2"] {
+  fill: color-mix(in srgb, var(--color-primary) 55%, var(--bg-main)) !important;
+}
+
+.tt-dashboard rect[data-level="3"],
+.tt-dashboard [data-level="3"] {
+  fill: color-mix(in srgb, var(--color-primary) 80%, var(--bg-main)) !important;
+}
+
+.tt-dashboard rect[data-level="4"],
+.tt-dashboard [data-level="4"] {
+  fill: var(--color-primary) !important;
+}
+
+.tt-dashboard .text-\[10px\].bg-white\/95,
+.tt-dashboard [class*="bg-white\/95"] {
+  background: color-mix(in srgb, var(--bg-main) 70%, var(--bg-sidebar)) !important;
+  border: 1px solid var(--border-color) !important;
+  color: var(--text-secondary) !important;
+}
+
+/* ── 8. 全局 Modal 弹窗系统（ProjectDetailModal / TrendMonitorZoomModal / 3D Heatmap） ─ */
+.tt-dashboard div[role="dialog"],
+div[role="dialog"].backdrop-blur-2xl,
+div[role="dialog"][class*="rounded-2xl"] {
+  background: var(--bg-main) !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: 16px !important;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.05) !important;
+  color: var(--text-primary) !important;
+}
+
+/* 弹窗左侧栏 */
+.tt-dashboard div[role="dialog"] div[class*="md:w-[300px]"],
+.tt-dashboard div[role="dialog"] div[class*="md:w-[340px]"],
+.tt-dashboard div[role="dialog"] div[class*="bg-zinc-50"] {
+  background: var(--bg-sidebar) !important;
+  border-right: 1px solid var(--border-color) !important;
+  border-color: var(--border-color) !important;
+}
+
+/* 弹窗中的文本与数字 */
+.tt-dashboard div[role="dialog"] h4,
+.tt-dashboard div[role="dialog"] .text-xl.font-black,
+.tt-dashboard div[role="dialog"] .font-mono.text-zinc-900,
+.tt-dashboard div[role="dialog"] .font-mono.dark\:text-zinc-50 {
+  color: var(--text-primary) !important;
+}
+
+.tt-dashboard div[role="dialog"] .text-zinc-400,
+.tt-dashboard div[role="dialog"] .text-zinc-500,
+.tt-dashboard div[role="dialog"] .dark\:text-zinc-500 {
+  color: var(--text-secondary) !important;
+}
+
+/* 弹窗关闭按钮 */
+.tt-dashboard div[role="dialog"] button.absolute.top-4.right-4,
+.tt-dashboard button.rounded-full.border {
+  background: var(--bg-active-item) !important;
+  border: 1px solid var(--border-color) !important;
+  color: var(--text-secondary) !important;
+}
+
+.tt-dashboard div[role="dialog"] button.absolute.top-4.right-4:hover,
+.tt-dashboard button.rounded-full.border:hover {
+  background: var(--bg-hover-item) !important;
+  color: var(--color-primary) !important;
+  border-color: var(--color-primary) !important;
+}
+
+/* ── 9. DateRangePopover 日历区间选择器（彻底消除大白块与大白按钮） ─────── */
+.rdp-oai,
+div[class*="Popover.Popup"],
+[data-side],
+[data-popup] {
+  background: var(--bg-sidebar) !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: 14px !important;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.05) !important;
+  color: var(--text-primary) !important;
+}
+
+/* 日历中的所有文本 */
+.rdp-oai .caption_label,
+.rdp-oai span,
+.rdp-oai th,
+.rdp-oai td {
+  color: var(--text-primary) !important;
+}
+
+/* 彻底清除所有日历格子默认的白色背景与突兀边框 */
+.rdp-oai .rdp-day,
+.rdp-oai .rdp-day_button,
+.rdp-oai .day_button,
+.rdp-oai .rdp-day-btn,
+.rdp-oai td button {
+  background: transparent !important;
+  border: none !important;
+  color: var(--text-primary) !important;
+  border-radius: 6px !important;
+  font-family: var(--font-mono) !important;
+  transition: all 0.12s ease !important;
+}
+
+.rdp-oai .rdp-day_button:hover,
+.rdp-oai .day_button:hover,
+.rdp-oai td button:hover {
+  background: var(--bg-hover-item) !important;
+  color: var(--color-primary) !important;
+}
+
+/* 选中的起始/结束日期 */
+.rdp-oai .rdp-selected,
+.rdp-oai .rdp-range-start,
+.rdp-oai .rdp-range-end,
+.rdp-oai .rdp-selected .rdp-day-btn,
+.rdp-oai td[aria-selected="true"] button {
+  background: var(--color-primary) !important;
+  color: #ffffff !important;
+  font-weight: 700 !important;
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--color-primary) 35%, transparent) !important;
+}
+
+/* 选中的范围中间日期 */
+.rdp-oai .rdp-range-mid,
+.rdp-oai .rdp-range_middle,
+.rdp-oai .rdp-range-mid .rdp-day-btn {
+  background: color-mix(in srgb, var(--color-primary) 18%, var(--bg-sidebar)) !important;
+  color: var(--color-primary) !important;
+  font-weight: 600 !important;
+}
+
+/* 日历顶部前后翻页箭头按钮（彻底去除大白方块） */
+.rdp-oai [class*="button_previous"],
+.rdp-oai [class*="button_next"],
+.rdp-oai nav button,
+.rdp-oai .rdp-nav_button {
+  background: var(--bg-active-item) !important;
+  border: 1px solid var(--border-color) !important;
+  color: var(--text-secondary) !important;
+  border-radius: 6px !important;
+  transition: all 0.15s ease !important;
+}
+
+.rdp-oai [class*="button_previous"]:hover,
+.rdp-oai [class*="button_next"]:hover,
+.rdp-oai nav button:hover {
+  background: var(--bg-hover-item) !important;
+  color: var(--text-primary) !important;
+  border-color: var(--color-primary) !important;
+}
+
+/* 放大按钮（TrendMonitor 右上角）彻底告别大白实心 */
+.tt-dashboard button:has(svg.lucide-maximize2),
+.tt-dashboard button[aria-label*="放大"],
+.tt-dashboard button[aria-label*="Zoom"] {
+  background: var(--bg-active-item) !important;
+  border: 1px solid var(--border-color) !important;
+  color: var(--text-secondary) !important;
+  border-radius: 8px !important;
+}
+
+.tt-dashboard button:has(svg.lucide-maximize2):hover,
+.tt-dashboard button[aria-label*="放大"]:hover {
+  background: var(--bg-hover-item) !important;
+  color: var(--color-primary) !important;
+  border-color: var(--color-primary) !important;
+}
+
+/* ── 10. Select / Popover 下拉菜单 ─────────────────────────────────────────── */
+[data-popup],
+div[class*="Select.Popup"] {
+  background: var(--bg-sidebar) !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: 8px !important;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35) !important;
+  color: var(--text-primary) !important;
+}
+
+/* ── 11. 通用按钮与滚动条 ──────────────────────────────────────────────────── */
+.tt-dashboard button.w-8.p-0 {
+  background: transparent !important;
+  border: 1px solid var(--border-color) !important;
+  color: var(--text-secondary) !important;
+  border-radius: 6px !important;
+}
+
+.tt-dashboard button.w-8.p-0:hover {
+  background: var(--bg-hover-item) !important;
+  color: var(--text-primary) !important;
+  border-color: color-mix(in srgb, var(--color-primary) 35%, var(--border-color)) !important;
+}
+
+.tt-dashboard ::-webkit-scrollbar {
+  width: 6px !important;
+  height: 6px !important;
+}
+
+.tt-dashboard ::-webkit-scrollbar-thumb {
+  background: var(--border-color) !important;
+  border-radius: 4px !important;
+}
+
+.tt-dashboard ::-webkit-scrollbar-track {
+  background: transparent !important;
+}
+
+/* ── 12. 全局 Hover Tooltip 气泡黑金工匠质感与呼吸感保护 ────────────────────── */
+.tt-dashboard div[class*="backdrop-blur"][class*="rounded-2xl"],
+.tt-dashboard div[class*="backdrop-blur"][class*="rounded-xl"] {
+  background: var(--bg-sidebar) !important;
+  border: 1px solid var(--border-color) !important;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.08) !important;
+  color: var(--text-primary) !important;
+}

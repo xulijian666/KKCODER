@@ -1,0 +1,292 @@
+/*
+ * ============================================================================
+ * KKCoder 拓展面板（ExtensionsPanel）
+ * 保持与【设置】（SettingsModal）完全一致的左侧菜单架构，
+ * 同时右侧使用统计等内容区 100% 满宽流体自适应，彻底消除大屏幕右侧黑边
+ * ============================================================================
+ */
+
+.ext-embedded {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: var(--bg-main);
+  overflow: hidden;
+}
+
+/* 进退场动效 */
+.ext-embedded.is-open {
+  animation: ext-fade-in 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.ext-embedded.is-closing {
+  animation: ext-fade-out 0.18s ease forwards;
+}
+
+@keyframes ext-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes ext-fade-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+/* 两列布局：左侧 200px 侧边栏 + 右侧 100% 满宽自适应内容区 */
+.ext-body {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ── 左侧侧边栏导航（与 Settings 完全一致） ─────────────────────────────────── */
+.ext-sidebar {
+  height: 100%;
+  min-height: 0;
+  padding: 0 12px 12px;
+  border-right: 1px solid var(--border-color);
+  background: var(--bg-sidebar);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  user-select: none;
+}
+
+.ext-sidebar-drag {
+  flex: 0 0 auto;
+  height: 44px;
+}
+
+.ext-sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ext-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ext-nav-group-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  opacity: 0.75;
+  padding: 0 10px 4px;
+  user-select: none;
+}
+
+/* 导航项按钮 */
+.ext-nav {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: 100%;
+  min-height: 36px;
+  gap: 10px;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text-secondary);
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: transparent;
+  border: none;
+  line-height: 1.15;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.ext-nav svg {
+  flex-shrink: 0;
+}
+
+.ext-nav.active {
+  background: var(--bg-active-item);
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.ext-nav:hover:not(:disabled):not(.active) {
+  background: var(--bg-hover-item);
+  color: var(--text-primary);
+}
+
+/* 禁用/开发中未上线菜单项：置灰、禁止点击 */
+.ext-nav:disabled,
+.ext-nav.is-disabled {
+  opacity: 0.32;
+  cursor: not-allowed !important;
+  pointer-events: auto; /* 保留 title tooltip 提示 */
+  color: var(--text-secondary);
+  filter: grayscale(0.8);
+}
+
+.ext-nav:disabled:hover,
+.ext-nav.is-disabled:hover {
+  background: transparent !important;
+  color: var(--text-secondary) !important;
+}
+
+/* 返回应用 */
+.ext-nav-return {
+  margin-bottom: 10px;
+  margin-left: -4px;
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+
+.ext-nav-return svg {
+  width: 13px;
+  height: 13px;
+}
+
+.ext-nav-return:hover {
+  background: transparent;
+  color: var(--text-primary);
+}
+
+/* ── 右侧 100% 满宽流体自适应内容区 ────────────────────────────────────────── */
+.ext-content-wrap {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-main);
+  overflow: hidden;
+}
+
+/* 页面头 */
+.ext-page-head {
+  flex: 0 0 auto;
+  padding: 36px clamp(24px, 3vw, 48px) 16px;
+  user-select: none;
+}
+
+.ext-page-head-inner {
+  width: 100%;
+}
+
+.ext-page-title {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+}
+
+.ext-page-description {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+/* 内容滚动区 */
+.ext-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px clamp(24px, 3vw, 48px) 48px;
+  width: 100%;
+}
+
+.ext-content {
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.ext-usage-fluid-container {
+  width: 100%;
+  min-width: 0;
+}
+
+.ext-usage-dashboard {
+  width: 100%;
+  min-width: 0;
+}
+
+.ext-skills-container {
+  width: 100%;
+  min-width: 0;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── 空态占位面板 ──────────────────────────────────────────────────────────── */
+.ext-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 96px 24px;
+  border-radius: 14px;
+  border: 1px dashed var(--border-color);
+  background: color-mix(in srgb, var(--bg-sidebar) 50%, transparent);
+  text-align: center;
+  margin-top: 12px;
+  width: 100%;
+}
+
+.ext-empty-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--color-primary) 12%, var(--bg-sidebar));
+  border: 1px solid color-mix(in srgb, var(--color-primary) 25%, var(--border-color));
+  color: var(--color-primary);
+}
+
+.ext-empty-title {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ext-empty-desc {
+  font-size: 13.5px;
+  color: var(--text-secondary);
+  max-width: 480px;
+}
+
+.ext-empty-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 14px;
+  border-radius: 999px;
+  background: var(--bg-active-item);
+  border: 1px solid var(--border-color);
+  font-size: 12px;
+  color: var(--text-secondary);
+}

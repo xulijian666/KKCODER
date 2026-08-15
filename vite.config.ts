@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 import { fileURLToPath, URL } from "node:url";
 
 // @ts-expect-error process is a nodejs global
@@ -13,7 +14,7 @@ const monacoMinDir = fileURLToPath(new URL("./node_modules/monaco-editor/min", i
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
 
   resolve: {
     alias: [

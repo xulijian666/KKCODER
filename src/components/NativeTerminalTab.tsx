@@ -369,8 +369,8 @@ const CompatibilityTerminalTabImpl: React.FC<CompatibilityTerminalTabProps> = ({
         invoke("play_notification_sound", {
           tone,
           volume,
-          title: "KKCoder AI 终端",
-          message: playSound ? `回答完毕！本次运行共耗时 ${elapsed.toFixed(1)} 秒。` : null,
+          title: "KKCoder · 终端命令完成",
+          message: playSound ? `✨ 本次运行耗时 ${elapsed.toFixed(1)} 秒，点击切回查看` : null,
         }).catch((reason) => console.error("Failed to notify compatibility completion", reason));
       }
 

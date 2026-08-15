@@ -10,6 +10,8 @@ mod native_terminal;
 mod claude_chat;
 mod claude_model;
 mod git;
+mod tokentracker;
+mod skills_hub;
 
 // 极其可靠的本地调试文件日志输出器。
 // 日志目录：<工作目录>/logs/（dev 下即 src-tauri/logs/）
@@ -1456,26 +1458,49 @@ fn play_notification_sound(
                    if ($dur -gt 0) {{ Start-Sleep -Milliseconds ([Math]::Min($dur + 300, 15000)) }} \
                    else {{ Start-Sleep -Seconds 2 }}; \
                    Write-Output 'SOUND_PLAYED' \
-                 }} else {{ Write-Output 'SOUND_FAILED' }}",
+                 }} else {{ Write-Output 'SOUND_FAILED' }};",
                 vol_scaled, wav_path
             );
 
             if let (Some(t), Some(m)) = (title, message) {
+                let safe_title = t.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;");
+                let safe_message = m.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;");
                 ps_script.push_str(&format!(
-                    " [void] [System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms'); \
-                     $notification = New-Object System.Windows.Forms.NotifyIcon; \
-                     $notification.Icon = [System.Drawing.SystemIcons]::Information; \
-                     $notification.BalloonTipTitle = '{}'; \
-                     $notification.BalloonTipText = '{}'; \
-                     $notification.Visible = $true; \
-                     $notification.ShowBalloonTip(3000);",
-                    t.replace('\'', "''"),
-                    m.replace('\'', "''")
+                    " try {{ \
+                        [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null; \
+                        [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null; \
+                        $xml = '<toast duration=\"short\"><visual><binding template=\"ToastGeneric\"><text>{}</text><text>{}</text></binding></visual><audio silent=\"true\"/></toast>'; \
+                        $doc = [Windows.Data.Xml.Dom.XmlDocument]::new(); \
+                        $doc.LoadXml($xml); \
+                        $toast = [Windows.UI.Notifications.ToastNotification]::new($doc); \
+                        [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('KKCoder').Show($toast); \
+                    }} catch {{ \
+                        [void] [System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms'); \
+                        $n = New-Object System.Windows.Forms.NotifyIcon; \
+                        $n.Icon = [System.Drawing.SystemIcons]::Information; \
+                        $n.BalloonTipTitle = '{}'; \
+                        $n.BalloonTipText = '{}'; \
+                        $n.Visible = $true; \
+                        $n.ShowBalloonTip(3000); \
+                        Start-Sleep -Milliseconds 500; \
+                    }}",
+                    safe_title, safe_message,
+                    t.replace('\'', "''"), m.replace('\'', "''")
                 ));
             }
 
+            // 使用 UTF-16LE + Base64 (-EncodedCommand) 执行，100% 避免字符转义与变量展开问题
+            let utf16: Vec<u16> = ps_script.encode_utf16().collect();
+            let mut bytes = Vec::with_capacity(utf16.len() * 2);
+            for u in utf16 {
+                bytes.push((u & 0xFF) as u8);
+                bytes.push(((u >> 8) & 0xFF) as u8);
+            }
+            use base64::Engine;
+            let encoded = base64::prelude::BASE64_STANDARD.encode(&bytes);
+
             let output = std::process::Command::new("powershell")
-                .args(["-Command", &ps_script])
+                .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", &encoded])
                 .creation_flags(0x08000000) // CREATE_NO_WINDOW
                 .output();
             // 播放结果留痕：SOUND_FAILED 表示媒体加载失败（便于定位无声问题）
@@ -3534,7 +3559,14 @@ pub fn run() {
             git::stash_and_switch_git_branch,
             git::create_git_branch,
             git::pull_git_updates,
-            git::init_git_repo
+            git::init_git_repo,
+            tokentracker::tt_detect_cli,
+            tokentracker::tt_server_status,
+            tokentracker::tt_install_cli,
+            tokentracker::tt_ensure_server,
+            tokentracker::tt_proxy,
+            skills_hub::skills_hub_query,
+            skills_hub::skills_hub_mutate
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

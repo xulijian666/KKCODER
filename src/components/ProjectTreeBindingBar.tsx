@@ -11,6 +11,8 @@ export interface ProjectTreeBindingBarProps {
   boundPath: string;
   /** 两格是否同一项目路径 */
   sameProject: boolean;
+  /** 收起项目文件树面板（已废弃） */
+  onClose?: () => void;
 }
 
 /**
@@ -37,49 +39,52 @@ export const ProjectTreeBindingBar: React.FC<ProjectTreeBindingBarProps> = ({
         ) : null}
       </div>
 
-      {isDualSplit && (
-        <div
-          className="project-tree-binding-controls"
-          role="group"
-          aria-label="项目树绑定"
-        >
-          <button
-            type="button"
-            className={`project-tree-binding-btn ${
-              bindingMode === "follow-focus" ? "is-active" : ""
-            }`}
-            title="跟随当前聚焦的终端会话"
-            onClick={() => onBindingModeChange("follow-focus")}
+      <div className="project-tree-header-right" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+        {isDualSplit && (
+          <div
+            className="project-tree-binding-controls"
+            role="group"
+            aria-label="项目树绑定"
           >
-            跟随
-          </button>
-          <button
-            type="button"
-            className={`project-tree-binding-btn binding-primary ${
-              bindingMode === "primary" ? "is-active" : ""
-            }`}
-            title={`钉在左侧：${primaryLabel}`}
-            onClick={() => onBindingModeChange("primary")}
-          >
-            左
-          </button>
-          <button
-            type="button"
-            className={`project-tree-binding-btn binding-secondary ${
-              bindingMode === "secondary" ? "is-active" : ""
-            }`}
-            title={`钉在右侧：${secondaryLabel}`}
-            onClick={() => onBindingModeChange("secondary")}
-          >
-            右
-          </button>
-          {sameProject && (
-            <span className="project-tree-binding-hint" title="两侧会话为同一项目路径">
-              同项目
-            </span>
-          )}
-        </div>
-      )}
+            <button
+              type="button"
+              className={`project-tree-binding-btn ${
+                bindingMode === "follow-focus" ? "is-active" : ""
+              }`}
+              title="跟随当前聚焦的终端会话"
+              onClick={() => onBindingModeChange("follow-focus")}
+            >
+              跟随
+            </button>
+            <button
+              type="button"
+              className={`project-tree-binding-btn binding-primary ${
+                bindingMode === "primary" ? "is-active" : ""
+              }`}
+              title={`钉在左侧：${primaryLabel}`}
+              onClick={() => onBindingModeChange("primary")}
+            >
+              左
+            </button>
+            <button
+              type="button"
+              className={`project-tree-binding-btn binding-secondary ${
+                bindingMode === "secondary" ? "is-active" : ""
+              }`}
+              title={`钉在右侧：${secondaryLabel}`}
+              onClick={() => onBindingModeChange("secondary")}
+            >
+              右
+            </button>
+            {sameProject && (
+              <span className="project-tree-binding-hint" title="两侧会话为同一项目路径">
+                同项目
+              </span>
+            )}
+          </div>
+        )}
+
+      </div>
     </div>
   );
 };

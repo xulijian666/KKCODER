@@ -1,5 +1,6 @@
 import React from "react";
 import kkcoderLogo from "../assets/brand/kkcoder-logo.svg";
+import { THEME_DEFINITIONS } from "../utils/theme";
 
 export interface TitleBarProps {
   currentTheme: string;
@@ -9,8 +10,6 @@ export interface TitleBarProps {
   showProjectTree: boolean;
   isTempSession: boolean;
   onToggleProjectTree: () => void;
-  sidebarMode: "fixed" | "hover";
-  onToggleSidebarMode: () => void;
   onLaunchCcswitch: () => void;
   onOpenSettings: () => void;
   onMinimize: () => void;
@@ -27,8 +26,6 @@ export const TitleBar: React.FC<TitleBarProps> = ({
   showProjectTree,
   isTempSession,
   onToggleProjectTree,
-  sidebarMode,
-  onToggleSidebarMode,
   onLaunchCcswitch,
   onOpenSettings,
   onMinimize,
@@ -77,83 +74,61 @@ export const TitleBar: React.FC<TitleBarProps> = ({
             >
               <div className="theme-dropdown-section">
                 <div className="theme-dropdown-section-title">深色</div>
-                <div
-                  className={`theme-dropdown-item ${currentTheme === "dark-blue" ? "active" : ""}`}
-                  onClick={() => onSelectTheme("dark-blue")}
-                >
-                  <span className="theme-preview-dots">
-                    <span className="theme-dot" style={{ backgroundColor: "#121620" }}></span>
-                    <span className="theme-dot" style={{ backgroundColor: "#3b82f6" }}></span>
-                  </span>
-                  <span className="theme-name">深空墨</span>
-                </div>
-                <div
-                  className={`theme-dropdown-item ${currentTheme === "dark-purple" ? "active" : ""}`}
-                  onClick={() => onSelectTheme("dark-purple")}
-                >
-                  <span className="theme-preview-dots">
-                    <span className="theme-dot" style={{ backgroundColor: "#171424" }}></span>
-                    <span className="theme-dot" style={{ backgroundColor: "#8b5cf6" }}></span>
-                  </span>
-                  <span className="theme-name">赛博紫</span>
-                </div>
-                <div
-                  className={`theme-dropdown-item ${currentTheme === "dark-zinc" ? "active" : ""}`}
-                  onClick={() => onSelectTheme("dark-zinc")}
-                >
-                  <span className="theme-preview-dots">
-                    <span className="theme-dot" style={{ backgroundColor: "#1d1b18" }}></span>
-                    <span className="theme-dot" style={{ backgroundColor: "#d97706" }}></span>
-                  </span>
-                  <span className="theme-name">琥珀金</span>
-                </div>
+                {THEME_DEFINITIONS.filter((t) => t.group === "dark").map((t) => (
+                  <div
+                    key={t.id}
+                    className={`theme-dropdown-item ${currentTheme === t.id ? "active" : ""}`}
+                    onClick={() => onSelectTheme(t.id)}
+                    title={t.description || t.name}
+                  >
+                    <span className="theme-preview-dots">
+                      <span className="theme-dot" style={{ backgroundColor: t.preview.bg }}></span>
+                      <span className="theme-dot" style={{ backgroundColor: t.preview.accent }}></span>
+                    </span>
+                    <span className="theme-name">{t.name}</span>
+                  </div>
+                ))}
               </div>
 
               <div className="theme-dropdown-section">
                 <div className="theme-dropdown-section-title">浅色</div>
-                <div
-                  className={`theme-dropdown-item ${currentTheme === "light-premium" ? "active" : ""}`}
-                  onClick={() => onSelectTheme("light-premium")}
-                >
-                  <span className="theme-preview-dots">
-                    <span className="theme-dot" style={{ backgroundColor: "#ffffff", border: "1px solid #e2e8f0" }}></span>
-                    <span className="theme-dot" style={{ backgroundColor: "#2563eb" }}></span>
-                  </span>
-                  <span className="theme-name">经典白</span>
-                </div>
-                <div
-                  className={`theme-dropdown-item ${currentTheme === "light-orange" ? "active" : ""}`}
-                  onClick={() => onSelectTheme("light-orange")}
-                >
-                  <span className="theme-preview-dots">
-                    <span className="theme-dot" style={{ backgroundColor: "#ffffff", border: "1px solid #fed7aa" }}></span>
-                    <span className="theme-dot" style={{ backgroundColor: "#ea580c" }}></span>
-                  </span>
-                  <span className="theme-name">暖沙</span>
-                </div>
-                <div
-                  className={`theme-dropdown-item ${currentTheme === "light-blue" ? "active" : ""}`}
-                  onClick={() => onSelectTheme("light-blue")}
-                >
-                  <span className="theme-preview-dots">
-                    <span className="theme-dot" style={{ backgroundColor: "#ffffff", border: "1px solid #bae6fd" }}></span>
-                    <span className="theme-dot" style={{ backgroundColor: "#0284c7" }}></span>
-                  </span>
-                  <span className="theme-name">天空蓝</span>
-                </div>
+                {THEME_DEFINITIONS.filter((t) => t.group === "light").map((t) => (
+                  <div
+                    key={t.id}
+                    className={`theme-dropdown-item ${currentTheme === t.id ? "active" : ""}`}
+                    onClick={() => onSelectTheme(t.id)}
+                    title={t.description || t.name}
+                  >
+                    <span className="theme-preview-dots">
+                      <span
+                        className="theme-dot"
+                        style={{
+                          backgroundColor: t.preview.bg,
+                          border: t.preview.border ? `1px solid ${t.preview.border}` : undefined,
+                        }}
+                      ></span>
+                      <span className="theme-dot" style={{ backgroundColor: t.preview.accent }}></span>
+                    </span>
+                    <span className="theme-name">{t.name}</span>
+                  </div>
+                ))}
               </div>
 
               <div className="theme-dropdown-divider"></div>
 
-              <div
-                className={`theme-dropdown-item ${currentTheme === "auto" ? "active" : ""}`}
-                onClick={() => onSelectTheme("auto")}
-              >
-                <span className="theme-preview-dots">
-                  <span className="theme-dot theme-dot-split"></span>
-                </span>
-                <span className="theme-name">跟随系统</span>
-              </div>
+              {THEME_DEFINITIONS.filter((t) => t.group === "system").map((t) => (
+                <div
+                  key={t.id}
+                  className={`theme-dropdown-item ${currentTheme === t.id ? "active" : ""}`}
+                  onClick={() => onSelectTheme(t.id)}
+                  title={t.description || t.name}
+                >
+                  <span className="theme-preview-dots">
+                    <span className="theme-dot theme-dot-split"></span>
+                  </span>
+                  <span className="theme-name">{t.name}</span>
+                </div>
+              ))}
             </div>
           )}
         </div>
@@ -162,7 +137,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
           <button
             className={`titlebar-btn toggle-project-tree-btn ${showProjectTree ? "active" : ""}`}
             onClick={onToggleProjectTree}
-            title={showProjectTree ? "关闭工作区文件树" : "打开工作区文件树"}
+            title={showProjectTree ? "收起项目文件树" : "打开项目文件树"}
           >
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
@@ -170,22 +145,6 @@ export const TitleBar: React.FC<TitleBarProps> = ({
             </svg>
           </button>
         )}
-
-        <button
-          className={`titlebar-btn toggle-sidebar-mode-btn ${sidebarMode === "hover" ? "active" : ""}`}
-          onClick={onToggleSidebarMode}
-          title={
-            sidebarMode === "hover"
-              ? "侧栏悬停浮出中 · 点击切换为固定分栏"
-              : "侧栏固定分栏 · 点击切换为悬停浮出（回收屏幕空间）"
-          }
-        >
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-            <line x1="10" y1="3" x2="10" y2="21"></line>
-            <path d="M5.5 9.5 7.5 11.5 5.5 13.5"></path>
-          </svg>
-        </button>
 
         <button className="titlebar-btn settings-gear-btn" onClick={onOpenSettings} title="打开设置">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">

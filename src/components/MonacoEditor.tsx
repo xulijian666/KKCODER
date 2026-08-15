@@ -77,6 +77,13 @@ async function loadMonacoModule(): Promise<MonacoModule> {
   return monacoModulePromise;
 }
 
+/** 应用启动后空闲预加载 Monaco；失败只记日志，不影响后续手动加载重试 */
+export function preloadMonaco(): void {
+  void loadMonacoModule().catch((error: unknown) => {
+    log(`[monaco] preload failed: ${error instanceof Error ? error.message : String(error)}`);
+  });
+}
+
 function resolveCssVar(name: string, fallback: string): string {
   const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   return value || fallback;

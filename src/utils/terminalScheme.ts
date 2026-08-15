@@ -100,12 +100,12 @@ export const resolveTerminalSchemeMode = (raw: string | null): TerminalSchemeMod
 
 /** Built-in fallback that mirrors TerminalTab's dark/light derivation from app theme */
 export const getDefaultTerminalTheme = (appThemeName?: string): XtermTheme => {
-  const themeName = appThemeName || localStorage.getItem("kkcoder_setting_theme") || "light-premium";
+  const themeName = appThemeName || localStorage.getItem("kkcoder_setting_theme") || "auto";
   let isDark = false;
-  if (themeName === "dark-blue" || themeName === "dark-purple" || themeName === "dark-zinc") {
+  if (themeName.startsWith("dark-")) {
     isDark = true;
   } else if (themeName === "auto") {
-    isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    isDark = !window.matchMedia("(prefers-color-scheme: light)").matches;
   }
 
   return {

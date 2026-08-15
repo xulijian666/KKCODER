@@ -41,6 +41,7 @@ src/
 ├── components/              # UI 组件 + components/index.ts
 ├── hooks/                   # 自定义 Hook + hooks/index.ts
 ├── utils/                   # 纯函数工具 + utils/index.ts
+├── features/extensions/     # 拓展功能（使用统计等，移植自 CC-GUI；含 vendored tokentracker-dashboard）
 └── assets/                  # 静态资源（图标等）
     ├── brand/               # 品牌 Logo / App Icon SVG 草案
     └── material-icons/      # 文件树 Material 风格图标
@@ -76,7 +77,9 @@ src/
 | 文件 | 职责 | 经 `index.ts` 导出 |
 |------|------|-------------------|
 | `index.ts` | 组件 barrel | — |
-| `Sidebar.tsx` | 会话列表、搜索、收藏（专注 Claude Code 单一助手，Pi/Codex 已移除） | `Sidebar`, `Session`, `ClaudeIcon` |
+| `Sidebar.tsx` | 会话列表、收藏、搜索/拓展入口按钮与面板（专注 Claude Code 单一助手，Pi/Codex 已移除） | `Sidebar`, `Session`, `ClaudeIcon` |
+| `SearchPalette.tsx` | 会话搜索面板（仿 CC-GUI 命令面板：防抖/IME 输入、当前项目/全局范围切换、会话元数据 + 聊天记录内容两类结果分组、↑↓/Enter/Esc 键盘导航） | `SearchPalette`, `highlightKeyword`, `SearchPaletteSession` |
+| `SearchPalette.css` | 搜索面板样式（走 KKCoder 主题 token） | — |
 | `TerminalTab.tsx` | xterm.js 标准 PTY 标签 | `TerminalTab` |
 | `NativeTerminalTab.tsx` | Claude 兼容/原生终端标签 | `CompatibilityTerminalTab` |
 | `ChatTab.tsx` | Claude GUI 聊天标签（历史、流式文本、推理与工具调用） | `ChatTab` |
@@ -95,7 +98,7 @@ src/
 | `SettingsModal.tsx` | 全屏设置中心（左侧分组菜单 + 返回应用 + 右侧内容区，布局参考 CC-GUI） | `SettingsModal` |
 | `RemoteSettingsPanel.tsx` | 远程访问 / FRP / 设备配对 | `RemoteSettingsPanel` |
 | `NewSessionModal.tsx` | 新建会话（Claude Code） | `NewSessionModal` |
-| `MdEditorModal.tsx` | CLAUDE.md / AGENTS.md 编辑 | `MdEditorModal` |
+| `MdEditorModal.tsx` | 项目规则管理（RULE.md 独立主规则，安全在 CLAUDE.md / AGENTS.md 顶部注入引用） | `MdEditorModal`, `RULE_FILE_NAME`, `CLAUDE_FILE_NAME`, `AGENTS_FILE_NAME`, `injectRulePointer` |
 | `FileEditorModal.tsx` | 文本文件编辑 | `FileEditorModal` |
 | `DirectoryPickerModal.tsx` | 目录选择 | `DirectoryPickerModal` |
 | `ConfirmModal.tsx` | 通用确认框 | `ConfirmModal` |
@@ -104,6 +107,26 @@ src/
 | `NativeTerminalTab.css` | 兼容终端样式 | — |
 | `NativeTerminalTab.test.ts` | 兼容终端测试 | — |
 | `NativeTerminalRouting.test.ts` | App 路由到兼容终端的结构断言 | — |
+
+---
+
+## 5b. `features/extensions/` — 拓展功能（移植自 CC-GUI）
+
+| 文件 | 职责 | 经 barrel 导出 |
+|------|------|---------------|
+| `ExtensionsPanel.tsx` | 拓展全屏面板（对齐 CC-GUI 顶栏 Tab 分组 + 100% 满宽流体自适应网格架构；支持大屏幕自适应铺发展示） | 否（App 顶层使用） |
+| `ExtensionsPanel.css` | 拓展全屏面板样式（KKCoder 黑金主题 token、顶栏粘性 Tab、满宽流体网格、Tauri 拖拽与动效） | — |
+| `TokenTrackerServerGate.tsx` | TokenTracker 本地服务门控（检测/一键安装/启动/错误重试，ready 后渲染仪表盘） | 否 |
+| `TokenTrackerDashboardView.tsx` | vendored 使用统计仪表盘懒加载入口（providers 固定顺序） | 否 |
+| `TokenTrackerSkillsView.tsx` | 技能中心懒加载入口（渲染 KKCoder 原生 `SkillsCenter`） | 否 |
+| `SkillsCenter.tsx` | 技能中心（KKCoder 原生 UI：我的技能/浏览/仓库管理/详情抽屉，功能与 vendored SkillsPage 1:1，视觉走极简范式） | 否 |
+| `SkillsCenter.css` | 技能中心样式（全 KKCoder 主题 token） | — |
+| `useTokenTrackerServer.ts` | TokenTracker 服务状态机 hook（checking→guide/starting→ready/error） | 否 |
+| `tokentracker-dashboard.css` | vendored 仪表盘样式（作用域 `.tt-dashboard`） | — |
+| `tokentracker-theme.css` | Tailwind v4 主题入口：`--color-oai-*` token + `dark:` 变体键到 `.dark` 子树（跳过 preflight，不重置全局样式） | — |
+| `tokentracker-dashboard/` | vendored TokenTracker 仪表盘树（98 文件，自包含；传输经 `tt_proxy`） | 否（内部模块） |
+
+> 后端对应模块：`src-tauri/src/tokentracker.rs`（`tt_detect_cli` / `tt_server_status` / `tt_install_cli` / `tt_ensure_server` / `tt_proxy`）与 `src-tauri/src/skills_hub.rs`（技能中心后端：`skills_hub_query` / `skills_hub_mutate`，SSOT 根目录 `~/.kkcoder/skills`，env `KKCODER_SKILLS_HOME` 可覆盖）。
 
 ---
 
@@ -138,7 +161,7 @@ src/
 | `uuid.ts` | 安全 UUID | `generateUUID` |
 | `log.ts` | 持久化前端日志 | `log` |
 | `pathHelpers.ts` | 路径展示 | `getFolderName` |
-| `theme.ts` | 6 套主题 CSS 变量 / apply | `applyTheme`, `readStoredTheme`, `persistTheme`, `DEFAULT_THEME`, `THEME_STORAGE_KEY` |
+| `theme.ts` | 6 套主题（4深2浅）CSS 变量 / apply / 主题元数据列表 | `applyTheme`, `readStoredTheme`, `persistTheme`, `resolveThemeTarget`, `DEFAULT_THEME`, `THEME_STORAGE_KEY`, `THEME_DEFINITIONS`, `ThemeName`, `ThemeGroup`, `ThemeDefinition` |
 | `sessionQueue.ts` | 队列纯函数 | `clearSessionQueue`, `enqueueSessionTask`, `getSessionQueue`, `removeSessionTask`, `updateSessionTask`, `QueueBySession` |
 | `enabledAgents.ts` | 助手启用状态（Pi/Codex 已移除，恒为 Claude Code） | `loadEnabledAgents`, `saveEnabledAgents`, `isAgentEnabled`, `getVisibleAgents`, `AgentType`, `EnabledAgents` |
 | `appFeedback.ts` | 静默反馈总线（notify / confirmAction） | `notify`, `notifyInfo`, `notifySuccess`, `notifyWarning`, `notifyError`, `confirmAction`, `formatFeedbackError` |

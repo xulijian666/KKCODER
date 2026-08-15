@@ -16,6 +16,7 @@ import {
   resolveTerminalSchemeMode,
   TERMINAL_SCHEME_MODE_KEY,
 } from "../utils/terminalScheme";
+import { readStoredTheme } from "../utils/theme";
 import { formatFeedbackError, notifyError, notifySuccess } from "../utils/appFeedback";
 
 interface TerminalTabProps {
@@ -204,7 +205,7 @@ const TerminalTabImpl: React.FC<TerminalTabProps> = ({
 
     log("Initializing Terminal instance...");
     // 1. 根据当前选择的主题自适应配置终端黑白底色 (前三个黑底，后三个白底)
-    const savedTheme = localStorage.getItem("kkcoder_setting_theme") || "light-premium";
+    const savedTheme = readStoredTheme();
     const savedFont = localStorage.getItem("kkcoder_setting_font_family") || "Cascadia Mono";
     const savedSizeStr = localStorage.getItem("kkcoder_setting_font_size");
     const savedSize = savedSizeStr ? parseFloat(savedSizeStr) : 13.5;
@@ -620,10 +621,10 @@ const TerminalTabImpl: React.FC<TerminalTabProps> = ({
                     invoke("play_notification_sound", {
                       tone: soundTone,
                       volume: soundVolume,
-                      title: "KKCoder AI 终端",
-                      message: playSoundEnabled 
-                        ? `回答完毕！本次运行共耗时 ${elapsed.toFixed(1)} 秒。`
-                        : null // 若不启用播放提示音，则仅通过 null 标记静默通知
+                      title: "KKCoder · 终端命令完成",
+                      message: playSoundEnabled
+                        ? `✨ 本次运行耗时 ${elapsed.toFixed(1)} 秒，点击切回查看`
+                        : null, // 若不启用播放提示音，则仅通过 null 标记静默通知
                     }).catch((err) => {
                       log(`Failed to trigger play_notification_sound: ${err}`);
                     });
@@ -870,7 +871,7 @@ const TerminalTabImpl: React.FC<TerminalTabProps> = ({
     window.addEventListener("kkcoder-theme-change", handleThemeChange);
 
     const handleTerminalSchemeChange = () => {
-      const appTheme = localStorage.getItem("kkcoder_setting_theme") || "light-premium";
+      const appTheme = readStoredTheme();
       log("Received terminal scheme change event");
       term.options.theme = getTerminalThemeColors(appTheme);
     };

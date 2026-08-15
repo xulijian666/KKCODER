@@ -1,4 +1,5 @@
 export { Sidebar, type Session, ClaudeIcon } from "./Sidebar";
+export { SearchPalette, highlightKeyword, type SearchPaletteSession } from "./SearchPalette";
 export { TerminalTab } from "./TerminalTab";
 export { CompatibilityTerminalTab } from "./NativeTerminalTab";
 export { ChatTab } from "./ChatTab";
@@ -7,7 +8,13 @@ export { GitBranchSelector, type GitBranchInfo, type GitPullResult } from "./Git
 export { NewSessionModal } from "./NewSessionModal";
 export { SettingsModal } from "./SettingsModal";
 export { RemoteSettingsPanel } from "./RemoteSettingsPanel";
-export { MdEditorModal } from "./MdEditorModal";
+export { 
+  MdEditorModal, 
+  RULE_FILE_NAME, 
+  CLAUDE_FILE_NAME, 
+  AGENTS_FILE_NAME, 
+  injectRulePointer 
+} from "./MdEditorModal";
 export { FileEditorModal } from "./FileEditorModal";
 export { ProjectTree } from "./ProjectTree";
 export { ProjectTreeBindingBar } from "./ProjectTreeBindingBar";
@@ -25,6 +32,6 @@ export {
   type PreviewFileState,
   type FilePreviewPanelProps,
 } from "./FilePreviewPanel";
-export { MonacoEditor, type MonacoEditorHandle, type MonacoEditorProps } from "./MonacoEditor";
+export { MonacoEditor, preloadMonaco, type MonacoEditorHandle, type MonacoEditorProps } from "./MonacoEditor";
 export { HtmlPreview, type HtmlPreviewProps } from "./HtmlPreview";
 export { ImagePreview, type ImagePreviewProps } from "./ImagePreview";

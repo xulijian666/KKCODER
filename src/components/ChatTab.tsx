@@ -63,6 +63,8 @@ interface ChatTabProps {
   onUpdateQueueTask?: (sessionId: string, taskId: string, newPrompt: string) => void;
   onPauseQueue?: (sessionId: string) => void;
   onResumeQueue?: (sessionId: string) => void;
+  /** 打开项目规则编辑器（CLAUDE.md / AGENTS.md），由 App 层渲染弹窗 */
+  onOpenRulesEditor?: () => void;
 }
 
 interface ToolCardData {
@@ -1068,6 +1070,7 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
     onUpdateQueueTask,
     onPauseQueue,
     onResumeQueue,
+    onOpenRulesEditor,
   } = props;
 
   const [messages, dispatch] = useReducer(messagesReducer, []);
@@ -1238,19 +1241,6 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
               output: payload.output,
               error: payload.error,
             });
-            // 仅在执行文件写/改/命令类工具时触发刷新（只读工具如 view/grep/read 静默跳过，零开销）
-            const isMutating =
-              !payload.toolName ||
-              /write|edit|replace|patch|create|delete|remove|bash|terminal|command|move|rename/i.test(
-                payload.toolName,
-              );
-            if (isMutating) {
-              window.dispatchEvent(
-                new CustomEvent("kkcoder-refresh-project-tree", {
-                  detail: { projectPath: directory },
-                }),
-              );
-            }
           }
           break;
         case "turn:finished": {
@@ -1281,8 +1271,8 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
             invoke("play_notification_sound", {
               tone: chatTone,
               volume: chatVolume,
-              title: chatNotify ? "KKCoder 回答完成" : null,
-              message: chatNotify ? "Claude 已回复完毕" : null,
+              title: chatNotify ? "KKCoder · 任务完成" : null,
+              message: chatNotify ? "✨ Claude 已回复完毕，点击切回查看" : null,
             }).catch((err) => log(`[chat] play notification failed: ${err}`));
           }
 
@@ -2200,8 +2190,8 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
             {!ready ? (
               <div className="chat-empty-loading">
                 <div className="chat-empty-spinner" />
-                <div className="chat-empty-title">正在加载对话…</div>
-                <div className="chat-empty-desc">正在连接 Claude 代理与工作区</div>
+                <div className="chat-empty-title">正在加载会话历史…</div>
+                <div className="chat-empty-desc">正在读取当前工作区的 Claude 会话记录</div>
               </div>
             ) : (
               <div className="chat-empty-welcome">
@@ -2478,6 +2468,17 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
                 }
               }}
             />
+            {onOpenRulesEditor && (
+              <button
+                type="button"
+                className="md-button"
+                onClick={onOpenRulesEditor}
+                title="编辑项目规则（默认 CLAUDE.md，保存后同步 AGENTS.md）"
+              >
+                <svg className="doc-svg-icon" xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: "2px", opacity: 0.85 }}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                <span>规则</span>
+              </button>
+            )}
             <div className="chat-composer-toolbar-spacer" />
             <button
               type="button"

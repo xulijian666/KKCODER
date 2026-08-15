@@ -46,7 +46,7 @@ import {
   dispatchTerminalSchemeChange,
   type TerminalSchemeMode,
 } from "../utils/terminalScheme";
-import { applyTheme, DEFAULT_THEME, THEME_STORAGE_KEY } from "../utils/theme";
+import { applyTheme, DEFAULT_THEME, THEME_STORAGE_KEY, THEME_DEFINITIONS } from "../utils/theme";
 import kkcoderLogo from "../assets/brand/kkcoder-logo.svg";
 import { log, isDebugLogEnabled, DEBUG_LOG_KEY } from "../utils/log";
 import { notifyError, notifySuccess, formatFeedbackError } from "../utils/appFeedback";
@@ -685,28 +685,31 @@ return (
                       </div>
                       <div className="settings-pref-control">
                         <div className="theme-grid">
-                          <div className={`theme-box dark-blue-box ${theme === "dark-blue" ? "checked" : ""}`} onClick={() => setTheme("dark-blue")} title="深蓝主题">
-                            <div className="theme-dot" style={{ backgroundColor: "#3b82f6" }} />
-                          </div>
-                          <div className={`theme-box dark-purple-box ${theme === "dark-purple" ? "checked" : ""}`} onClick={() => setTheme("dark-purple")} title="暗紫主题">
-                            <div className="theme-dot" style={{ backgroundColor: "#8b5cf6" }} />
-                          </div>
-                          <div className={`theme-box dark-zinc-box ${theme === "dark-zinc" ? "checked" : ""}`} onClick={() => setTheme("dark-zinc")} title="碳黑主题">
-                            <div className="theme-dot" style={{ backgroundColor: "#f59e0b" }} />
-                          </div>
-                          <div className={`theme-box light-blue-box ${theme === "light-blue" ? "checked" : ""}`} onClick={() => setTheme("light-blue")} title="冰蓝主题">
-                            <div className="theme-dot" style={{ backgroundColor: "#3b82f6" }} />
-                          </div>
-                          <div className={`theme-box light-orange-box ${theme === "light-orange" ? "checked" : ""}`} onClick={() => setTheme("light-orange")} title="蜜橘主题">
-                            <div className="theme-dot" style={{ backgroundColor: "#ea580c" }} />
-                          </div>
-                          <div className={`theme-box light-premium-box ${theme === "light-premium" ? "checked" : ""}`} onClick={() => setTheme("light-premium")} title="经典高雅">
-                            <div className="theme-dot" style={{ backgroundColor: "#2563eb" }} />
-                            {theme === "light-premium" && <span className="theme-checkmark">✓</span>}
-                          </div>
-                          <div className={`theme-box auto-box ${theme === "auto" ? "checked" : ""}`} onClick={() => setTheme("auto")} title="跟随系统">
-                            <span className="auto-text">Auto</span>
-                          </div>
+                          {THEME_DEFINITIONS.map((t) => {
+                            const isChecked = theme === t.id;
+                            return (
+                              <div
+                                key={t.id}
+                                className={`theme-box ${isChecked ? "checked" : ""}`}
+                                onClick={() => setTheme(t.id)}
+                                title={`${t.name}${t.description ? ` (${t.description})` : ""}`}
+                                style={{
+                                  backgroundColor: t.preview.bg,
+                                  borderColor: t.preview.border || undefined,
+                                }}
+                              >
+                                {t.preview.split ? (
+                                  <span className="auto-text">Auto</span>
+                                ) : (
+                                  <div
+                                    className="theme-dot"
+                                    style={{ backgroundColor: t.preview.accent }}
+                                  />
+                                )}
+                                {isChecked && <span className="theme-checkmark">✓</span>}
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
                     </div>

@@ -5,8 +5,13 @@ export {
   applyTheme,
   readStoredTheme,
   persistTheme,
+  resolveThemeTarget,
   DEFAULT_THEME,
   THEME_STORAGE_KEY,
+  THEME_DEFINITIONS,
+  type ThemeName,
+  type ThemeGroup,
+  type ThemeDefinition,
 } from "./theme";
 export {
   addUnreadCompletion,
