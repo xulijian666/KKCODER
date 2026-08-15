@@ -764,6 +764,20 @@ fn extract_frontmatter(raw: &str) -> Option<&str> {
     Some(&content[..end])
 }
 
+/// 提取 SKILL.md 正文（frontmatter 之后的内容，trim 前后空白）。
+/// 无 frontmatter 时整个内容即正文。用于详情页「完整介绍」展示与汉化。
+fn extract_skill_body(markdown: &str) -> String {
+    if extract_frontmatter(markdown).is_some() {
+        if let Some(rest) = markdown.strip_prefix("---") {
+            if let Some(end_rel) = rest.find("\n---") {
+                let body = &rest[end_rel + 4..]; // 跳过 "\n---"
+                return body.trim().to_string();
+            }
+        }
+    }
+    markdown.trim().to_string()
+}
+
 struct SkillMetadata {
     name: String,
     description: String,
@@ -1297,6 +1311,293 @@ fn find_skill_position(skills: &[Value], id: &str) -> Option<usize> {
     })
 }
 
+// ===== 扫描来源配置（决定哪些目录的技能进入「我的技能」列表） =====
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct CustomScanSource {
+    id: String,
+    name: String,
+    path: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+struct ScanSourcesConfig {
+    /// 内置代理来源：target id -> enabled（缺省 true，全量扫描保持现状）
+    #[serde(default)]
+    builtins: HashMap<String, bool>,
+    /// 自定义扫描目录
+    #[serde(default)]
+    custom: Vec<CustomScanSource>,
+}
+
+fn scan_sources_path() -> PathBuf {
+    skills_root().join("scan-sources.json")
+}
+
+fn read_scan_sources() -> ScanSourcesConfig {
+    let Some(raw) = read_text(&scan_sources_path()) else {
+        return ScanSourcesConfig::default();
+    };
+    serde_json::from_str(&raw).unwrap_or_default()
+}
+
+fn save_scan_sources(config: &ScanSourcesConfig) -> SkillResult<()> {
+    let path = scan_sources_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| SkillError::other(e.to_string()))?;
+    }
+    let raw =
+        serde_json::to_string_pretty(config).map_err(|e| SkillError::other(e.to_string()))?;
+    fs::write(&path, raw).map_err(|e| SkillError::other(e.to_string()))?;
+    Ok(())
+}
+
+/// 内置来源是否启用（缺省 true）
+fn builtin_source_enabled(config: &ScanSourcesConfig, target_id: &str) -> bool {
+    config.builtins.get(target_id).copied().unwrap_or(true)
+}
+
+/// 扫描来源列表：内置（含当前解析路径）+ 自定义
+#[tauri::command]
+pub(crate) fn get_skill_scan_sources() -> Result<serde_json::Value, String> {
+    let config = read_scan_sources();
+    let builtins: Vec<Value> = TARGETS
+        .iter()
+        .map(|target| {
+            json!({
+                "id": target.id,
+                "name": target.label,
+                "path": target_primary_dir(target).to_string_lossy(),
+                "enabled": builtin_source_enabled(&config, target.id),
+                "kind": "builtin",
+            })
+        })
+        .collect();
+    let custom: Vec<Value> = config
+        .custom
+        .iter()
+        .map(|c| json!({"id": c.id, "name": c.name, "path": c.path, "kind": "custom"}))
+        .collect();
+    Ok(json!({ "builtins": builtins, "custom": custom }))
+}
+
+/// 勾选启用/禁用内置来源
+#[tauri::command]
+pub(crate) fn set_skill_scan_source_enabled(id: String, enabled: bool) -> Result<(), String> {
+    if target_by_id(&id).is_none() {
+        return Err(format!("Unknown builtin source: {id}"));
+    }
+    let mut config = read_scan_sources();
+    config.builtins.insert(id, enabled);
+    save_scan_sources(&config).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 新增自定义扫描目录
+#[tauri::command]
+pub(crate) fn add_skill_scan_source(path: String) -> Result<serde_json::Value, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("目录不能为空".into());
+    }
+    let dir = PathBuf::from(trimmed);
+    if !dir.is_dir() {
+        return Err(format!("目录不存在或不是文件夹: {trimmed}"));
+    }
+    let mut config = read_scan_sources();
+    if config
+        .custom
+        .iter()
+        .any(|c| c.path.eq_ignore_ascii_case(trimmed))
+    {
+        return Err("该目录已在扫描来源中".into());
+    }
+    let id = format!("custom-{}", now_ms());
+    let name = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| trimmed.to_string());
+    config.custom.push(CustomScanSource {
+        id: id.clone(),
+        name,
+        path: trimmed.to_string(),
+    });
+    save_scan_sources(&config).map_err(|e| e.to_string())?;
+    Ok(json!({ "id": id }))
+}
+
+/// 移除自定义扫描目录（内置来源不支持删除，只能禁用）
+#[tauri::command]
+pub(crate) fn remove_skill_scan_source(id: String) -> Result<(), String> {
+    let mut config = read_scan_sources();
+    let before = config.custom.len();
+    config.custom.retain(|c| c.id != id);
+    if config.custom.len() == before {
+        return Err("未找到该自定义来源".into());
+    }
+    save_scan_sources(&config).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// ===== 技能黑名单（拉黑删除） =====
+// 拉黑 = 从 KKCODER 移除（托管技能硬删除 SSOT 副本，不留回收站），并在黑名单
+// 记录目录，之后扫描来源（内置代理目录/自定义目录）不再引用该目录；源文件保留。
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct SkillBlacklistEntry {
+    directory: String,
+    /// 拉黑时记录的来源路径（未托管技能 = 实际扫描目录；托管技能可为空）
+    #[serde(rename = "sourcePath", default)]
+    source_path: String,
+    /// 拉黑时间（ms 时间戳）
+    #[serde(rename = "createdAt")]
+    created_at: i64,
+}
+
+fn skill_blacklist_path() -> PathBuf {
+    skills_root().join("blacklist.json")
+}
+
+fn read_skill_blacklist() -> Vec<SkillBlacklistEntry> {
+    let Some(raw) = read_text(&skill_blacklist_path()) else {
+        return Vec::new();
+    };
+    serde_json::from_str(&raw).unwrap_or_default()
+}
+
+fn save_skill_blacklist(entries: &[SkillBlacklistEntry]) -> SkillResult<()> {
+    let path = skill_blacklist_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| SkillError::other(e.to_string()))?;
+    }
+    let raw =
+        serde_json::to_string_pretty(entries).map_err(|e| SkillError::other(e.to_string()))?;
+    fs::write(&path, raw).map_err(|e| SkillError::other(e.to_string()))?;
+    Ok(())
+}
+
+/// 黑名单目录集合（小写），扫描时用于跳过
+fn skill_blacklist_dirs() -> HashSet<String> {
+    read_skill_blacklist()
+        .into_iter()
+        .map(|e| e.directory.to_lowercase())
+        .collect()
+}
+
+/// 拉黑删除：从 KKCODER 移除（托管 = 清 registry + 删 SSOT 副本；未托管 = 摘除
+/// 各目标代理的同步副本），记录黑名单，扫描不再引用。源文件一律保留。
+#[tauri::command]
+pub(crate) fn blacklist_skill(
+    directory: String,
+    source_path: Option<String>,
+    targets: Vec<String>,
+) -> Result<serde_json::Value, String> {
+    let directory_trimmed = directory.trim().to_string();
+    if directory_trimmed.is_empty() {
+        return Err("技能目录不能为空".into());
+    }
+    let mut registry = read_registry();
+
+    // 1) 托管技能：硬删除（不进回收站）
+    let managed_pos = registry
+        .skills
+        .iter()
+        .position(|s| js_string(s.get("directory")).eq_ignore_ascii_case(&directory_trimmed));
+    let was_managed = managed_pos.is_some();
+    let mut name = Value::Null;
+    if let Some(pos) = managed_pos {
+        let skill = registry.skills[pos].clone();
+        name = skill.get("name").cloned().unwrap_or(Value::Null);
+        for target in TARGETS.iter() {
+            remove_skill_from_target(&directory_trimmed, target.id);
+        }
+        if let Ok(ssot_path) = managed_skill_path(&directory_trimmed) {
+            remove_path(&ssot_path);
+            if let Some(parent) = ssot_path.parent() {
+                remove_empty_ancestors(parent, &ssot_dir());
+            }
+        }
+        registry.skills.remove(pos);
+        save_registry(&registry).map_err(|e| e.to_string())?;
+    } else {
+        // 2) 未托管技能：按当前已同步的 target 摘除副本
+        let selected: Vec<String> = if targets.is_empty() {
+            TARGETS.iter().map(|t| t.id.to_string()).collect()
+        } else {
+            targets
+                .iter()
+                .filter(|tid| target_by_id(tid).is_some())
+                .cloned()
+                .collect()
+        };
+        for target_id in &selected {
+            remove_skill_from_target(&directory_trimmed, target_id);
+        }
+    }
+
+    // 3) 写黑名单（upsert）
+    let mut entries = read_skill_blacklist();
+    let path = source_path.unwrap_or_default();
+    let entry = SkillBlacklistEntry {
+        directory: directory_trimmed.clone(),
+        source_path: path,
+        created_at: now_ms(),
+    };
+    if let Some(existing) = entries
+        .iter_mut()
+        .find(|e| e.directory.eq_ignore_ascii_case(&directory_trimmed))
+    {
+        existing.source_path = if entry.source_path.is_empty() {
+            existing.source_path.clone()
+        } else {
+            entry.source_path.clone()
+        };
+        existing.created_at = entry.created_at;
+    } else {
+        entries.push(entry);
+    }
+    save_skill_blacklist(&entries).map_err(|e| e.to_string())?;
+
+    append_activity(json!({
+        "action": "blacklist",
+        "name": name,
+        "directory": directory_trimmed,
+        "managed": was_managed,
+    }));
+    Ok(json!({"ok": true, "managed": was_managed}))
+}
+
+/// 黑名单记录列表（按拉黑时间倒序）
+#[tauri::command]
+pub(crate) fn get_skill_blacklist() -> Result<serde_json::Value, String> {
+    let mut entries = read_skill_blacklist();
+    entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    Ok(json!({
+        "entries": entries
+            .iter()
+            .map(|e| json!({
+                "directory": e.directory,
+                "sourcePath": e.source_path,
+                "createdAt": e.created_at,
+            }))
+            .collect::<Vec<_>>()
+    }))
+}
+
+/// 解除拉黑：删除黑名单记录，下次扫描/刷新后技能将重新出现（源文件仍在则生效）
+#[tauri::command]
+pub(crate) fn remove_skill_blacklist(directory: String) -> Result<(), String> {
+    let mut entries = read_skill_blacklist();
+    let before = entries.len();
+    entries.retain(|e| !e.directory.eq_ignore_ascii_case(&directory));
+    if entries.len() == before {
+        return Err("未找到该黑名单记录".into());
+    }
+    save_skill_blacklist(&entries).map_err(|e| e.to_string())?;
+    append_activity(json!({"action": "unblacklist", "directory": directory}));
+    Ok(())
+}
+
 /// upstream listInstalledSkills：先 purge trash，再 managed + unmanaged 合并按 name 排序。
 fn list_installed_skills() -> Vec<Value> {
     purge_expired_trash();
@@ -1334,6 +1635,14 @@ fn list_installed_skills() -> Vec<Value> {
         entry.insert("managed".to_string(), json!(true));
         entry.insert("targets".to_string(), Value::Array(targets));
         entry.insert("targetStates".to_string(), Value::Object(target_states));
+        // 完整介绍：SKILL.md 正文（frontmatter 之后），用于详情展示与全文汉化
+        let body = managed_skill_path(&directory)
+            .ok()
+            .and_then(|dir| find_skill_marker(&dir))
+            .and_then(|marker| read_text(&marker))
+            .map(|md| extract_skill_body(&md))
+            .unwrap_or_default();
+        entry.insert("fullDescription".to_string(), json!(body));
         managed.push(Value::Object(entry));
     }
 
@@ -1342,73 +1651,123 @@ fn list_installed_skills() -> Vec<Value> {
         .map(|skill| js_string(skill.get("directory")).to_lowercase())
         .collect();
 
-    // unmanaged：扫描全部 8 个 target 的本地 skill，跨 target 按 directory 小写合并。
+    // unmanaged：扫描启用的来源（内置代理目录 + 自定义目录），跨来源按 directory 小写合并。
     let mut unmanaged: Vec<Value> = Vec::new();
     let mut unmanaged_index: HashMap<String, usize> = HashMap::new();
+    let scan_config = read_scan_sources();
+    // 黑名单目录（拉黑删除的技能不再被任何来源引用，源文件保留）
+    let blacklist = skill_blacklist_dirs();
+
+    // 内置来源：按 scan-sources.json 勾选状态过滤
     for target in TARGETS.iter() {
-        for base_dir in target_dirs(target) {
-            for directory in scan_skill_directories(&base_dir) {
-                if directory.is_empty() || managed_dirs.contains(&directory.to_lowercase()) {
-                    continue;
-                }
-                let Some(marker) = find_skill_marker(&base_dir.join(&directory)) else {
-                    continue;
-                };
-                let markdown = read_text(&marker).unwrap_or_default();
-                let fallback =
-                    install_name_from_directory(&directory).unwrap_or_else(|| directory.clone());
-                let metadata = read_skill_metadata(&markdown, &fallback);
-                let key = directory.to_lowercase();
-                let index = match unmanaged_index.get(&key) {
-                    Some(&i) => i,
-                    None => {
-                        let target_states: Map<String, Value> = TARGETS
-                            .iter()
-                            .map(|t| (t.id.to_string(), json!("off")))
-                            .collect();
-                        unmanaged.push(json!({
-                            "id": format!("local:{directory}"),
-                            "key": format!("local:{directory}"),
-                            "name": metadata.name,
-                            "description": metadata.description,
-                            "directory": directory,
-                            "readmeUrl": Value::Null,
-                            "repoOwner": Value::Null,
-                            "repoName": Value::Null,
-                            "repoBranch": Value::Null,
-                            "installedAt": Value::Null,
-                            "managed": false,
-                            "targets": [],
-                            "targetStates": Value::Object(target_states),
-                            "targetPaths": {},
-                        }));
-                        unmanaged_index.insert(key, unmanaged.len() - 1);
-                        unmanaged.len() - 1
-                    }
-                };
-                let entry = &mut unmanaged[index];
-                if let Some(targets) = entry.get_mut("targets").and_then(Value::as_array_mut) {
-                    if !targets.iter().any(|t| t.as_str() == Some(target.id)) {
-                        targets.push(json!(target.id));
-                    }
-                }
-                if let Some(states) = entry.get_mut("targetStates").and_then(Value::as_object_mut) {
-                    states.insert(target.id.to_string(), json!("synced"));
-                }
-                if let Some(paths) = entry.get_mut("targetPaths").and_then(Value::as_object_mut) {
-                    // 只记录首个命中的 target 路径。
-                    paths
-                        .entry(target.id.to_string())
-                        .or_insert_with(|| json!(base_dir.join(&directory).to_string_lossy()));
-                }
-            }
+        if !builtin_source_enabled(&scan_config, target.id) {
+            continue;
         }
+        for base_dir in target_dirs(target) {
+            scan_unmanaged_dir(
+                &base_dir,
+                Some(target),
+                &managed_dirs,
+                &blacklist,
+                &mut unmanaged,
+                &mut unmanaged_index,
+            );
+        }
+    }
+    // 自定义来源：直接扫描配置目录
+    for custom in &scan_config.custom {
+        scan_unmanaged_dir(
+            &PathBuf::from(&custom.path),
+            None,
+            &managed_dirs,
+            &blacklist,
+            &mut unmanaged,
+            &mut unmanaged_index,
+        );
     }
 
     managed.extend(unmanaged);
     // codepoint 排序（upstream localeCompare 的计划内偏差）；Rust sort_by 稳定。
     managed.sort_by(|a, b| js_string(a.get("name")).cmp(&js_string(b.get("name"))));
     managed
+}
+
+/// 扫描单个目录下的技能并合并进 unmanaged 列表。
+/// `target = Some` 时记录 targets/targetStates/targetPaths（内置代理来源）；
+/// `target = None` 为自定义目录，仅记录来源路径。
+fn scan_unmanaged_dir(
+    base_dir: &Path,
+    target: Option<&Target>,
+    managed_dirs: &HashSet<String>,
+    blacklist: &HashSet<String>,
+    unmanaged: &mut Vec<Value>,
+    unmanaged_index: &mut HashMap<String, usize>,
+) {
+    for directory in scan_skill_directories(base_dir) {
+        let key = directory.to_lowercase();
+        if directory.is_empty()
+            || managed_dirs.contains(&key)
+            || blacklist.contains(&key)
+        {
+            continue;
+        }
+        let Some(marker) = find_skill_marker(&base_dir.join(&directory)) else {
+            continue;
+        };
+        let markdown = read_text(&marker).unwrap_or_default();
+        let fallback = install_name_from_directory(&directory).unwrap_or_else(|| directory.clone());
+        let metadata = read_skill_metadata(&markdown, &fallback);
+        let index = match unmanaged_index.get(&key) {
+            Some(&i) => i,
+            None => {
+                let target_states: Map<String, Value> = TARGETS
+                    .iter()
+                    .map(|t| (t.id.to_string(), json!("off")))
+                    .collect();
+                unmanaged.push(json!({
+                    "id": format!("local:{directory}"),
+                    "key": format!("local:{directory}"),
+                    "name": metadata.name,
+                    "description": metadata.description,
+                    "fullDescription": extract_skill_body(&markdown),
+                    "directory": directory,
+                    "readmeUrl": Value::Null,
+                    "repoOwner": Value::Null,
+                    "repoName": Value::Null,
+                    "repoBranch": Value::Null,
+                    "installedAt": Value::Null,
+                    "managed": false,
+                    "targets": [],
+                    "targetStates": Value::Object(target_states),
+                    "targetPaths": {},
+                }));
+                unmanaged_index.insert(key, unmanaged.len() - 1);
+                unmanaged.len() - 1
+            }
+        };
+        let entry = &mut unmanaged[index];
+        if let Some(target) = target {
+            if let Some(targets) = entry.get_mut("targets").and_then(Value::as_array_mut) {
+                if !targets.iter().any(|t| t.as_str() == Some(target.id)) {
+                    targets.push(json!(target.id));
+                }
+            }
+            if let Some(states) = entry.get_mut("targetStates").and_then(Value::as_object_mut) {
+                states.insert(target.id.to_string(), json!("synced"));
+            }
+            if let Some(paths) = entry.get_mut("targetPaths").and_then(Value::as_object_mut) {
+                // 只记录首个命中的 target 路径。
+                paths
+                    .entry(target.id.to_string())
+                    .or_insert_with(|| json!(base_dir.join(&directory).to_string_lossy()));
+            }
+        } else if let Some(paths) = entry.get_mut("targetPaths").and_then(Value::as_object_mut) {
+            // 自定义来源：记录来源路径
+            paths
+                .entry("custom".to_string())
+                .or_insert_with(|| json!(base_dir.join(&directory).to_string_lossy()));
+        }
+    }
 }
 
 // ===== mutations：install / uninstall / restore / set_targets / import_local / delete_local =====

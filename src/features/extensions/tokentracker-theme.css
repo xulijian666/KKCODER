@@ -5,6 +5,13 @@
 @import "tailwindcss/theme" layer(theme);
 @import "tailwindcss/utilities" layer(utilities);
 
+/*
+ * 限制 Tailwind v4 源扫描范围到 src/（默认自动扫描整个项目根：
+ * 项目根 RULE.md / CLAUDE.md / AGENTS.md 被规则编辑器保存时会触发
+ * 不必要的重建/整页刷新）。显式 @source 后自动检测关闭。
+ */
+@source "../..";
+
 @custom-variant dark {
   &:where(.dark, .dark *) {
     @slot;

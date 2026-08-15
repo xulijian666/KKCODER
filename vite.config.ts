@@ -52,7 +52,14 @@ export default defineConfig(async () => ({
       ignored: [
         "**/src-tauri/**",
         "**/kkcoder.db*",
-        "**/kkcoder_debug.log"
+        "**/kkcoder_debug.log",
+        // 规则编辑器（MdEditorModal）保存的项目根规则文件：改动不应触发 vite/Tailwind 重建导致整页刷新
+        "RULE.md",
+        "CLAUDE.md",
+        "AGENTS.md",
+        "**/RULE.md",
+        "**/CLAUDE.md",
+        "**/AGENTS.md",
       ],
     },
   },

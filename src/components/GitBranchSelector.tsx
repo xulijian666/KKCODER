@@ -54,7 +54,6 @@ export const GitBranchSelector: React.FC<GitBranchSelectorProps> = ({
   const [open, setOpen] = useState(false);
   const [pulling, setPulling] = useState(false);
   const [initializing, setInitializing] = useState(false);
-  const [lastPullSummary, setLastPullSummary] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [conflictData, setConflictData] = useState<{
     output: string;
@@ -225,10 +224,8 @@ ${switchBlockData.errorOutput}
           output: res.output,
           currentBranch: res.currentBranch || branchInfo?.currentBranch || "当前分支",
         });
-        setLastPullSummary(res.summary || "拉取遇到冲突或异常");
         notifyWarning(res.summary || "Git 拉取更新检测到冲突或异常");
       } else {
-        setLastPullSummary(res.summary);
         notifyInfo(res.summary || "已成功拉取最新代码更新");
         void refreshBranchInfo();
       }
@@ -238,8 +235,7 @@ ${switchBlockData.errorOutput}
         output: errMsg,
         currentBranch: branchInfo?.currentBranch || "当前分支",
       });
-      setLastPullSummary(`拉取失败: ${errMsg}`);
-      notifyWarning("Git 拉取失败");
+      notifyWarning(`Git 拉取失败: ${errMsg}`);
     } finally {
       setPulling(false);
     }
@@ -433,13 +429,6 @@ ${pushInstruction}`;
                 </button>
               </div>
             </div>
-
-            {/* 上次拉取状态摘要 */}
-            {lastPullSummary && (
-              <div className="branch-pull-summary-pill">
-                <span>{lastPullSummary}</span>
-              </div>
-            )}
 
             {/* 分支搜索过滤 */}
             {branchInfo.branches.length > 5 && (

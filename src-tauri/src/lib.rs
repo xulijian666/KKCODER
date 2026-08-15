@@ -245,6 +245,26 @@ fn initialize_database() -> Result<(), rusqlite::Error> {
         [],
     )?;
 
+    // 技能汉化：翻译记录（directory 为键，description_hash 用于检测技能更新后失效）
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS skill_translations (
+            directory TEXT PRIMARY KEY,
+            description_hash TEXT NOT NULL,
+            description_zh TEXT NOT NULL,
+            updated_at INTEGER NOT NULL
+        )",
+        [],
+    )?;
+    // 全文汉化列（详情「完整介绍」）：动态平滑迁移，忽略已存在错误
+    let _ = conn.execute(
+        "ALTER TABLE skill_translations ADD COLUMN description_full_hash TEXT",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE skill_translations ADD COLUMN description_full_zh TEXT",
+        [],
+    );
+
     log_to_file("initialize_database completed successfully.");
     Ok(())
 }
@@ -2376,6 +2396,606 @@ async fn llm_rename_sessions(
     }).await.map_err(|e| format!("Task join error: {}", e))?
 }
 
+// ==================== 技能汉化（描述翻译，单独存库） ====================
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct SkillTranslation {
+    directory: String,
+    #[serde(rename = "descriptionHash")]
+    description_hash: String,
+    #[serde(rename = "descriptionZh")]
+    description_zh: String,
+    #[serde(rename = "descriptionFullZh")]
+    description_full_zh: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct SkillTranslateItem {
+    directory: String,
+    description: String,
+    /// SKILL.md 正文（完整介绍），可选；用于全文汉化状态比对
+    #[serde(rename = "fullDescription", default)]
+    full_description: String,
+}
+
+/// 描述哈希（SHA-256 前 16 位）：技能描述变化（更新）后哈希不匹配，汉化即失效
+fn skill_description_hash(description: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(description.as_bytes());
+    digest.iter().map(|b| format!("{:02x}", b)).take(16).collect::<String>()
+}
+
+/// 查询技能汉化状态：对每个技能返回（有翻译且未过期 → stale=false；否则 stale=true）
+#[derive(Debug, Clone, serde::Serialize)]
+struct SkillTranslationStatus {
+    directory: String,
+    #[serde(rename = "descriptionZh")]
+    description_zh: String,
+    /// true = 无翻译或技能已更新（哈希不匹配），汉化失效
+    stale: bool,
+    #[serde(rename = "descriptionFullZh")]
+    description_full_zh: String,
+    /// true = 无全文翻译或正文已更新，全文汉化失效
+    #[serde(rename = "staleFull")]
+    stale_full: bool,
+}
+
+/// 查询全部技能汉化记录（按当前技能列表比对哈希，返回有效性；含完整介绍汉化）
+#[tauri::command]
+fn get_skill_translations(skills: Vec<SkillTranslateItem>) -> Result<Vec<SkillTranslationStatus>, String> {
+    let db_path = get_db_path();
+    let conn = rusqlite::Connection::open(&db_path).map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT description_hash, description_zh, description_full_hash, description_full_zh \
+             FROM skill_translations WHERE directory = ?1",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let mut out: Vec<SkillTranslationStatus> = Vec::new();
+    for item in &skills {
+        let current_hash = skill_description_hash(&item.description);
+        let current_full_hash = skill_description_hash(&item.full_description);
+        let found = stmt
+            .query_row([&item.directory], |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                ))
+            })
+            .ok();
+        let (zh, stale, full_zh, stale_full) = match found {
+            Some((Some(hash), Some(zh), full_hash, full_zh)) => {
+                let stale = hash != current_hash || zh.is_empty();
+                // 详细介绍基于「描述 + 正文」生成：正文变化或简介失效都视为详细介绍失效
+                let full_ok = !stale
+                    && full_hash.is_some()
+                    && full_zh.is_some()
+                    && full_hash.as_deref() == Some(current_full_hash.as_str())
+                    && !full_zh.as_deref().unwrap_or("").is_empty();
+                (
+                    if stale { String::new() } else { zh },
+                    stale,
+                    if full_ok { full_zh.unwrap_or_default() } else { String::new() },
+                    !full_ok,
+                )
+            }
+            _ => (String::new(), true, String::new(), true),
+        };
+        out.push(SkillTranslationStatus {
+            directory: item.directory.clone(),
+            description_zh: zh,
+            stale,
+            description_full_zh: full_zh,
+            stale_full,
+        });
+    }
+    log_to_file(&format!(
+        "get_skill_translations: {} of {} valid ({} full valid)",
+        out.iter().filter(|t| !t.stale).count(),
+        skills.len(),
+        out.iter().filter(|t| !t.stale_full).count()
+    ));
+    Ok(out)
+}
+
+/// 一键汉化：批量调用用户配置的 LLM 翻译技能描述，结果单独存库（不改原文件）
+#[tauri::command]
+async fn translate_skills(
+    skills: Vec<SkillTranslateItem>,
+    api_url: String,
+    api_key: String,
+    model: String,
+) -> Result<Vec<SkillTranslation>, String> {
+    if api_key.is_empty() {
+        return Err("LLM API Key 未配置（请在设置中心配置）".into());
+    }
+
+    // 过滤空描述
+    let items: Vec<SkillTranslateItem> = skills
+        .into_iter()
+        .filter(|s| !s.description.trim().is_empty())
+        .collect();
+    if items.is_empty() {
+        return Ok(vec![]);
+    }
+
+    tokio::task::spawn_blocking(move || -> Result<Vec<SkillTranslation>, String> {
+        // 分批翻译：单批 ≤10 个。现在每个技能输出「简介 + 详细介绍」两份内容，
+        // 单批输入含正文（截断 3000 字），输出约 4-6 千 tokens，安全可控
+        const BATCH_SIZE: usize = 10;
+        // 并发批次上限：deepseek-v4-flash 官方并发限制 2500，本场景批次数很小，
+        // 保守设 8 即可全并发；避免极端大列表时打满限流
+        const MAX_PARALLEL_BATCHES: usize = 8;
+
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .map_err(|e| format!("HTTP 客户端创建失败: {}", e))?;
+        let api_url_trimmed = api_url.trim_end_matches('/');
+        let url = format!("{}/v1/chat/completions", api_url_trimmed);
+
+        // 并发执行各批（LLM 请求 + JSON 解析在子线程并行，写库统一在主线程）
+        let indexed: Vec<(usize, &[SkillTranslateItem])> = items.chunks(BATCH_SIZE).enumerate().collect();
+        let batch_count = indexed.len();
+        let mut outcomes: Vec<Result<Vec<(String, String, String, String, String)>, String>> =
+            Vec::with_capacity(batch_count);
+        for group in indexed.chunks(MAX_PARALLEL_BATCHES) {
+            // 借用转局部引用，避免 move 闭包按值捕获 client/url 等本体
+            let client_ref = &client;
+            let url_ref = &url;
+            let api_key_ref = &api_key;
+            let model_ref = &model;
+            let group_results: Vec<Result<Vec<(String, String, String, String, String)>, String>> =
+                std::thread::scope(|scope| {
+                    let handles: Vec<_> = group
+                        .iter()
+                        .map(|(batch_index, chunk)| {
+                            scope.spawn(move || {
+                                translate_batch_llm(
+                                    *batch_index,
+                                    batch_count,
+                                    chunk,
+                                    client_ref,
+                                    url_ref,
+                                    api_key_ref,
+                                    model_ref,
+                                )
+                            })
+                        })
+                        .collect();
+                    handles
+                        .into_iter()
+                        .map(|h| h.join().unwrap_or_else(|_| Err("批次线程异常退出".to_string())))
+                        .collect()
+                });
+            outcomes.extend(group_results);
+        }
+
+        // 统一写库（upsert）
+        let db_path = get_db_path();
+        let conn = rusqlite::Connection::open(&db_path).map_err(|e| e.to_string())?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        let mut results: Vec<SkillTranslation> = Vec::new();
+        let mut first_err: Option<String> = None;
+        for outcome in &outcomes {
+            match outcome {
+                Ok(entries) => {
+                    for (directory, hash, zh, full_hash, full_zh) in entries {
+                        if let Err(e) = conn.execute(
+                            "INSERT INTO skill_translations (directory, description_hash, description_zh, description_full_hash, description_full_zh, updated_at)
+                             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                             ON CONFLICT(directory) DO UPDATE SET
+                               description_hash = excluded.description_hash,
+                               description_zh = excluded.description_zh,
+                               description_full_hash = excluded.description_full_hash,
+                               description_full_zh = excluded.description_full_zh,
+                               updated_at = excluded.updated_at",
+                            rusqlite::params![directory, hash, zh, full_hash, full_zh, now],
+                        ) {
+                            log_to_file(&format!("translate_skills: 写库失败 {}: {}", directory, e));
+                            continue;
+                        }
+                        results.push(SkillTranslation {
+                            directory: directory.clone(),
+                            description_hash: hash.clone(),
+                            description_zh: zh.clone(),
+                            description_full_zh: full_zh.clone(),
+                        });
+                    }
+                }
+                Err(e) => {
+                    if first_err.is_none() {
+                        first_err = Some(e.clone());
+                    }
+                }
+            }
+        }
+
+        if results.is_empty() {
+            return Err(first_err.unwrap_or_else(|| "没有任何技能汉化成功".to_string()));
+        }
+        if let Some(err) = first_err {
+            log_to_file(&format!(
+                "translate_skills: partial failure ({} ok) - {}",
+                results.len(),
+                err
+            ));
+            return Err(format!("{}；已成功汉化 {} 个技能，可再次点击一键汉化补齐剩余", err, results.len()));
+        }
+
+        log_to_file(&format!("translate_skills: saved {} translations", results.len()));
+        Ok(results)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+}
+
+/// 单批技能汉化：构造提示词 → 调用 LLM（max_tokens 自适应）→ 解析 JSON，
+/// 返回 (directory, descriptionHash, descriptionZh, fullHash, fullZh) 五元组：
+/// descriptionZh = 精炼简介（≤100 字）；fullZh = 详细介绍（大模型撰写的介绍，非原文翻译）。
+/// 供并发批次线程调用。
+fn translate_batch_llm(
+    batch_index: usize,
+    batch_count: usize,
+    chunk: &[SkillTranslateItem],
+    client: &reqwest::blocking::Client,
+    url: &str,
+    api_key: &str,
+    model: &str,
+) -> Result<Vec<(String, String, String, String, String)>, String> {
+    // 1. 构造单批 prompt
+    let mut prompt_parts: Vec<String> = Vec::new();
+    prompt_parts.push(
+        "你是一个 AI 技能（Skill）文档专家。请为以下每个技能生成两个中文内容：\n\
+         1. descriptionZh：精炼简介，严格控制在 100 字以内（含标点），不要废话，直接说明这个技能能干什么，让用户一眼知道\n\
+         2. descriptionFullZh：详细介绍，撰写一段 200-400 字的中文介绍，介绍技能的功能、适用场景与用法，是「介绍」而非逐字翻译原文\n"
+            .into(),
+    );
+    prompt_parts.push(
+        "要求：\n1. 保留技术专有名词（如 API、CLI、Git、MCP、JSON 等）不翻译\n2. 只输出 JSON，不要任何其他文字\n\n"
+            .into(),
+    );
+    for (i, item) in chunk.iter().enumerate() {
+        let body_preview: String = item.full_description.chars().take(3000).collect();
+        prompt_parts.push(format!(
+            "技能 {}（目录: {}）:\n描述: {}\n正文: {}\n\n",
+            i + 1,
+            item.directory,
+            item.description.trim(),
+            body_preview
+        ));
+    }
+    prompt_parts.push(format!(
+        "请严格按以下 JSON 格式返回，共 {} 个技能，必须全部返回：\n\
+         {{\"translations\": [{{\"directory\": \"技能目录\", \"descriptionZh\": \"精炼简介\", \"descriptionFullZh\": \"详细介绍\"}}, ...]}}",
+        chunk.len()
+    ));
+    let prompt = prompt_parts.join("");
+
+    // 2. 调用 LLM：max_tokens 自适应——deepseek-v4-flash 输出上限 384K，首选 32768；
+    //    部分服务端上限较小时（如 DeepSeek 官方旧接口 8192），400 且提示 token
+    //    上限相关时回退 8192 重试一次
+    let call_batch = |prompt: &str, max_tokens: u32| -> Result<(reqwest::StatusCode, String), String> {
+        let body = serde_json::json!({
+            "model": model,
+            "messages": [
+                {"role": "system", "content": "你是技术文档汉化专家，只输出JSON。"},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.3,
+            "max_tokens": max_tokens
+        });
+        let resp = client
+            .post(url)
+            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .map_err(|e| format!("第 {} 批请求失败: {}", batch_index + 1, e))?;
+        let status = resp.status();
+        let text = resp
+            .text()
+            .map_err(|e| format!("第 {} 批读取响应失败: {}", batch_index + 1, e))?;
+        Ok((status, text))
+    };
+
+    let mut resp_text: String = String::new();
+    let mut status = reqwest::StatusCode::OK;
+    let mut max_tokens = 32_768u32;
+    for attempt in 0..2u32 {
+        let (s, t) = call_batch(&prompt, max_tokens)?;
+        if s.is_success() {
+            status = s;
+            resp_text = t;
+            break;
+        }
+        let lowered = t.to_lowercase();
+        let token_limit_rejected = s == reqwest::StatusCode::BAD_REQUEST
+            && attempt == 0
+            && (lowered.contains("max_tokens") || lowered.contains("context length"));
+        if token_limit_rejected {
+            log_to_file(&format!(
+                "translate_skills: batch {}/{} rejected max_tokens={}, falling back to 8192",
+                batch_index + 1,
+                batch_count,
+                max_tokens
+            ));
+            max_tokens = 8192;
+            continue;
+        }
+        status = s;
+        resp_text = t;
+        break;
+    }
+
+    log_to_file(&format!(
+        "translate_skills: batch {}/{} calling {} with model {} for {} skills (max_tokens={})",
+        batch_index + 1,
+        batch_count,
+        url,
+        model,
+        chunk.len(),
+        max_tokens
+    ));
+
+    if !status.is_success() {
+        let err_preview: String = resp_text.chars().take(200).collect();
+        return Err(format!("第 {} 批 LLM API 返回错误 {}: {}", batch_index + 1, status, err_preview));
+    }
+    let resp_json: serde_json::Value = serde_json::from_str(&resp_text)
+        .map_err(|e| format!("第 {} 批解析 LLM 响应失败: {}", batch_index + 1, e))?;
+    let content = resp_json
+        .get("choices")
+        .and_then(|c| c.get(0))
+        .and_then(|c| c.get("message"))
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_str())
+        .ok_or_else(|| format!("第 {} 批响应格式异常：缺少 choices[0].message.content", batch_index + 1))?;
+
+    // 诊断：记录响应长度与 finish_reason（length=max_tokens 截断；stop=正常完成）
+    let finish_reason = resp_json
+        .get("choices")
+        .and_then(|c| c.get(0))
+        .and_then(|c| c.get("finish_reason"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    log_to_file(&format!(
+        "translate_skills: batch {}/{} got response ({} chars, finish_reason={})",
+        batch_index + 1,
+        batch_count,
+        content.chars().count(),
+        finish_reason
+    ));
+
+    // 提取 JSON（可能被 markdown 代码块包裹）
+    let json_str = if let Some(start) = content.find('{') {
+        if let Some(end) = content.rfind('}') {
+            &content[start..=end]
+        } else {
+            content
+        }
+    } else {
+        content
+    };
+    let translations_json: serde_json::Value = serde_json::from_str(json_str).map_err(|e| {
+        let raw_preview: String = json_str.chars().take(200).collect();
+        format!("第 {} 批解析汉化 JSON 失败: {} (raw: {})", batch_index + 1, e, raw_preview)
+    })?;
+    let arr = translations_json
+        .get("translations")
+        .and_then(|t| t.as_array())
+        .ok_or_else(|| format!("第 {} 批 JSON 缺少 translations 数组", batch_index + 1))?;
+
+    // 3. 按 directory 匹配，返回 (directory, hash, zh, full_hash, full_zh) 五元组
+    let mut entries: Vec<(String, String, String, String, String)> = Vec::new();
+    for item in chunk {
+        let Some(entry) = arr.iter().find(|t| {
+            t.get("directory").and_then(|v| v.as_str()) == Some(item.directory.as_str())
+        }) else {
+            log_to_file(&format!("translate_skills: no translation for {}", item.directory));
+            continue;
+        };
+        let zh = entry
+            .get("descriptionZh")
+            .and_then(|t| t.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let full_zh = entry
+            .get("descriptionFullZh")
+            .and_then(|t| t.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if zh.is_empty() && full_zh.is_empty() {
+            log_to_file(&format!("translate_skills: no translation for {}", item.directory));
+            continue;
+        }
+        let hash = skill_description_hash(&item.description);
+        let full_hash = skill_description_hash(&item.full_description);
+        entries.push((item.directory.clone(), hash, zh, full_hash, full_zh));
+    }
+    Ok(entries)
+}
+
+/// 单技能完整介绍汉化（详情页按需调用）：LLM 翻译一句话描述 + SKILL.md 全文，
+/// 结果单独存库（description_full_zh），不影响原文件。
+#[tauri::command]
+async fn translate_skill_full(
+    directory: String,
+    description: String,
+    full_description: String,
+    api_url: String,
+    api_key: String,
+    model: String,
+) -> Result<serde_json::Value, String> {
+    if api_key.is_empty() {
+        return Err("LLM API Key 未配置（请在设置中心配置）".into());
+    }
+    if full_description.trim().is_empty() {
+        return Err("该技能没有完整介绍（SKILL.md 正文为空）".into());
+    }
+
+    tokio::task::spawn_blocking(move || -> Result<serde_json::Value, String> {
+        // 1. 构造提示词：一句话简介 + 完整正文
+        let prompt = format!(
+            "你是一个技术文档汉化专家。请把以下 AI 技能（Skill）的内容翻译成简洁、准确、专业的中文。\n\
+             要求：\n1. 保留技术专有名词（如 API、CLI、Git、MCP、JSON 等）不翻译\n\
+             2. descriptionZh 是一句话精炼简介，严格控制在 100 字以内（含标点），让用户一眼知道这是什么技能\n\
+             3. descriptionFullZh 完整翻译正文，保留 Markdown 结构（标题、列表、代码块内容也翻译注释与说明文字）\n\
+             4. 只输出 JSON，不要任何其他文字\n\n\
+             技能目录: {}\n\
+             一句话描述:\n{}\n\n\
+             完整介绍（SKILL.md 正文）:\n{}\n\n\
+             请严格按以下 JSON 格式返回：\n\
+             {{\"descriptionZh\": \"100字以内的中文精炼简介\", \"descriptionFullZh\": \"完整中文介绍\"}}",
+            directory,
+            description.trim(),
+            full_description.trim()
+        );
+
+        // 2. 调用 LLM（deepseek-v4-flash 输出上限 384K，max_tokens 32768 足够）
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(180))
+            .build()
+            .map_err(|e| format!("HTTP 客户端创建失败: {}", e))?;
+        let api_url_trimmed = api_url.trim_end_matches('/');
+        let url = format!("{}/v1/chat/completions", api_url_trimmed);
+        let body = serde_json::json!({
+            "model": model,
+            "messages": [
+                {"role": "system", "content": "你是技术文档汉化专家，只输出JSON。"},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.3,
+            "max_tokens": 32768
+        });
+        log_to_file(&format!(
+            "translate_skill_full: calling {} with model {} for directory {} (full {} chars)",
+            url,
+            model,
+            directory,
+            full_description.chars().count()
+        ));
+        let resp = client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .map_err(|e| format!("LLM 请求失败: {}", e))?;
+        let status = resp.status();
+        let resp_text = resp.text().map_err(|e| format!("读取响应失败: {}", e))?;
+        if !status.is_success() {
+            let err_preview: String = resp_text.chars().take(200).collect();
+            return Err(format!("LLM API 返回错误 {}: {}", status, err_preview));
+        }
+        let resp_json: serde_json::Value =
+            serde_json::from_str(&resp_text).map_err(|e| format!("解析 LLM 响应失败: {}", e))?;
+        let content = resp_json
+            .get("choices")
+            .and_then(|c| c.get(0))
+            .and_then(|c| c.get("message"))
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_str())
+            .ok_or("LLM 响应格式异常：缺少 choices[0].message.content")?;
+        let finish_reason = resp_json
+            .get("choices")
+            .and_then(|c| c.get(0))
+            .and_then(|c| c.get("finish_reason"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        log_to_file(&format!(
+            "translate_skill_full: got response ({} chars, finish_reason={})",
+            content.chars().count(),
+            finish_reason
+        ));
+
+        // 提取 JSON
+        let json_str = if let Some(start) = content.find('{') {
+            if let Some(end) = content.rfind('}') {
+                &content[start..=end]
+            } else {
+                content
+            }
+        } else {
+            content
+        };
+        let parsed: serde_json::Value = serde_json::from_str(json_str).map_err(|e| {
+            let raw_preview: String = json_str.chars().take(200).collect();
+            format!("解析汉化 JSON 失败: {} (raw: {})", e, raw_preview)
+        })?;
+        let zh = parsed
+            .get("descriptionZh")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let full_zh = parsed
+            .get("descriptionFullZh")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if full_zh.is_empty() {
+            return Err("LLM 未返回完整介绍翻译".to_string());
+        }
+
+        // 3. 写库（upsert）：全文汉化 + 一句话汉化一并更新
+        let db_path = get_db_path();
+        let conn = rusqlite::Connection::open(&db_path).map_err(|e| e.to_string())?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        let hash = skill_description_hash(&description);
+        let full_hash = skill_description_hash(&full_description);
+        conn.execute(
+            "INSERT INTO skill_translations (directory, description_hash, description_zh, description_full_hash, description_full_zh, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(directory) DO UPDATE SET
+               description_hash = excluded.description_hash,
+               description_zh = CASE WHEN excluded.description_zh <> '' THEN excluded.description_zh ELSE description_zh END,
+               description_full_hash = excluded.description_full_hash,
+               description_full_zh = excluded.description_full_zh,
+               updated_at = excluded.updated_at",
+            rusqlite::params![directory, hash, zh, full_hash, full_zh, now],
+        )
+        .map_err(|e| format!("写库失败: {}", e))?;
+        log_to_file(&format!(
+            "translate_skill_full: saved full translation for {} (zh {} chars, full {} chars)",
+            directory,
+            zh.chars().count(),
+            full_zh.chars().count()
+        ));
+        Ok(serde_json::json!({
+            "directory": directory,
+            "descriptionZh": zh,
+            "descriptionFullZh": full_zh,
+        }))
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+}
+
+/// 清空全部技能汉化记录（重新汉化用）
+#[tauri::command]
+fn clear_skill_translations() -> Result<(), String> {
+    let db_path = get_db_path();
+    let conn = rusqlite::Connection::open(&db_path).map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM skill_translations", [])
+        .map_err(|e| e.to_string())?;
+    log_to_file("clear_skill_translations: all records cleared");
+    Ok(())
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct ProjectFileEntry {
     name: String,
@@ -3524,6 +4144,10 @@ pub fn run() {
             check_if_paths_exist,
             auto_rename_sessions,
             llm_rename_sessions,
+            get_skill_translations,
+            translate_skills,
+            translate_skill_full,
+            clear_skill_translations,
             search_session_contents,
             read_project_files,
             read_project_directory,
@@ -3566,7 +4190,14 @@ pub fn run() {
             tokentracker::tt_ensure_server,
             tokentracker::tt_proxy,
             skills_hub::skills_hub_query,
-            skills_hub::skills_hub_mutate
+            skills_hub::skills_hub_mutate,
+            skills_hub::get_skill_scan_sources,
+            skills_hub::set_skill_scan_source_enabled,
+            skills_hub::add_skill_scan_source,
+            skills_hub::remove_skill_scan_source,
+            skills_hub::blacklist_skill,
+            skills_hub::get_skill_blacklist,
+            skills_hub::remove_skill_blacklist
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
