@@ -1,22 +1,45 @@
-// 设置面板：左侧精简导航 + 右侧 CC-GUI 风格 pref 布局
 import React, { useState, useEffect, useCallback } from "react";
 import {
+  Activity,
   ArrowLeft,
   Bell,
   Bot,
   Bug,
+  Check,
+  Copy,
+  Cpu,
+  ExternalLink,
   FileText,
   FolderKanban,
   Globe,
   Info,
   Keyboard,
+  Layers,
   MessageSquare,
   Palette,
   Sliders,
+  Sparkles,
   TerminalSquare,
   Wrench,
   type LucideIcon,
 } from "lucide-react";
+
+const GitHubIcon: React.FC<{ size?: number; className?: string }> = ({ size = 14, className = "" }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="currentColor"
+    className={className}
+    aria-hidden="true"
+  >
+    <path
+      fillRule="evenodd"
+      clipRule="evenodd"
+      d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"
+    />
+  </svg>
+);
 import { invoke } from "@tauri-apps/api/core";
 import { DirectoryPickerModal } from "./DirectoryPickerModal";
 import {
@@ -452,6 +475,42 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ show, onClose, onS
     localStorage.setItem(TERMINAL_SCHEME_MODE_KEY, terminalSchemeMode);
     dispatchTerminalSchemeChange();
   }, [terminalSchemeMode]);
+
+  // --- 关于页面状态与辅助函数 ---
+  const [copiedVersion, setCopiedVersion] = useState(false);
+  const [copiedDiag, setCopiedDiag] = useState(false);
+
+  const handleCopyVersion = () => {
+    navigator.clipboard.writeText("KKCoder v1.2.0").then(() => {
+      setCopiedVersion(true);
+      notifySuccess("版本号已复制到剪贴板");
+      setTimeout(() => setCopiedVersion(false), 2000);
+    });
+  };
+
+  const handleCopyDiagnosticInfo = () => {
+    const diag = [
+      `=== KKCoder Diagnostic Info ===`,
+      `Version: v1.2.0`,
+      `Platform: ${navigator.userAgent}`,
+      `Theme: ${theme}`,
+      `Claude Terminal Mode: ${claudeTerminalMode}`,
+      `Interaction Mode: ${claudeInteractionMode}`,
+      `Repository: https://github.com/xulijian666/KKCODER`,
+      `Timestamp: ${new Date().toISOString()}`,
+    ].join("\n");
+    navigator.clipboard.writeText(diag).then(() => {
+      setCopiedDiag(true);
+      notifySuccess("系统诊断信息已复制");
+      setTimeout(() => setCopiedDiag(false), 2000);
+    });
+  };
+
+  const openExternalUrl = (url: string) => {
+    import("@tauri-apps/plugin-opener")
+      .then(({ openUrl }) => openUrl(url))
+      .catch(() => window.open(url, "_blank"));
+  };
 
   const applyCustomScheme = () => {
     const result = parseWindowsTerminalScheme(terminalSchemeJson);
@@ -1447,16 +1506,177 @@ return (
             )}
 
             {activeMenu === "about" && (
-              <div className="settings-content about-page">
-                <img className="about-logo" src={kkcoderLogo} alt="KKCoder" draggable={false} />
-                <div className="about-title">KKCoder AI 终端管理器</div>
-                <div className="about-version">版本 v1.2.0</div>
-                <div className="about-desc">
-                  极简、现代、克制的 AI 终端托管管理器。基于 Tauri 与 React，为硬核开发者打造丝滑的原生终端心流体验。
-                </div>
-                <div className="about-divider" />
-                <div className="about-meta">
-                  <p>© 2026 KKCoder Studio</p>
+              <div className="settings-content settings-basic-surface">
+                <div className="about-page-wrapper">
+                  {/* 品牌 Hero 卡片 */}
+                  <div className="about-hero-card">
+                    <div className="about-hero-glow" />
+                    <div className="about-logo-wrapper">
+                      <img className="about-logo" src={kkcoderLogo} alt="KKCoder" draggable={false} />
+                    </div>
+                    <div className="about-title-row">
+                      <div className="about-title">KKCoder AI 终端管理器</div>
+                      <button
+                        type="button"
+                        className="about-version-badge"
+                        onClick={handleCopyVersion}
+                        title="点击复制版本号"
+                      >
+                        {copiedVersion ? <Check size={11} /> : <Copy size={11} />}
+                        <span>v1.2.0</span>
+                      </button>
+                    </div>
+                    <div className="about-tagline">极简 · 现代 · 克制的原生 AI 终端心流工作台</div>
+                    <div className="about-desc">
+                      基于 Tauri 2.x 与 React 19 构建，深度融合多 Agent 统一托管、Rust 原生终端管道与 TokenTracker 吞吐洞察，为开发者打造丝滑的原生终端心流体验。
+                    </div>
+                    <div className="about-actions">
+                      <button
+                        type="button"
+                        className="about-action-btn about-action-btn-primary"
+                        onClick={() => openExternalUrl("https://github.com/xulijian666/KKCODER")}
+                      >
+                        <GitHubIcon size={14} />
+                        <span>GitHub 仓库</span>
+                        <ExternalLink size={11} />
+                      </button>
+                      <button
+                        type="button"
+                        className="about-action-btn about-action-btn-secondary"
+                        onClick={() => openExternalUrl("https://github.com/xulijian666/KKCODER/issues")}
+                      >
+                        <Bug size={13} />
+                        <span>问题与建议</span>
+                        <ExternalLink size={11} />
+                      </button>
+                      <button
+                        type="button"
+                        className="about-action-btn about-action-btn-secondary"
+                        onClick={() => openExternalUrl("https://github.com/xulijian666/KKCODER/releases")}
+                      >
+                        <Sparkles size={13} />
+                        <span>版本发布日志</span>
+                        <ExternalLink size={11} />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 核心特性 */}
+                  <div className="settings-pref-group">
+                    <div className="settings-pref-card-label">
+                      <Sparkles size={12} aria-hidden />
+                      <span>核心架构与特性</span>
+                    </div>
+                    <div className="about-features-grid">
+                      <div className="about-feature-card">
+                        <div className="about-feature-icon-box">
+                          <TerminalSquare size={18} />
+                        </div>
+                        <div className="about-feature-content">
+                          <div className="about-feature-title">原生终端心流</div>
+                          <div className="about-feature-desc">Rust PTY 底层通道，Xterm.js 硬件加速渲染与零延迟流式输出。</div>
+                        </div>
+                      </div>
+                      <div className="about-feature-card">
+                        <div className="about-feature-icon-box">
+                          <Bot size={18} />
+                        </div>
+                        <div className="about-feature-content">
+                          <div className="about-feature-title">多 Agent 统一托管</div>
+                          <div className="about-feature-desc">无缝纳管 Claude Code、Codex、Antigravity 等 CLI 会话与上下文。</div>
+                        </div>
+                      </div>
+                      <div className="about-feature-card">
+                        <div className="about-feature-icon-box">
+                          <Activity size={18} />
+                        </div>
+                        <div className="about-feature-content">
+                          <div className="about-feature-title">Token 深度洞察</div>
+                          <div className="about-feature-desc">精准追踪 Token 消耗、活跃天数、费用趋势与 3D 活动热力图。</div>
+                        </div>
+                      </div>
+                      <div className="about-feature-card">
+                        <div className="about-feature-icon-box">
+                          <Layers size={18} />
+                        </div>
+                        <div className="about-feature-content">
+                          <div className="about-feature-title">全生态扩展系统</div>
+                          <div className="about-feature-desc">支持 Skills 技能集市、MCP 服务器配置、自定义短语与快捷工具。</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 运行环境与技术规格 */}
+                  <div className="settings-pref-group">
+                    <div className="settings-pref-card-label">
+                      <Cpu size={12} aria-hidden />
+                      <span>运行环境与系统规格</span>
+                    </div>
+                    <div className="settings-pref-card">
+                      <div className="about-spec-grid">
+                        <div className="about-spec-item">
+                          <span className="about-spec-label">当前版本</span>
+                          <span className="about-spec-value">v1.2.0 (Stable)</span>
+                        </div>
+                        <div className="about-spec-item">
+                          <span className="about-spec-label">开源项目</span>
+                          <span className="about-spec-value">xulijian666/KKCODER</span>
+                        </div>
+                        <div className="about-spec-item">
+                          <span className="about-spec-label">底层运行时</span>
+                          <span className="about-spec-value">Tauri 2.x • Rust Core</span>
+                        </div>
+                        <div className="about-spec-item">
+                          <span className="about-spec-label">前端架构</span>
+                          <span className="about-spec-value">React 19 • TypeScript • Vite</span>
+                        </div>
+                        <div className="about-spec-item">
+                          <span className="about-spec-label">终端渲染引擎</span>
+                          <span className="about-spec-value">Xterm.js • WebGL Accelerated</span>
+                        </div>
+                        <div className="about-spec-item">
+                          <span className="about-spec-label">开源许可</span>
+                          <span className="about-spec-value">MIT License</span>
+                        </div>
+                      </div>
+                      <div className="settings-pref-row" style={{ borderTop: "1px solid var(--border-color)", paddingTop: "12px", marginTop: "4px" }}>
+                        <div className="settings-pref-meta">
+                          <div className="settings-pref-title">运行环境诊断</div>
+                          <div className="settings-pref-desc">一键复制当前客户端版本与系统运行时信息，便于提交 Issue 反馈</div>
+                        </div>
+                        <div className="settings-pref-control">
+                          <button
+                            type="button"
+                            className="about-action-btn about-action-btn-secondary"
+                            onClick={handleCopyDiagnosticInfo}
+                          >
+                            {copiedDiag ? <Check size={13} /> : <Copy size={13} />}
+                            <span>{copiedDiag ? "已复制诊断信息" : "复制诊断信息"}</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 底部致谢与版权 */}
+                  <div className="about-footer">
+                    <div className="about-footer-links">
+                      <span>致谢开源生态：</span>
+                      <span>Tauri</span>
+                      <span>·</span>
+                      <span>React</span>
+                      <span>·</span>
+                      <span>Lucide</span>
+                      <span>·</span>
+                      <span>Monaco Editor</span>
+                      <span>·</span>
+                      <span>Xterm.js</span>
+                    </div>
+                    <div className="about-footer-copy">
+                      © 2026 KKCoder Studio. Crafted with craftsmanship for developers.
+                    </div>
+                  </div>
                 </div>
               </div>
             )}

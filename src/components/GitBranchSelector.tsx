@@ -98,12 +98,52 @@ export const GitBranchSelector: React.FC<GitBranchSelectorProps> = ({
     return () => window.removeEventListener("kkcoder-refresh-project-tree", handleGlobalRefresh);
   }, [directory, refreshBranchInfo]);
 
-  // 点击外侧关闭下拉菜单
+  const [dropdownStyle, setDropdownStyle] = useState<React.CSSProperties>({});
+
+  const updatePosition = useCallback(() => {
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const dropdownWidth = branchInfo?.isGitRepo ? 340 : 300;
+    const margin = 8;
+
+    const bottom = window.innerHeight - rect.top + margin;
+
+    // 默认左对齐，但若超出窗口右边界，则右对齐/限制在窗口内，绝不溢出被侧边栏遮挡
+    let left = rect.left;
+    if (left + dropdownWidth > window.innerWidth - margin) {
+      left = Math.max(margin, window.innerWidth - dropdownWidth - margin);
+    }
+
+    setDropdownStyle({
+      position: "fixed",
+      bottom: `${bottom}px`,
+      left: `${left}px`,
+      zIndex: 99999,
+    });
+  }, [branchInfo?.isGitRepo]);
+
+  useEffect(() => {
+    if (open) {
+      updatePosition();
+      window.addEventListener("resize", updatePosition);
+      window.addEventListener("scroll", updatePosition, true);
+      return () => {
+        window.removeEventListener("resize", updatePosition);
+        window.removeEventListener("scroll", updatePosition, true);
+      };
+    }
+  }, [open, updatePosition]);
+
+  // 点击外侧关闭下拉菜单（通过 portal 挂载到 body 时兼容内部点击）
   useEffect(() => {
     if (!open) return;
     const handleMouseDown = (event: MouseEvent) => {
-      const node = containerRef.current;
-      if (node && !node.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(target) &&
+        !(target as Element).closest?.(".branch-dropdown")
+      ) {
         setOpen(false);
       }
     };
@@ -304,36 +344,40 @@ ${pushInstruction}`;
           />
         </button>
 
-        {open && (
-          <div
-            className="branch-dropdown branch-init-dropdown"
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="branch-init-card">
-              <div className="branch-init-icon-wrap">
-                <GitBranch size={22} className="branch-init-icon" />
+        {open &&
+          typeof document !== "undefined" &&
+          createPortal(
+            <div
+              className="branch-dropdown branch-init-dropdown"
+              style={dropdownStyle}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="branch-init-card">
+                <div className="branch-init-icon-wrap">
+                  <GitBranch size={22} className="branch-init-icon" />
+                </div>
+                <div className="branch-init-title">未检测到 Git 仓库</div>
+                <div className="branch-init-desc">
+                  当前项目目录尚未建立版本控制。初始化后即可使用分支管理、代码追踪与智能变更拉取。
+                </div>
+                <button
+                  type="button"
+                  className="branch-init-submit-btn"
+                  onClick={() => void handleInitGitRepo()}
+                  disabled={initializing}
+                >
+                  {initializing ? (
+                    <Loader2 size={13} className="chat-spin-icon" />
+                  ) : (
+                    <Sparkles size={13} />
+                  )}
+                  <span>{initializing ? "正在初始化..." : "初始化 Git 仓库 (git init)"}</span>
+                </button>
               </div>
-              <div className="branch-init-title">未检测到 Git 仓库</div>
-              <div className="branch-init-desc">
-                当前项目目录尚未建立版本控制。初始化后即可使用分支管理、代码追踪与智能变更拉取。
-              </div>
-              <button
-                type="button"
-                className="branch-init-submit-btn"
-                onClick={() => void handleInitGitRepo()}
-                disabled={initializing}
-              >
-                {initializing ? (
-                  <Loader2 size={13} className="chat-spin-icon" />
-                ) : (
-                  <Sparkles size={13} />
-                )}
-                <span>{initializing ? "正在初始化..." : "初始化 Git 仓库 (git init)"}</span>
-              </button>
-            </div>
-          </div>
-        )}
+            </div>,
+            document.body,
+          )}
       </div>
     );
   }
@@ -382,106 +426,110 @@ ${pushInstruction}`;
           />
         </button>
 
-        {open && (
-          <div
-            className="branch-dropdown"
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* 顶栏：当前分支 + 上游状态 + 拉取更新 + 新建分支 */}
-            <div className="branch-dropdown-header">
-              <div className="branch-dropdown-header-title">
-                <GitBranch size={13} className="branch-header-icon" />
-                <span className="branch-header-name" title={branchInfo.currentBranch}>
-                  {branchInfo.currentBranch}
-                </span>
-                <span
-                  className={`branch-upstream-badge ${hasUpstream ? "is-tracked" : ""}`}
-                  title={pullButtonTitle}
-                >
-                  {hasUpstream ? branchInfo.upstreamBranch : hasRemote ? "无上游" : "纯本地"}
-                </span>
-              </div>
-              <div className="branch-dropdown-header-actions">
-                <button
-                  type="button"
-                  className={`branch-action-btn ${!canPull ? "is-disabled" : ""}`}
-                  onClick={canPull ? handlePullUpdates : undefined}
-                  disabled={pulling || !canPull}
-                  title={pullButtonTitle}
-                >
-                  {pulling ? (
-                    <Loader2 size={12} className="chat-spin-icon" />
-                  ) : (
-                    <Download size={12} />
-                  )}
-                  <span>{pulling ? "拉取中" : "拉取"}</span>
-                </button>
-                <button
-                  type="button"
-                  className={`branch-action-btn branch-smart-commit-btn ${!hasChanges ? "is-disabled" : ""}`}
-                  onClick={hasChanges ? handleSmartCommit : undefined}
-                  disabled={!hasChanges}
-                  title={commitButtonTitle}
-                >
-                  <Sparkles size={11} className="branch-sparkles-icon" />
-                  <span>智能提交</span>
-                </button>
-              </div>
-            </div>
-
-            {/* 分支搜索过滤 */}
-            {branchInfo.branches.length > 5 && (
-              <div className="branch-search-box">
-                <Search size={11} className="branch-search-icon" />
-                <input
-                  type="text"
-                  className="branch-search-input"
-                  placeholder="搜索分支..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                />
-                {searchQuery && (
+        {open &&
+          typeof document !== "undefined" &&
+          createPortal(
+            <div
+              className="branch-dropdown"
+              style={dropdownStyle}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* 顶栏：当前分支 + 上游状态 + 拉取更新 + 新建分支 */}
+              <div className="branch-dropdown-header">
+                <div className="branch-dropdown-header-title">
+                  <GitBranch size={13} className="branch-header-icon" />
+                  <span className="branch-header-name" title={branchInfo.currentBranch}>
+                    {branchInfo.currentBranch}
+                  </span>
+                  <span
+                    className={`branch-upstream-badge ${hasUpstream ? "is-tracked" : ""}`}
+                    title={pullButtonTitle}
+                  >
+                    {hasUpstream ? branchInfo.upstreamBranch : hasRemote ? "无上游" : "纯本地"}
+                  </span>
+                </div>
+                <div className="branch-dropdown-header-actions">
                   <button
                     type="button"
-                    className="branch-search-clear"
-                    onClick={() => setSearchQuery("")}
+                    className={`branch-action-btn ${!canPull ? "is-disabled" : ""}`}
+                    onClick={canPull ? handlePullUpdates : undefined}
+                    disabled={pulling || !canPull}
+                    title={pullButtonTitle}
                   >
-                    <X size={10} />
+                    {pulling ? (
+                      <Loader2 size={12} className="chat-spin-icon" />
+                    ) : (
+                      <Download size={12} />
+                    )}
+                    <span>{pulling ? "拉取中" : "拉取"}</span>
                   </button>
+                  <button
+                    type="button"
+                    className={`branch-action-btn branch-smart-commit-btn ${!hasChanges ? "is-disabled" : ""}`}
+                    onClick={hasChanges ? handleSmartCommit : undefined}
+                    disabled={!hasChanges}
+                    title={commitButtonTitle}
+                  >
+                    <Sparkles size={11} className="branch-sparkles-icon" />
+                    <span>智能提交</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* 分支搜索过滤 */}
+              {branchInfo.branches.length > 5 && (
+                <div className="branch-search-box">
+                  <Search size={11} className="branch-search-icon" />
+                  <input
+                    type="text"
+                    className="branch-search-input"
+                    placeholder="搜索分支..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                  />
+                  {searchQuery && (
+                    <button
+                      type="button"
+                      className="branch-search-clear"
+                      onClick={() => setSearchQuery("")}
+                    >
+                      <X size={10} />
+                    </button>
+                  )}
+                </div>
+              )}
+
+              <div className="branch-dropdown-divider" />
+              <div className="branch-dropdown-section-title">本地分支 · Local Branches</div>
+
+              {/* 分支列表 */}
+              <div className="branch-dropdown-list">
+                {filteredBranches.length > 0 ? (
+                  filteredBranches.map((branch) => {
+                    const isCurrent = branch === branchInfo.currentBranch;
+                    return (
+                      <div
+                        key={branch}
+                        className={`branch-dropdown-item ${isCurrent ? "active" : ""}`}
+                        onClick={() => void handleSwitchBranch(branch)}
+                        title={`点击切换到分支: ${branch}`}
+                      >
+                        <GitBranch size={12} className="branch-item-icon" />
+                        <span className="branch-item-name">{branch}</span>
+                        {isCurrent && (
+                          <Check size={12} strokeWidth={2.5} className="branch-item-check" />
+                        )}
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="branch-dropdown-empty">未找到匹配分支</div>
                 )}
               </div>
-            )}
-
-            <div className="branch-dropdown-divider" />
-            <div className="branch-dropdown-section-title">本地分支 · Local Branches</div>
-
-            {/* 分支列表 */}
-            <div className="branch-dropdown-list">
-              {filteredBranches.length > 0 ? (
-                filteredBranches.map((branch) => {
-                  const isCurrent = branch === branchInfo.currentBranch;
-                  return (
-                    <div
-                      key={branch}
-                      className={`branch-dropdown-item ${isCurrent ? "active" : ""}`}
-                      onClick={() => void handleSwitchBranch(branch)}
-                      title={`点击切换到分支: ${branch}`}
-                    >
-                      <GitBranch size={12} className="branch-item-icon" />
-                      <span className="branch-item-name">{branch}</span>
-                      {isCurrent && (
-                        <Check size={12} strokeWidth={2.5} className="branch-item-check" />
-                      )}
-                    </div>
-                  );
-                })
-              ) : (
-                <div className="branch-dropdown-empty">未找到匹配分支</div>
-              )}
-            </div>
-          </div>
-        )}
+            </div>,
+            document.body,
+          )}
       </div>
 
       {/* Git 冲突/错误弹窗：支持一键交给 AI 解决 */}

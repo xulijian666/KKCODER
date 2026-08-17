@@ -11,10 +11,9 @@ import { cn } from "../../lib/cn";
 
 const TRIGGER_BASE =
   "relative inline-flex items-center justify-between gap-2 rounded-lg border " +
-  "border-oai-gray-200 bg-white text-oai-black transition-colors " +
-  "hover:border-oai-gray-300 focus:outline-none focus-visible:ring-2 " +
-  "focus-visible:ring-oai-brand-500 dark:border-oai-gray-800 " +
-  "dark:bg-oai-gray-900 dark:text-white dark:hover:border-oai-gray-700";
+  "border-[var(--border-color)] bg-[var(--bg-active-item)] text-[var(--text-primary)] transition-colors " +
+  "hover:border-[var(--color-primary)] hover:text-[var(--color-primary)] focus:outline-none focus-visible:ring-1 " +
+  "focus-visible:ring-[var(--color-primary)]";
 
 /**
  * @param {object} props
@@ -60,16 +59,16 @@ export function Select({
         className={cn(
           TRIGGER_BASE,
           disabled &&
-            "cursor-not-allowed opacity-50 hover:border-oai-gray-200 dark:hover:border-oai-gray-800",
+            "cursor-not-allowed opacity-50 hover:border-[var(--border-color)]",
           className,
         )}
       >
-        <span className="flex min-w-0 items-center gap-2">
+        <span className="flex min-w-0 items-center gap-2 font-mono">
           {leadingIcon}
           <BaseSelect.Value className="truncate" />
         </span>
         <ChevronDown
-          className="h-3.5 w-3.5 shrink-0 text-oai-gray-500 dark:text-oai-gray-400"
+          className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)] opacity-70"
           aria-hidden
         />
       </BaseSelect.Trigger>
@@ -83,8 +82,7 @@ export function Select({
           <BaseSelect.Popup
             className={cn(
               "max-h-[min(18rem,var(--available-height))] origin-[var(--transform-origin)] overflow-y-auto",
-              "rounded-xl border border-oai-gray-200 bg-white p-1 shadow-lg ring-1 ring-black/[0.04]",
-              "dark:border-oai-gray-700 dark:bg-oai-gray-900 dark:ring-white/[0.05]",
+              "rounded-xl border border-[var(--border-color)] bg-[var(--bg-sidebar)] p-1 shadow-2xl ring-1 ring-black/20",
               "transition-[opacity,transform] duration-150 ease-out",
               "data-[starting-style]:scale-95 data-[starting-style]:opacity-0",
               "data-[ending-style]:scale-95 data-[ending-style]:opacity-0",
@@ -100,17 +98,17 @@ export function Select({
                   disabled={opt.disabled}
                   className={({ selected, disabled: itemDisabled }) =>
                     cn(
-                      "flex w-full cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-lg py-1.5 pl-1.5 pr-6",
+                      "flex w-full cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-lg py-1.5 pl-1.5 pr-6 font-mono",
                       "text-left text-xs outline-none transition-colors",
                       selected
-                        ? "bg-oai-gray-100 text-oai-black dark:bg-oai-gray-800/70 dark:text-white"
-                        : "text-oai-gray-600 hover:bg-oai-gray-50 dark:text-oai-gray-300 dark:hover:bg-oai-gray-800/60",
+                        ? "bg-[color-mix(in_srgb,var(--color-primary)_18%,var(--bg-sidebar))] text-[var(--color-primary)] font-semibold"
+                        : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover-item)] hover:text-[var(--text-primary)]",
                       itemDisabled &&
-                        "cursor-not-allowed opacity-50 hover:bg-transparent dark:hover:bg-transparent",
+                        "cursor-not-allowed opacity-40 hover:bg-transparent",
                     )
                   }
                 >
-                  <span className="flex w-3.5 shrink-0 items-center justify-center text-oai-gray-500 dark:text-oai-gray-300">
+                  <span className="flex w-3.5 shrink-0 items-center justify-center text-[var(--color-primary)]">
                     <BaseSelect.ItemIndicator>
                       <Check className="h-3 w-3" aria-hidden />
                     </BaseSelect.ItemIndicator>

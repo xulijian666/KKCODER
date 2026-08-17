@@ -38,6 +38,8 @@ const MAX_HTML_PREVIEW_LINES = 1000;
 // 「源码/预览」切换状态得以保留（即使 LRU 缓存被清空也稳定）。
 let currentRenderKey = "";
 let htmlBlockSeqInRender = 0;
+/** HTML 代码块展示模式：preview=默认渲染（文件预览）／source=默认源码+可切换（聊天回答）／none=纯源码无开关（思考区） */
+let htmlBlockMode: "preview" | "source" | "none" = "source";
 
 function hashString(text: string): string {
   let hash = 5381;
@@ -132,19 +134,34 @@ function createMarked(): Marked {
           language !== "plain"
             ? `<span class="md-code-lang">${escapeHtml(language)}</span>`
             : "";
-        // HTML 代码块（html/xml/svg 等 markup 语言）：支持「预览/源码」右上角切换。
-        // 用 radio + label 纯 CSS 切换（点击 label 即切换 radio，无 JS 依赖）
+        // HTML 代码块（html/xml/svg 等 markup 语言）：支持「预览/源码」切换。
+        // 用 radio + label 纯 CSS 切换（点击 label 即切换 radio，无 JS 依赖）。
+        // 模式：none=纯源码（思考区，不渲染 HTML）；source=默认源码、点击预览才渲染
+        //（聊天回答）；preview=默认渲染（文件预览）。
         if (
           language === "markup" &&
           raw.length <= MAX_HTML_PREVIEW_SIZE &&
           raw.split("\n").length <= MAX_HTML_PREVIEW_LINES
         ) {
+          if (htmlBlockMode === "none") {
+            return (
+              `<div class="md-code-block">` +
+              `<div class="md-code-head">` +
+              label +
+              `<button type="button" class="md-code-copy" title="复制代码">复制</button>` +
+              `</div>` +
+              `<pre class="md-pre"><code class="md-code${langClass}">${highlighted}</code></pre>` +
+              `</div>`
+            );
+          }
           const srcdoc = escapeHtml(raw);
           const uid = `hpv-${currentRenderKey}-${++htmlBlockSeqInRender}`;
+          const pvChecked = htmlBlockMode === "preview" ? " checked" : "";
+          const srcChecked = htmlBlockMode === "source" ? " checked" : "";
           return (
             `<div class="md-html-preview">` +
-            `<input type="radio" class="md-html-preview-radio md-html-preview-radio-pv" name="${uid}" id="${uid}-pv" checked />` +
-            `<input type="radio" class="md-html-preview-radio md-html-preview-radio-src" name="${uid}" id="${uid}-src" />` +
+            `<input type="radio" class="md-html-preview-radio md-html-preview-radio-pv" name="${uid}" id="${uid}-pv"${pvChecked} />` +
+            `<input type="radio" class="md-html-preview-radio md-html-preview-radio-src" name="${uid}" id="${uid}-src"${srcChecked} />` +
             `<div class="md-html-preview-bar">` +
             label +
             `<span class="md-html-preview-tabs">` +
@@ -294,12 +311,12 @@ const MARKDOWN_CACHE_MAX = 80;
 const loggedMissKeys = new Set<string>();
 const LOGGED_MISS_MAX = 200;
 
-function cachedRender(mdText: string, render: () => string): string {
-  const hit = markdownRenderCache.get(mdText);
+function cachedRender(cacheKey: string, mdText: string, render: () => string): string {
+  const hit = markdownRenderCache.get(cacheKey);
   if (hit !== undefined) {
     // LRU：命中即移到末尾
-    markdownRenderCache.delete(mdText);
-    markdownRenderCache.set(mdText, hit);
+    markdownRenderCache.delete(cacheKey);
+    markdownRenderCache.set(cacheKey, hit);
     return hit;
   }
   if (!loggedMissKeys.has(mdText)) {
@@ -308,7 +325,7 @@ function cachedRender(mdText: string, render: () => string): string {
     log(`[markdown] cache miss len=${mdText.length} head=${mdText.slice(0, 40).replace(/\n/g, "\\n")}`);
   }
   const html = render();
-  markdownRenderCache.set(mdText, html);
+  markdownRenderCache.set(cacheKey, html);
   if (markdownRenderCache.size > MARKDOWN_CACHE_MAX) {
     const oldest = markdownRenderCache.keys().next().value;
     if (oldest !== undefined) markdownRenderCache.delete(oldest);
@@ -321,43 +338,53 @@ export function registerMarkdownLangAlias(alias: string, prismLang: string): voi
   LANG_ALIASES[alias.toLowerCase()] = prismLang;
 }
 
+/** 渲染公共主体：空内容/超限降级/确定性 id/解析异常兜底（htmlBlockMode 由调用方设定） */
+function renderMarkdownBody(mdText: string, parse: (text: string) => string): string {
+  if (!mdText.trim()) {
+    return `<p class="md-empty">文件内容为空</p>`;
+  }
+
+  // 超限时降级为纯文本预览（与 highlighter.ts 同策略），防止解析/高亮卡死主线程
+  if (
+    mdText.length > MAX_MARKDOWN_SIZE ||
+    mdText.split("\n").length > MAX_MARKDOWN_LINES
+  ) {
+    return (
+      `<pre class="md-pre md-fallback"><code class="md-code">` +
+      escapeHtml(mdText) +
+      `</code></pre>`
+    );
+  }
+
+  // 确定性 id：当前渲染输入的内容 hash + 块序号（同输入永远同 id）
+  currentRenderKey = hashString(mdText);
+  htmlBlockSeqInRender = 0;
+  try {
+    return parse(mdText);
+  } catch (err) {
+    console.error("Markdown 渲染失败:", err);
+    return (
+      `<pre class="md-pre md-fallback"><code class="md-code">` +
+      escapeHtml(mdText) +
+      `</code></pre>`
+    );
+  } finally {
+    currentRenderKey = "";
+  }
+}
+
 /**
  * 将 Markdown 渲染为可注入的 HTML 字符串。
  * 样式依赖 `.markdown-body` / `.preview-markdown-content` 下的 CSS。
+ * 文件预览场景：HTML 代码块默认渲染（预览模式）。
  */
 export function renderMarkdownToHtml(mdText: string): string {
-  return cachedRender(mdText, () => {
-    if (!mdText.trim()) {
-      return `<p class="md-empty">文件内容为空</p>`;
-    }
-
-    // 超限时降级为纯文本预览（与 highlighter.ts 同策略），防止解析/高亮卡死主线程
-    if (
-      mdText.length > MAX_MARKDOWN_SIZE ||
-      mdText.split("\n").length > MAX_MARKDOWN_LINES
-    ) {
-      return (
-        `<pre class="md-pre md-fallback"><code class="md-code">` +
-        escapeHtml(mdText) +
-        `</code></pre>`
-      );
-    }
-
-    // 确定性 id：当前渲染输入的内容 hash + 块序号（同输入永远同 id）
-    currentRenderKey = hashString(mdText);
-    htmlBlockSeqInRender = 0;
+  return cachedRender(`pv:${mdText}`, mdText, () => {
+    htmlBlockMode = "preview";
     try {
-      const html = markedInstance.parse(mdText, { async: false }) as string;
-      return html;
-    } catch (err) {
-      console.error("Markdown 渲染失败:", err);
-      return (
-        `<pre class="md-pre md-fallback"><code class="md-code">` +
-        escapeHtml(mdText) +
-        `</code></pre>`
-      );
+      return renderMarkdownBody(mdText, (text) => markedInstance.parse(text, { async: false }) as string);
     } finally {
-      currentRenderKey = "";
+      htmlBlockMode = "source";
     }
   });
 }
@@ -394,35 +421,28 @@ const chatMarkedInstance = (() => {
   return marked;
 })();
 
-export function renderChatMarkdownToHtml(mdText: string): string {
-  return cachedRender(mdText, () => {
-    if (!mdText.trim()) {
-      return "";
-    }
-    if (
-      mdText.length > MAX_MARKDOWN_SIZE ||
-      mdText.split("\n").length > MAX_MARKDOWN_LINES
-    ) {
-      return (
-        `<pre class="md-pre md-fallback"><code class="md-code">` +
-        escapeHtml(mdText) +
-        `</code></pre>`
-      );
-    }
-    // 确定性 id：当前渲染输入的内容 hash + 块序号（同输入永远同 id）
-    currentRenderKey = hashString(mdText);
-    htmlBlockSeqInRender = 0;
+/**
+ * 聊天场景专用渲染：把 Markdown 中的**原始 HTML** 转义为纯文本，
+ * 防止 LLM 输出（可能含 prompt injection）注入可执行脚本。
+ * 相比 renderMarkdownToHtml，唯一差异是 renderer.html 被覆盖为转义输出。
+ *
+ * HTML 代码块模式由 `htmlPreview` 控制：
+ * - false（默认，思考区）：纯源码高亮，无预览开关，绝不渲染 HTML；
+ * - true（回答区）：默认显示源码，点击「预览」开关才渲染 HTML。
+ */
+export function renderChatMarkdownToHtml(
+  mdText: string,
+  opts: { htmlPreview?: boolean } = {},
+): string {
+  const mode: "source" | "none" = opts.htmlPreview ? "source" : "none";
+  return cachedRender(`${mode}:${mdText}`, mdText, () => {
+    htmlBlockMode = mode;
     try {
-      return chatMarkedInstance.parse(mdText, { async: false }) as string;
-    } catch (err) {
-      console.error("Chat Markdown 渲染失败:", err);
-      return (
-        `<pre class="md-pre md-fallback"><code class="md-code">` +
-        escapeHtml(mdText) +
-        `</code></pre>`
+      return renderMarkdownBody(mdText, (text) =>
+        chatMarkedInstance.parse(text, { async: false }) as string,
       );
     } finally {
-      currentRenderKey = "";
+      htmlBlockMode = "source";
     }
   });
 }

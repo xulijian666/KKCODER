@@ -103,21 +103,40 @@ export function DateRangePopover({ from, to, onApply, onCancel }) {
           months: { position: "relative" },
         }}
       />
-      <div className="flex items-center justify-end gap-2 mt-4 pt-3 border-t border-oai-gray-200 dark:border-oai-gray-700">
-        {hasSelection && range.from && (
-          <span className="text-xs text-oai-gray-500 dark:text-oai-gray-400 mr-auto">
-            {format(range.from, "MMM d, yyyy", { locale: dateLocale })}
-            {range.to && range.to.getTime() !== range.from.getTime()
-              ? ` — ${format(range.to, "MMM d, yyyy", { locale: dateLocale })}`
-              : ""}
-          </span>
-        )}
-        <Button variant="secondary" size="sm" onClick={onCancel}>
-          {copy("shared.action.cancel")}
-        </Button>
-        <Button variant="primary" size="sm" onClick={handleApply} disabled={!hasSelection}>
-          {copy("shared.action.apply")}
-        </Button>
+      <div className="flex items-center justify-between gap-3 mt-4 pt-3.5 border-t border-[var(--border-color)]">
+        <div className="text-xs font-mono text-[var(--text-secondary)] tabular-nums truncate min-w-0 mr-2">
+          {hasSelection && range.from ? (
+            <span>
+              {format(range.from, "yyyy-MM-dd", { locale: dateLocale })}
+              {range.to && range.to.getTime() !== range.from.getTime()
+                ? ` ~ ${format(range.to, "yyyy-MM-dd", { locale: dateLocale })}`
+                : ""}
+            </span>
+          ) : (
+            <span className="opacity-60">
+              {copy("dashboard.date_filter.select_prompt") || "选择日期范围"}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={onCancel}
+            className="h-7.5 px-3 text-xs font-mono font-medium rounded-lg"
+          >
+            {copy("shared.action.cancel")}
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={handleApply}
+            disabled={!hasSelection}
+            className="h-7.5 px-3.5 text-xs font-mono font-semibold rounded-lg"
+          >
+            {copy("shared.action.apply")}
+          </Button>
+        </div>
       </div>
     </div>
   );

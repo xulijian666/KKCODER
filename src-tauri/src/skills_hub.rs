@@ -8,14 +8,18 @@
 //! - `TokenTracker/src/lib/local-api.js` 的 `/functions/tokentracker-skills` 端点（GET/POST 分发），
 //!   对应本文件底部的 [`skills_hub_query`] / [`skills_hub_mutate`]。
 //!
-//! 与 upstream 的故意偏差（仅 4 条）：
+//! 与 upstream 的故意偏差：
 //! 1. SSOT 根目录为 `~/.kkcoder/skills`（可用 env `KKCODER_SKILLS_HOME` 覆盖，便于测试隔离），
 //!    CC-GUI 为 `~/.ccgui/skills`、upstream 是 `~/.tokentracker/skills`；子布局一致
-//!    （managed/ .trash/ tmp/ registry.json discover-cache.json updates-cache.json
+//!    （managed/ .trash/ tmp/ disabled/ registry.json discover-cache.json updates-cache.json
 //!    popular-cache.json activity.jsonl usage-cache.json）。
 //! 2. skill_usage 响应不输出 cost 与 models（定价表不移植）。
 //! 3. 排序使用 Rust codepoint 序（`Ord`），upstream 用 `String.localeCompare`（本地化排序）。
 //! 4. 不移植 local-auth token / loopback origin 校验（Tauri IPC 天然可信）。
+//! 5. **源文件安全模型（KKCoder 增强）**：「我的技能」只列出已启用技能；删除/停用只移除
+//!    KKCoder 创建的副本（symlink 或带 `.kkcoder-skill.json` 标记的拷贝），agent 目录里的
+//!    原生源技能一律移入 `disabled/` 停用区保留，绝不删除；`set_enabled` 统一开关，
+//!    `discoveries` 查询返回未启用来源 + 停用区 + 已停用托管技能。
 //!
 //! 注：registry 条目的 sourceSignature 为 null 时省略该字段——这是移植契约的规定行为
 //! （upstream 会写出 `"sourceSignature": null`），不属于额外偏差。
@@ -120,6 +124,15 @@ fn ssot_dir() -> PathBuf {
 }
 fn trash_dir() -> PathBuf {
     skills_root().join(".trash")
+}
+/// 停用区：被关闭/移除的「原生技能」（用户直接放在 agent 目录里的源技能）
+/// 移到这里保留，绝不删除源文件；随时可恢复。
+fn disabled_dir() -> PathBuf {
+    skills_root().join("disabled")
+}
+/// 停用区条目的元数据（directory/target/movedAt），与目录同名 .json。
+fn disabled_meta_path(dest_name: &str) -> PathBuf {
+    disabled_dir().join(format!("{dest_name}.json"))
 }
 fn tmp_dir() -> PathBuf {
     skills_root().join("tmp")
@@ -1262,7 +1275,114 @@ fn scan_target_skill(directory: &str, target_id: &str) -> bool {
     })
 }
 
+/// 标记文件名：KKCoder 以「拷贝」方式落盘到 agent 目录的副本标记
+/// （symlink 方式本身就是 KKCoder 创建的证据，无需标记）。
+const KKC_MARKER: &str = ".kkcoder-skill.json";
+
+fn has_kkcoder_marker(path: &Path) -> bool {
+    path.join(KKC_MARKER).is_file()
+}
+
+fn write_kkcoder_marker(path: &Path, directory: &str, target_id: &str) -> std::io::Result<()> {
+    let marker = path.join(KKC_MARKER);
+    let content = serde_json::json!({
+        "directory": directory,
+        "target": target_id,
+        "createdBy": "kkcoder",
+        "createdAt": now_ms(),
+    });
+    fs::write(&marker, serde_json::to_vec(&content)?)
+}
+
+/// 该路径是否为 KKCoder 创建的副本（symlink 或带标记的目录）。
+fn is_kkcoder_copy(path: &Path) -> bool {
+    is_symlink(path) || has_kkcoder_marker(path)
+}
+
+/// 从 target 目录移除**仅 KKCoder 创建的副本**（symlink / 带标记拷贝）。
+/// 原生目录（真实文件、无标记）一律不动，返回是否发生过删除。
+fn remove_kkcoder_copy_from_target(directory: &str, target_id: &str) -> bool {
+    let Some(target) = target_by_id(target_id) else {
+        return false;
+    };
+    let mut removed = false;
+    for base_dir in target_dirs(target) {
+        let Some(target_path) = target_skill_path(&base_dir, directory) else {
+            continue;
+        };
+        if is_kkcoder_copy(&target_path) {
+            remove_path(&target_path);
+            if let Some(parent) = target_path.parent() {
+                remove_empty_ancestors(parent, &base_dir);
+            }
+            removed = true;
+        }
+    }
+    removed
+}
+
+/// 把「原生技能」（agent 目录里的真实目录、非 KKCoder 副本）移到停用区保留。
+/// 成功返回 true；目录不存在或本身是 KKCoder 副本返回 false。
+fn move_native_skill_to_disabled(directory: &str, target_id: &str) -> SkillResult<bool> {
+    let Some(target) = target_by_id(target_id) else {
+        return Ok(false);
+    };
+    for base_dir in target_dirs(target) {
+        let Some(target_path) = target_skill_path(&base_dir, directory) else {
+            continue;
+        };
+        if !target_path.exists() || is_kkcoder_copy(&target_path) {
+            continue;
+        }
+        ensure_dir(&disabled_dir())?;
+        let stamp = now_ms();
+        let dest_name = format!("{target_id}-{}-{stamp}", base64url_no_pad(directory));
+        let dest = disabled_dir().join(&dest_name);
+        fs::rename(&target_path, &dest)?;
+        let meta = disabled_meta_path(&dest_name);
+        let content = serde_json::json!({
+            "directory": directory,
+            "target": target_id,
+            "movedAt": stamp,
+        });
+        fs::write(
+            &meta,
+            serde_json::to_vec(&content).map_err(|e| SkillError::other(e.to_string()))?,
+        )?;
+        if let Some(parent) = target_path.parent() {
+            remove_empty_ancestors(parent, &base_dir);
+        }
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+/// 读取停用区条目：目录名 → (dest_path, meta)。
+fn read_disabled_entries() -> Vec<(PathBuf, Value)> {
+    let dir = disabled_dir();
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let meta = read_json(&disabled_meta_path(&name)).unwrap_or_else(|| {
+            json!({
+                "directory": path.file_name().and_then(|v| v.to_str()).unwrap_or(""),
+                "target": "claude",
+            })
+        });
+        out.push((path, meta));
+    }
+    out
+}
+
 /// upstream syncSkillToTarget：SSOT → target 的 symlink，任何失败回退整目录递归 copy。
+/// 目标位置若存在**原生目录**（用户自己的源技能），先移到停用区保留，绝不覆盖删除。
 fn sync_skill_to_target(directory: &str, target_id: &str) -> SkillResult<()> {
     let target = target_by_id(target_id)
         .ok_or_else(|| SkillError::other(format!("Unsupported target: {target_id}")))?;
@@ -1279,9 +1399,14 @@ fn sync_skill_to_target(directory: &str, target_id: &str) -> SkillResult<()> {
         if let Some(parent) = dest.parent() {
             ensure_dir(parent)?;
         }
+        // 原生目录保护：存在且不是 KKCoder 副本 → 移入停用区保留，不覆盖删除。
+        if dest.exists() && !is_kkcoder_copy(&dest) {
+            move_native_skill_to_disabled(directory, target_id)?;
+        }
         remove_path(&dest);
         if symlink_dir(&source, &dest).is_err() {
             copy_dir(&source, &dest)?;
+            write_kkcoder_marker(&dest, directory, target_id)?;
         }
     }
     Ok(())
@@ -1498,7 +1623,7 @@ pub(crate) fn blacklist_skill(
     }
     let mut registry = read_registry();
 
-    // 1) 托管技能：硬删除（不进回收站）
+    // 1) 托管技能：硬删除（不进回收站）；只删 KKCoder 副本，原生目录移停用区。
     let managed_pos = registry
         .skills
         .iter()
@@ -1509,7 +1634,9 @@ pub(crate) fn blacklist_skill(
         let skill = registry.skills[pos].clone();
         name = skill.get("name").cloned().unwrap_or(Value::Null);
         for target in TARGETS.iter() {
-            remove_skill_from_target(&directory_trimmed, target.id);
+            remove_kkcoder_copy_from_target(&directory_trimmed, target.id);
+            move_native_skill_to_disabled(&directory_trimmed, target.id)
+                .map_err(|e| e.to_string())?;
         }
         if let Ok(ssot_path) = managed_skill_path(&directory_trimmed) {
             remove_path(&ssot_path);
@@ -1520,7 +1647,7 @@ pub(crate) fn blacklist_skill(
         registry.skills.remove(pos);
         save_registry(&registry).map_err(|e| e.to_string())?;
     } else {
-        // 2) 未托管技能：按当前已同步的 target 摘除副本
+        // 2) 未托管技能：只摘 KKCoder 副本；原生源技能移入停用区保留（不删除）。
         let selected: Vec<String> = if targets.is_empty() {
             TARGETS.iter().map(|t| t.id.to_string()).collect()
         } else {
@@ -1531,7 +1658,9 @@ pub(crate) fn blacklist_skill(
                 .collect()
         };
         for target_id in &selected {
-            remove_skill_from_target(&directory_trimmed, target_id);
+            remove_kkcoder_copy_from_target(&directory_trimmed, target_id);
+            move_native_skill_to_disabled(&directory_trimmed, target_id)
+                .map_err(|e| e.to_string())?;
         }
     }
 
@@ -1602,6 +1731,9 @@ pub(crate) fn remove_skill_blacklist(directory: String) -> Result<(), String> {
 fn list_installed_skills() -> Vec<Value> {
     purge_expired_trash();
     let registry = read_registry();
+    let blacklist = skill_blacklist_dirs();
+    // 托管：已启用 = registry 意图同步到 claude（targets 含 claude 或磁盘副本在 claude 目录）。
+    // 未同步到任何 target 的托管技能属于「已停用」，进本地发现列表。
     let mut managed: Vec<Value> = Vec::new();
     for skill in &registry.skills {
         if trashed_at_of(skill).is_some() {
@@ -1618,6 +1750,9 @@ fn list_installed_skills() -> Vec<Value> {
                     .collect()
             })
             .unwrap_or_default();
+        if !intended.contains("claude") {
+            continue;
+        }
         let mut target_states = Map::new();
         let mut targets: Vec<Value> = Vec::new();
         for target in TARGETS.iter() {
@@ -1651,15 +1786,111 @@ fn list_installed_skills() -> Vec<Value> {
         .map(|skill| js_string(skill.get("directory")).to_lowercase())
         .collect();
 
-    // unmanaged：扫描启用的来源（内置代理目录 + 自定义目录），跨来源按 directory 小写合并。
-    let mut unmanaged: Vec<Value> = Vec::new();
-    let mut unmanaged_index: HashMap<String, usize> = HashMap::new();
+    // 原生技能：扫描 claude 目录（启用的内置来源）——住在里面的就是「已启用」。
+    let mut natives: Vec<Value> = Vec::new();
+    let mut native_index: HashMap<String, usize> = HashMap::new();
     let scan_config = read_scan_sources();
-    // 黑名单目录（拉黑删除的技能不再被任何来源引用，源文件保留）
-    let blacklist = skill_blacklist_dirs();
+    if builtin_source_enabled(&scan_config, "claude") {
+        for base_dir in target_dirs(target_by_id("claude").expect("claude target")) {
+            scan_enabled_native_dir(
+                &base_dir,
+                &managed_dirs,
+                &blacklist,
+                &mut natives,
+                &mut native_index,
+            );
+        }
+    }
 
-    // 内置来源：按 scan-sources.json 勾选状态过滤
+    managed.extend(natives);
+    // codepoint 排序（upstream localeCompare 的计划内偏差）；Rust sort_by 稳定。
+    managed.sort_by(|a, b| js_string(a.get("name")).cmp(&js_string(b.get("name"))));
+    managed
+}
+
+/// 扫描 claude 目录中的原生技能（真实目录，非 KKCoder 副本 → 用户自己放的 = 已启用）。
+fn scan_enabled_native_dir(
+    base_dir: &Path,
+    managed_dirs: &HashSet<String>,
+    blacklist: &HashSet<String>,
+    natives: &mut Vec<Value>,
+    native_index: &mut HashMap<String, usize>,
+) {
+    for directory in scan_skill_directories(base_dir) {
+        let key = directory.to_lowercase();
+        if directory.is_empty() || managed_dirs.contains(&key) || blacklist.contains(&key) {
+            continue;
+        }
+        let Some(skill_path) = target_skill_path(base_dir, &directory) else {
+            continue;
+        };
+        // KKCoder 副本（symlink/标记）已在托管列表覆盖，这里只收原生目录。
+        if is_kkcoder_copy(&skill_path) {
+            continue;
+        }
+        let Some(marker) = find_skill_marker(&skill_path) else {
+            continue;
+        };
+        let markdown = read_text(&marker).unwrap_or_default();
+        let fallback = install_name_from_directory(&directory).unwrap_or_else(|| directory.clone());
+        let metadata = read_skill_metadata(&markdown, &fallback);
+        let index = match native_index.get(&key) {
+            Some(&i) => i,
+            None => {
+                natives.push(json!({
+                    "id": format!("local:{directory}"),
+                    "key": format!("local:{directory}"),
+                    "name": metadata.name,
+                    "description": metadata.description,
+                    "fullDescription": extract_skill_body(&markdown),
+                    "directory": directory,
+                    "readmeUrl": Value::Null,
+                    "repoOwner": Value::Null,
+                    "repoName": Value::Null,
+                    "repoBranch": Value::Null,
+                    "installedAt": Value::Null,
+                    "managed": false,
+                    "native": true,
+                    "targets": ["claude"],
+                    "targetStates": {"claude": "synced"},
+                    "targetPaths": {},
+                }));
+                native_index.insert(key, natives.len() - 1);
+                natives.len() - 1
+            }
+        };
+        if let Some(paths) = natives[index].get_mut("targetPaths").and_then(Value::as_object_mut) {
+            paths
+                .entry("claude".to_string())
+                .or_insert_with(|| json!(skill_path.to_string_lossy()));
+        }
+    }
+}
+
+/// 本地发现列表（浏览页「本地」来源）：
+/// 1. 其他 agent 目录 / 自定义目录中未启用的技能（一键启用 = 复制进库并同步 Claude）；
+/// 2. 停用区中的原生技能（关闭/移除时移出的源技能，一键恢复）；
+/// 3. registry 中已停用（未同步到 Claude）的托管技能。
+fn list_discoveries() -> Vec<Value> {
+    let registry = read_registry();
+    let blacklist = skill_blacklist_dirs();
+    let scan_config = read_scan_sources();
+    let mut out: Vec<Value> = Vec::new();
+    let mut index: HashMap<String, usize> = HashMap::new();
+
+    // 已托管目录（registry 有效条目）不重复发现。
+    let mut managed_dirs: HashSet<String> = HashSet::new();
+    for skill in &registry.skills {
+        if trashed_at_of(skill).is_none() {
+            managed_dirs.insert(js_string(skill.get("directory")).to_lowercase());
+        }
+    }
+
+    // 1) 其他 agent 目录 + 自定义目录
     for target in TARGETS.iter() {
+        if target.id == "claude" {
+            continue;
+        }
         if !builtin_source_enabled(&scan_config, target.id) {
             continue;
         }
@@ -1669,27 +1900,353 @@ fn list_installed_skills() -> Vec<Value> {
                 Some(target),
                 &managed_dirs,
                 &blacklist,
-                &mut unmanaged,
-                &mut unmanaged_index,
+                &mut out,
+                &mut index,
             );
         }
     }
-    // 自定义来源：直接扫描配置目录
     for custom in &scan_config.custom {
         scan_unmanaged_dir(
             &PathBuf::from(&custom.path),
             None,
             &managed_dirs,
             &blacklist,
-            &mut unmanaged,
-            &mut unmanaged_index,
+            &mut out,
+            &mut index,
         );
     }
+    // 已在 Claude 目录启用（含原生）的不再展示为发现项
+    let claude_dirs = target_dirs(target_by_id("claude").expect("claude target"));
+    out.retain(|skill| {
+        let directory = js_string(skill.get("directory"));
+        !claude_dirs.iter().any(|base| {
+            target_skill_path(base, &directory)
+                .map(|path| path.exists())
+                .unwrap_or(false)
+        })
+    });
+    for skill in &mut out {
+        if let Some(obj) = skill.as_object_mut() {
+            obj.insert("disabled".to_string(), json!(false));
+        }
+    }
 
-    managed.extend(unmanaged);
-    // codepoint 排序（upstream localeCompare 的计划内偏差）；Rust sort_by 稳定。
-    managed.sort_by(|a, b| js_string(a.get("name")).cmp(&js_string(b.get("name"))));
-    managed
+    // 2) 停用区：被关闭/移除的原生技能（源文件保留于此，可一键恢复）
+    for (dest, meta) in read_disabled_entries() {
+        let directory = js_string(meta.get("directory"));
+        if directory.is_empty() {
+            continue;
+        }
+        let marker = find_skill_marker(&dest)
+            .and_then(|m| read_text(&m))
+            .unwrap_or_default();
+        let fallback = install_name_from_directory(&directory).unwrap_or_else(|| directory.clone());
+        let metadata = read_skill_metadata(&marker, &fallback);
+        let existing_id = registry
+            .skills
+            .iter()
+            .find(|entry| eq_ignore_case(&js_string(entry.get("directory")), &directory))
+            .map(|entry| js_string(entry.get("id")))
+            .unwrap_or_else(|| format!("local:{directory}"));
+        let target_label = js_string(meta.get("target"));
+        out.push(json!({
+            "id": existing_id,
+            "key": format!("local:{directory}"),
+            "name": metadata.name,
+            "description": metadata.description,
+            "fullDescription": extract_skill_body(&marker),
+            "directory": directory,
+            "readmeUrl": Value::Null,
+            "repoOwner": Value::Null,
+            "repoName": Value::Null,
+            "repoBranch": Value::Null,
+            "installedAt": Value::Null,
+            "managed": false,
+            "native": true,
+            "disabled": true,
+            "disabledDest": dest.file_name().and_then(|v| v.to_str()).unwrap_or("").to_string(),
+            "targets": [],
+            "targetStates": {"claude": "off"},
+            "targetPaths": {"custom": dest.to_string_lossy()},
+            "sourceLabel": if target_label.is_empty() {
+                "已停用".to_string()
+            } else {
+                format!("已停用（{target_label}）")
+            },
+        }));
+    }
+
+    // 3) registry 中已停用的托管技能（未同步到 Claude）
+    for skill in &registry.skills {
+        if trashed_at_of(skill).is_some() {
+            continue;
+        }
+        let intended: Vec<String> = skill
+            .get("targets")
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if intended.contains(&"claude".to_string()) {
+            continue;
+        }
+        let mut entry = skill.as_object().cloned().unwrap_or_default();
+        entry.insert("managed".to_string(), json!(true));
+        entry.insert("disabled".to_string(), json!(true));
+        entry.insert("targets".to_string(), Value::Array(vec![]));
+        entry.insert(
+            "sourceLabel".to_string(),
+            json!(if js_string(entry.get("repoOwner")).is_empty() {
+                "已停用".to_string()
+            } else {
+                format!(
+                    "已停用（{}/{}）",
+                    js_string(entry.get("repoOwner")),
+                    js_string(entry.get("repoName"))
+                )
+            }),
+        );
+        out.push(Value::Object(entry));
+    }
+
+    out.sort_by(|a, b| js_string(a.get("name")).cmp(&js_string(b.get("name"))));
+    out
+}
+
+/// 开关：启用 = 同步到 Claude（复制进库/恢复停用区/导入本地发现）；
+/// 停用 = 只移除 KKCoder 副本，原生源技能移到停用区保留（绝不删除源文件）。
+fn set_skill_enabled(
+    id: &str,
+    directory: &str,
+    disabled_dest: &str,
+    enabled: bool,
+) -> SkillResult<Value> {
+    let claude_id = "claude".to_string();
+    if enabled {
+        // A) 从停用区恢复原生技能（移回原 agent 目录）
+        if !disabled_dest.is_empty() {
+            let dest = disabled_dir().join(disabled_dest);
+            if dest.is_dir() {
+                let meta = read_json(&disabled_meta_path(disabled_dest)).unwrap_or_default();
+                let dir = {
+                    let meta_dir = js_string(meta.get("directory"));
+                    if meta_dir.is_empty() {
+                        directory.to_string()
+                    } else {
+                        meta_dir
+                    }
+                };
+                let target_id = js_string(meta.get("target"));
+                let target = if target_id.is_empty() {
+                    target_by_id("claude")
+                } else {
+                    target_by_id(&target_id)
+                }
+                .ok_or_else(|| SkillError::other("停用区目标无效"))?;
+                let base_dir = target_primary_dir(target);
+                let target_path = target_skill_path(&base_dir, &dir)
+                    .ok_or_else(|| SkillError::other("停用区技能目录无效"))?;
+                if let Some(parent) = target_path.parent() {
+                    ensure_dir(parent)?;
+                }
+                remove_path(&target_path);
+                fs::rename(&dest, &target_path)?;
+                let _ = fs::remove_file(&disabled_meta_path(disabled_dest));
+                // 若 registry 已有该目录条目（曾被接管），补回 claude 同步目标
+                let mut registry = read_registry();
+                if let Some(position) = registry
+                    .skills
+                    .iter()
+                    .position(|entry| eq_ignore_case(&js_string(entry.get("directory")), &dir))
+                {
+                    let mut skill = registry.skills[position].clone();
+                    let mut targets: Vec<String> = skill
+                        .get("targets")
+                        .and_then(Value::as_array)
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(Value::as_str)
+                                .map(str::to_string)
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    if !targets.contains(&claude_id) {
+                        targets.push(claude_id.clone());
+                    }
+                    if let Some(obj) = skill.as_object_mut() {
+                        obj.insert("targets".to_string(), json!(&targets));
+                    }
+                    registry.skills[position] = skill;
+                    save_registry(&registry)?;
+                }
+                return Ok(json!({"ok": true, "enabled": true, "restored": true}));
+            }
+        }
+        // B) 托管技能重新启用（registry 已有条目）
+        let registry = read_registry();
+        let existing = registry
+            .skills
+            .iter()
+            .find(|entry| {
+                let id_match = !id.is_empty() && js_string(entry.get("id")) == id;
+                let dir_match =
+                    !directory.is_empty() && eq_ignore_case(&js_string(entry.get("directory")), directory);
+                id_match || dir_match
+            })
+            .cloned();
+        if let Some(existing) = existing {
+            let existing_id = js_string(existing.get("id"));
+            let mut targets: Vec<String> = existing
+                .get("targets")
+                .and_then(Value::as_array)
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default();
+            if !targets.contains(&claude_id) {
+                targets.push(claude_id.clone());
+            }
+            return set_skill_targets(&existing_id, &targets);
+        }
+        // C) 本地发现启用：复制源 → SSOT 并同步 Claude（源文件不动）
+        return import_local_skill(directory, &[claude_id]);
+    }
+
+    // ===== 停用 =====
+    let registry = read_registry();
+    let existing = registry
+        .skills
+        .iter()
+        .find(|entry| {
+            let id_match = !id.is_empty() && js_string(entry.get("id")) == id;
+            let dir_match =
+                !directory.is_empty() && eq_ignore_case(&js_string(entry.get("directory")), directory);
+            id_match || dir_match
+        })
+        .cloned();
+    if let Some(existing) = existing {
+        let existing_id = js_string(existing.get("id"));
+        let dir = js_string(existing.get("directory"));
+        let mut targets: Vec<String> = existing
+            .get("targets")
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        targets.retain(|t| t != "claude");
+        // 先删 KKCoder 副本；claude 目录若存在原生同名目录 → 移入停用区保留。
+        remove_kkcoder_copy_from_target(&dir, "claude");
+        move_native_skill_to_disabled(&dir, "claude")?;
+        return set_skill_targets(&existing_id, &targets);
+    }
+    // 纯原生技能：直接移入停用区（不删文件）
+    let moved = move_native_skill_to_disabled(directory, "claude")?;
+    Ok(json!({"ok": true, "enabled": false, "moved": moved}))
+}
+
+/// 本地发现列表的「删除本地文件」：用户明确确认后，永久删除发现的技能目录。
+/// - 停用区条目：删除停用区中的保留副本（KKCoder 自己的区域）；
+/// - 自定义扫描目录 / 其他 agent 目录：删除源目录本身（影响该 agent/目录）；
+/// - 已停用托管技能：走 uninstall（SSOT 回收站）。
+/// 仅允许删除扫描来源范围内的目录（防路径穿越）；与「停用/移除」的
+/// 源文件保护不同——这是用户主动要求的永久删除。
+fn delete_discovery_skill(
+    directory: &str,
+    disabled_dest: &str,
+    source_target: &str,
+) -> SkillResult<Value> {
+    // 1) 停用区条目：永久删除
+    if !disabled_dest.is_empty() {
+        let name = Path::new(disabled_dest)
+            .file_name()
+            .and_then(|v| v.to_str())
+            .unwrap_or("");
+        if name.is_empty() || name != disabled_dest {
+            return Err(SkillError::other("停用区条目名无效"));
+        }
+        let dest = disabled_dir().join(name);
+        if dest.is_dir() {
+            remove_path(&dest);
+        }
+        let _ = fs::remove_file(disabled_meta_path(name));
+        return Ok(json!({"ok": true, "deleted": format!("disabled:{name}")}));
+    }
+
+    let Some(source_dir) = sanitize_local_skill_path(directory) else {
+        return Err(SkillError::other("技能目录无效"));
+    };
+    let mut deleted: Option<PathBuf> = None;
+
+    // 2) 自定义扫描目录
+    let scan_config = read_scan_sources();
+    if source_target == "custom" || source_target.is_empty() {
+        for custom in &scan_config.custom {
+            let base = PathBuf::from(&custom.path);
+            if let Some(candidate) = target_skill_path(&base, &source_dir) {
+                if candidate.exists() {
+                    remove_path(&candidate);
+                    if let Some(parent) = candidate.parent() {
+                        remove_empty_ancestors(parent, &base);
+                    }
+                    deleted = Some(candidate);
+                }
+                break;
+            }
+        }
+    }
+
+    // 3) 其他 agent 目录
+    if deleted.is_none() {
+        if let Some(target) = target_by_id(source_target) {
+            for base_dir in target_dirs(target) {
+                if let Some(candidate) = target_skill_path(&base_dir, &source_dir) {
+                    if candidate.exists() {
+                        remove_path(&candidate);
+                        if let Some(parent) = candidate.parent() {
+                            remove_empty_ancestors(parent, &base_dir);
+                        }
+                        deleted = Some(candidate);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    // 4) 清理可能残留的 registry local: 条目与 SSOT 副本（源已删，条目不再有意义）
+    if deleted.is_some() {
+        let mut registry = read_registry();
+        if let Some(pos) = registry
+            .skills
+            .iter()
+            .position(|entry| eq_ignore_case(&js_string(entry.get("directory")), &source_dir))
+        {
+            let id = js_string(registry.skills[pos].get("id"));
+            if id.starts_with("local:") {
+                if let Ok(ssot) = managed_skill_path(&source_dir) {
+                    remove_path(&ssot);
+                }
+                registry.skills.remove(pos);
+                save_registry(&registry)?;
+            }
+        }
+    }
+
+    match deleted {
+        Some(path) => Ok(json!({"ok": true, "deleted": path.to_string_lossy()})),
+        None => Err(SkillError::other("未找到要删除的本地技能目录")),
+    }
 }
 
 /// 扫描单个目录下的技能并合并进 unmanaged 列表。
@@ -1975,7 +2532,9 @@ fn uninstall_skill(id: &str) -> SkillResult<Value> {
     let entry_id = skill.get("id").and_then(Value::as_str).map(str::to_string);
     let ssot_path = managed_skill_path(&directory)?;
     for target in TARGETS.iter() {
-        remove_skill_from_target(&directory, target.id);
+        // 只删 KKCoder 副本；若 claude 目录里躺着同名原生技能，移到停用区保留。
+        remove_kkcoder_copy_from_target(&directory, target.id);
+        move_native_skill_to_disabled(&directory, target.id)?;
     }
     let skill_name = skill.get("name").cloned().unwrap_or(Value::Null);
     if ssot_path.exists() {
@@ -2096,7 +2655,9 @@ fn set_skill_targets(id: &str, target_ids: &[String]) -> SkillResult<Value> {
         if selected.iter().any(|tid| tid == target.id) {
             sync_skill_to_target(&directory, target.id)?;
         } else {
-            remove_skill_from_target(&directory, target.id);
+            // 只删 KKCoder 副本；原生目录移到停用区保留（不删源文件）。
+            remove_kkcoder_copy_from_target(&directory, target.id);
+            move_native_skill_to_disabled(&directory, target.id)?;
         }
     }
     let mut updated = skill.as_object().cloned().unwrap_or_default();
@@ -2113,7 +2674,7 @@ fn set_skill_targets(id: &str, target_ids: &[String]) -> SkillResult<Value> {
     Ok(json!({"ok": true, "skill": Value::Object(updated)}))
 }
 
-/// upstream findLocalSkillSource：在某 target 下找到含 marker 的源目录。
+/// upstream findLocalSkillSource：在目标代理目录 + 自定义扫描目录中找到含 marker 的源目录。
 fn find_local_skill_source(directory: &str) -> Option<(PathBuf, String)> {
     let source_dir = sanitize_local_skill_path(directory)?;
     for target in TARGETS.iter() {
@@ -2123,6 +2684,16 @@ fn find_local_skill_source(directory: &str) -> Option<(PathBuf, String)> {
             };
             if find_skill_marker(&skill_path).is_some() {
                 return Some((skill_path, target.id.to_string()));
+            }
+        }
+    }
+    // 自定义扫描目录也是合法来源（只读，导入时复制进 SSOT，源不动）。
+    let scan_config = read_scan_sources();
+    for custom in &scan_config.custom {
+        let base_dir = PathBuf::from(&custom.path);
+        if let Some(skill_path) = target_skill_path(&base_dir, &source_dir) {
+            if find_skill_marker(&skill_path).is_some() {
+                return Some((skill_path, "custom".to_string()));
             }
         }
     }
@@ -2211,13 +2782,106 @@ fn import_local_skill(directory: &str, target_ids: &[String]) -> SkillResult<Val
         if selected.iter().any(|tid| tid == target.id) {
             sync_skill_to_target(&source_dir, target.id)?;
         } else {
-            remove_skill_from_target(&source_dir, target.id);
+            remove_kkcoder_copy_from_target(&source_dir, target.id);
+            move_native_skill_to_disabled(&source_dir, target.id)?;
         }
     }
     append_activity(json!({
         "action": "import",
         "name": skill.get("name").cloned().unwrap_or(Value::Null),
         "directory": source_dir,
+        "targets": &selected,
+    }));
+    skill.insert("managed".to_string(), json!(true));
+    Ok(json!({"ok": true, "skill": Value::Object(skill)}))
+}
+
+/// 从任意本地路径导入技能（我的技能 → 导入安装）：复制源目录进 SSOT、
+/// 登记 `local:<目录名>` 条目并同步到目标（claude）。源目录保持只读，不动原文件。
+fn import_skill_from_path(path: &str, target_ids: &[String]) -> SkillResult<Value> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err(SkillError::other("请填写技能目录路径"));
+    }
+    let source = PathBuf::from(trimmed);
+    if !source.is_dir() {
+        return Err(SkillError::other(format!("目录不存在：{trimmed}")));
+    }
+    let Some(marker) = find_skill_marker(&source) else {
+        return Err(SkillError::other("该目录下未找到 SKILL.md，不是有效的技能目录"));
+    };
+    let dir_name = source
+        .file_name()
+        .and_then(|v| v.to_str())
+        .unwrap_or("")
+        .to_string();
+    let directory = sanitize_local_skill_path(&dir_name)
+        .filter(|d| !d.is_empty())
+        .ok_or_else(|| SkillError::other("技能目录名无效"))?;
+
+    let registry = read_registry();
+    if registry
+        .skills
+        .iter()
+        .any(|entry| eq_ignore_case(&js_string(entry.get("directory")), &directory))
+    {
+        return Err(SkillError::other(format!(
+            "技能目录 {directory} 已存在（已在技能库中）"
+        )));
+    }
+    drop(registry);
+
+    let dest = managed_skill_path(&directory)?;
+    if dest.exists() {
+        return Err(SkillError::other(format!("技能库中已存在 {directory}")));
+    }
+    copy_dir(&source, &dest)?;
+
+    let markdown = read_text(&marker).unwrap_or_default();
+    let metadata = read_skill_metadata(&markdown, &directory);
+    let selected: Vec<String> = (if target_ids.is_empty() {
+        vec!["claude".to_string()]
+    } else {
+        target_ids.to_vec()
+    })
+    .into_iter()
+    .filter(|tid| target_by_id(tid).is_some())
+    .collect();
+
+    let local_id = format!("local:{directory}");
+    let mut skill = Map::new();
+    skill.insert("id".to_string(), json!(local_id));
+    skill.insert("key".to_string(), json!(local_id));
+    skill.insert("name".to_string(), json!(metadata.name));
+    skill.insert("description".to_string(), json!(metadata.description));
+    skill.insert("directory".to_string(), json!(directory));
+    skill.insert("sourceDirectory".to_string(), json!(directory));
+    skill.insert("readmeUrl".to_string(), Value::Null);
+    skill.insert("repoOwner".to_string(), Value::Null);
+    skill.insert("repoName".to_string(), Value::Null);
+    skill.insert("repoBranch".to_string(), Value::Null);
+    skill.insert("installedAt".to_string(), json!(now_ms()));
+    skill.insert("contentHash".to_string(), json!(hash_directory(&dest)));
+    // 记录原始导入路径（只读来源，后续删除/停用不会动它）
+    skill.insert("sourcePath".to_string(), json!(source.to_string_lossy()));
+    skill.insert("targets".to_string(), json!(&selected));
+
+    let mut registry = read_registry();
+    registry.skills.push(Value::Object(skill.clone()));
+    save_registry(&registry)?;
+    for target in TARGETS.iter() {
+        if selected.iter().any(|tid| tid == target.id) {
+            sync_skill_to_target(&directory, target.id)?;
+        } else {
+            remove_kkcoder_copy_from_target(&directory, target.id);
+            move_native_skill_to_disabled(&directory, target.id)?;
+        }
+    }
+    append_activity(json!({
+        "action": "import_path",
+        "name": skill.get("name").cloned().unwrap_or(Value::Null),
+        "directory": directory,
+        "path": source.to_string_lossy(),
         "targets": &selected,
     }));
     skill.insert("managed".to_string(), json!(true));
@@ -2235,7 +2899,8 @@ fn delete_local_skill(directory: &str, target_ids: &[String]) -> SkillResult<Val
         target_ids.to_vec()
     };
     for target_id in &selected {
-        remove_skill_from_target(&install_name, target_id);
+        remove_kkcoder_copy_from_target(&install_name, target_id);
+        move_native_skill_to_disabled(&install_name, target_id)?;
     }
     append_activity(
         json!({"action": "delete_local", "directory": install_name, "targets": &selected}),
@@ -3357,6 +4022,9 @@ pub(crate) async fn skills_hub_query(mode: String, params: Value) -> Result<Valu
         )
         .await
         .map_err(|e| format!("skills task failed: {e}")),
+        "discoveries" => tokio::task::spawn_blocking(|| json!({"skills": list_discoveries()}))
+            .await
+            .map_err(|e| format!("skills task failed: {e}")),
         "repos" => Ok(json!({"repos": list_repos()})),
         "discover" => discover_skills(param_force(&params))
             .await
@@ -3419,6 +4087,31 @@ pub(crate) async fn skills_hub_mutate(action: String, payload: Value) -> Result<
         "delete_local" => {
             let targets = string_array_param(&payload, "targets").unwrap_or_default();
             delete_local_skill(&js_string(payload.get("directory")), &targets)
+                .map_err(|e| e.to_string())
+        }
+        "set_enabled" => {
+            let enabled = payload
+                .get("enabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            set_skill_enabled(
+                &js_string(payload.get("id")),
+                &js_string(payload.get("directory")),
+                &js_string(payload.get("disabledDest")),
+                enabled,
+            )
+            .map_err(|e| e.to_string())
+        }
+        "delete_discovery" => delete_discovery_skill(
+            &js_string(payload.get("directory")),
+            &js_string(payload.get("disabledDest")),
+            &js_string(payload.get("sourceTarget")),
+        )
+        .map_err(|e| e.to_string()),
+        "import_path" => {
+            let targets = string_array_param(&payload, "targets")
+                .unwrap_or_else(|| vec!["claude".to_string()]);
+            import_skill_from_path(&js_string(payload.get("path")), &targets)
                 .map_err(|e| e.to_string())
         }
         "add_repo" => {

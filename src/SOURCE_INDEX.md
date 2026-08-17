@@ -126,7 +126,7 @@ src/
 | `tokentracker-theme.css` | Tailwind v4 主题入口：`--color-oai-*` token + `dark:` 变体键到 `.dark` 子树（跳过 preflight，不重置全局样式） | — |
 | `tokentracker-dashboard/` | vendored TokenTracker 仪表盘树（98 文件，自包含；传输经 `tt_proxy`） | 否（内部模块） |
 
-> 后端对应模块：`src-tauri/src/tokentracker.rs`（`tt_detect_cli` / `tt_server_status` / `tt_install_cli` / `tt_ensure_server` / `tt_proxy`）与 `src-tauri/src/skills_hub.rs`（技能中心后端：`skills_hub_query` / `skills_hub_mutate`，SSOT 根目录 `~/.kkcoder/skills`，env `KKCODER_SKILLS_HOME` 可覆盖）。
+> 后端对应模块：`src-tauri/src/tokentracker.rs`（`tt_detect_cli` / `tt_server_status` / `tt_install_cli` / `tt_ensure_server` / `tt_proxy`）与 `src-tauri/src/skills_hub.rs`（技能中心后端：`skills_hub_query`（`installed` / `discoveries` / `repos` / `discover` / `search` / `popular` / `updates` / `activity` / `skill_usage`）与 `skills_hub_mutate`（`install` / `uninstall` / `restore` / `set_enabled` / `set_targets` / `import_local` / `delete_local` / `add_repo` / `remove_repo`）。安全模型：KKCoder 只创建/删除自己的副本（symlink 或带 `.kkcoder-skill.json` 标记的拷贝），原生源技能移入 `~/.kkcoder/skills/disabled` 停用区保留、绝不删除；SSOT 根目录 `~/.kkcoder/skills`，env `KKCODER_SKILLS_HOME` 可覆盖。
 
 ---
 

@@ -46,9 +46,9 @@
   box-shadow: none !important;
 }
 
-/* 强制清除所有默认 bg-white 产生的死白块 */
-.tt-dashboard .bg-white,
-.tt-dashboard [class*="bg-white"] {
+/* 强制清除所有默认 bg-white 产生的死白块（不影响带透明度的 bg-white/*） */
+.tt-dashboard .bg-white:not([class*="/"]),
+.tt-dashboard [class="bg-white"] {
   background-color: var(--bg-sidebar) !important;
 }
 
@@ -220,7 +220,78 @@
   margin-bottom: 24px !important;
 }
 
-/* ── 5. 数据明细表格（DataDetails - 宽裕呼吸感） ─────────────────────────── */
+/* ── 5. 项目用量与数据明细（DataDetails - 宽裕呼吸感与黑金工匠质感） ─────── */
+.tt-dashboard .tt-project-row {
+  background: color-mix(in srgb, var(--bg-main) 60%, var(--bg-sidebar)) !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: 12px !important;
+  padding: 12px 14px !important;
+  color: var(--text-primary) !important;
+  transition: all 0.2s ease !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 14px !important;
+  width: 100% !important;
+  text-align: left !important;
+  cursor: pointer !important;
+}
+
+.tt-dashboard .tt-project-row:hover {
+  background: var(--bg-hover-item) !important;
+  border-color: color-mix(in srgb, var(--color-primary) 40%, var(--border-color)) !important;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25) !important;
+}
+
+.tt-dashboard .tt-project-row:active {
+  background: var(--bg-active-item) !important;
+  transform: translateY(0);
+}
+
+.tt-dashboard .tt-project-avatar {
+  width: 36px !important;
+  height: 36px !important;
+  border-radius: 10px !important;
+  flex-shrink: 0 !important;
+  object-fit: cover !important;
+  border: 1px solid var(--border-color) !important;
+  background: color-mix(in srgb, var(--bg-main) 80%, var(--border-color)) !important;
+}
+
+.tt-dashboard .tt-project-avatar-fallback {
+  width: 36px !important;
+  height: 36px !important;
+  border-radius: 10px !important;
+  flex-shrink: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  background: color-mix(in srgb, var(--color-primary) 15%, var(--bg-sidebar)) !important;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 35%, transparent) !important;
+  color: var(--color-primary) !important;
+  font-family: var(--font-mono) !important;
+  font-weight: 700 !important;
+  font-size: 14px !important;
+  box-shadow: 0 0 10px color-mix(in srgb, var(--color-primary) 15%, transparent) !important;
+}
+
+.tt-dashboard .tt-project-progress-track {
+  height: 6px !important;
+  border-radius: 999px !important;
+  background: rgba(255, 255, 255, 0.08) !important;
+  border: 1px solid color-mix(in srgb, var(--border-color) 60%, transparent) !important;
+  overflow: hidden !important;
+  width: 100% !important;
+}
+
+.tt-dashboard .tt-project-progress-bar {
+  height: 100% !important;
+  border-radius: 999px !important;
+  background: var(--color-primary) !important;
+  box-shadow: 0 0 8px color-mix(in srgb, var(--color-primary) 50%, transparent) !important;
+  transition: width 0.3s ease !important;
+}
+
 .tt-dashboard table {
   width: 100% !important;
   border-collapse: collapse !important;

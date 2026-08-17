@@ -67,15 +67,14 @@ function formatPercent(ratio) {
   return `${pct >= 10 ? Math.round(pct) : pct.toFixed(1)}%`;
 }
 
-// Zoom-modal stat vocabulary: micro mono label over a heavy mono figure.
 function StatCell({ label, value, title }) {
   return (
     <div className="flex flex-col gap-1.5 group min-w-0">
-      <span className="text-[9px] font-bold uppercase tracking-widest font-mono text-zinc-400 dark:text-zinc-500">
+      <span className="text-[9px] font-bold uppercase tracking-widest font-mono text-[var(--text-secondary)]">
         {label}
       </span>
       <span
-        className="text-xl font-black font-mono text-zinc-900 dark:text-zinc-50 tracking-tight leading-none tabular-nums truncate transition-transform duration-200 group-hover:-translate-y-[1px]"
+        className="text-xl font-black font-mono text-[var(--text-primary)] tracking-tight leading-none tabular-nums truncate transition-transform duration-200 group-hover:-translate-y-[1px]"
         title={title}
       >
         {value}
@@ -84,10 +83,6 @@ function StatCell({ label, value, title }) {
   );
 }
 
-// Host brand mark instead of a bare hostname string; the full host stays
-// reachable via the title tooltip. Brand marks come from the ProviderIcon
-// registry; unknown self-hosted forges get a neutral git glyph rather than
-// a wrong brand.
 function HostIcon({ host }) {
   if (!host) return null;
   let icon;
@@ -106,7 +101,7 @@ function HostIcon({ host }) {
 
 function SectionLabel({ children }) {
   return (
-    <span className="text-[9px] font-extrabold uppercase tracking-widest font-mono text-zinc-400 dark:text-zinc-500 select-none">
+    <span className="text-[9px] font-extrabold uppercase tracking-widest font-mono text-[var(--text-secondary)] select-none">
       {children}
     </span>
   );
@@ -212,7 +207,7 @@ export function ProjectDetailModal({ entry, query = {}, onClose }) {
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75" style={{ backgroundColor: ACCENT }} />
                 <span className="relative inline-flex rounded-full h-1.5 w-1.5" style={{ backgroundColor: ACCENT }} />
               </span>
-              <span className="text-[9px] font-extrabold uppercase tracking-widest font-mono text-zinc-400 dark:text-zinc-500">
+              <span className="text-[9px] font-extrabold uppercase tracking-widest font-mono text-[var(--text-secondary)]">
                 {copy("dashboard.projects.detail.badge")}
               </span>
             </div>
@@ -224,16 +219,16 @@ export function ProjectDetailModal({ entry, query = {}, onClose }) {
               />
               <div className="min-w-0">
                 {owner ? (
-                  <p className="text-[10px] font-mono text-zinc-400 dark:text-zinc-500 truncate leading-tight">
+                  <p className="text-[10px] font-mono text-[var(--text-secondary)] truncate leading-tight">
                     {owner}/
                   </p>
                 ) : null}
-                <h4 className="text-xl font-black text-zinc-900 dark:text-zinc-50 tracking-tight leading-tight truncate">
+                <h4 className="text-xl font-black text-[var(--text-primary)] tracking-tight leading-tight truncate">
                   {repo || projectKey || "—"}
                 </h4>
               </div>
             </div>
-            <div className="mt-2 flex items-center gap-1.5 text-[10px] font-mono text-zinc-400 dark:text-zinc-500 leading-relaxed">
+            <div className="mt-2 flex items-center gap-1.5 text-[10px] font-mono text-[var(--text-secondary)] leading-relaxed">
               <HostIcon host={host} />
               {host && data?.from && data?.to ? <span>·</span> : null}
               {data?.from && data?.to ? (
@@ -243,7 +238,7 @@ export function ProjectDetailModal({ entry, query = {}, onClose }) {
           </div>
 
           {hasData ? (
-            <div className="grid grid-cols-2 gap-x-5 gap-y-5 border-t border-zinc-200/50 dark:border-zinc-800/50 pt-5 select-none">
+            <div className="grid grid-cols-2 gap-x-5 gap-y-5 border-t border-[var(--border-color)] pt-5 select-none">
               <StatCell
                 label={copy("dashboard.projects.detail.stat_total")}
                 value={formatTokens(billableTotal)}
@@ -353,11 +348,11 @@ export function ProjectDetailModal({ entry, query = {}, onClose }) {
                             className="h-1.5 w-1.5 flex-shrink-0 rounded-full"
                             style={{ backgroundColor: seg.color }}
                           />
-                          <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                          <span className="text-[11px] text-[var(--text-secondary)]">
                             {copy(seg.labelKey)}
                           </span>
                           <span
-                            className="text-[11px] font-bold font-mono text-zinc-900 dark:text-zinc-50 tabular-nums"
+                            className="text-[11px] font-bold font-mono text-[var(--text-primary)] tabular-nums"
                             title={formatTokensTooltip(value)}
                           >
                             {formatTokens(value)}
@@ -390,10 +385,10 @@ export function ProjectDetailModal({ entry, query = {}, onClose }) {
                               size={13}
                               className="flex-shrink-0"
                             />
-                            <span className="text-[11px] font-bold uppercase tracking-wide text-zinc-900 dark:text-zinc-50 truncate">
+                            <span className="text-[11px] font-bold uppercase tracking-wide text-[var(--text-primary)] truncate">
                               {formatProviderDisplayName(src.source)}
                             </span>
-                            <span className="hidden text-[10px] font-mono text-zinc-400 dark:text-zinc-500 tabular-nums whitespace-nowrap sm:inline">
+                            <span className="hidden text-[10px] font-mono text-[var(--text-secondary)] tabular-nums whitespace-nowrap sm:inline">
                               {copy("dashboard.projects.detail.source_days", {
                                 n: Number(src.days_active || 0),
                               })}
@@ -407,16 +402,16 @@ export function ProjectDetailModal({ entry, query = {}, onClose }) {
                               ) : null}
                             </span>
                             <span
-                              className="ml-auto text-[12px] font-bold font-mono text-zinc-900 dark:text-zinc-50 tabular-nums"
+                              className="ml-auto text-[12px] font-bold font-mono text-[var(--text-primary)] tabular-nums"
                               title={formatTokensTooltip(value)}
                             >
                               {formatTokens(value)}
                             </span>
-                            <span className="w-9 text-right text-[10px] font-mono text-zinc-400 dark:text-zinc-500 tabular-nums">
+                            <span className="w-9 text-right text-[10px] font-mono text-[var(--text-secondary)] tabular-nums">
                               {formatPercent(srcShare)}
                             </span>
                           </div>
-                          <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800/60">
+                          <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-white/10 border border-white/5">
                             <div
                               className="h-full rounded-full"
                               style={{

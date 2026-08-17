@@ -30,20 +30,20 @@
 }
 
 @theme {
-  /* KKCoder 现代调色板 */
+  /* KKCoder 现代调色板 (50 最浅, 950 最深) */
   --color-oai-black: #0f172a;
   --color-oai-white: #ffffff;
-  --color-oai-gray-50: #1a1918;
-  --color-oai-gray-100: #232220;
-  --color-oai-gray-200: #33312e;
-  --color-oai-gray-300: #4a4743;
-  --color-oai-gray-400: #7a7670;
+  --color-oai-gray-50: #fcfaf7;
+  --color-oai-gray-100: #f0ece6;
+  --color-oai-gray-200: #e2ded8;
+  --color-oai-gray-300: #ccc8c0;
+  --color-oai-gray-400: #b5b0a8;
   --color-oai-gray-500: #9e9992;
-  --color-oai-gray-600: #b5b0a8;
-  --color-oai-gray-700: #ccc8c0;
-  --color-oai-gray-800: #e2ded8;
-  --color-oai-gray-900: #f0ece6;
-  --color-oai-gray-950: #fcfaf7;
+  --color-oai-gray-600: #7a7670;
+  --color-oai-gray-700: #4a4743;
+  --color-oai-gray-800: #33312e;
+  --color-oai-gray-900: #232220;
+  --color-oai-gray-950: #1a1918;
 
   /* KKCoder 琥珀金主色 */
   --color-oai-brand: #f59e0b;

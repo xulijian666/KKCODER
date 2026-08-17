@@ -23,25 +23,25 @@ export function Button({
   ...props
 }) {
   const baseStyles =
-    "inline-flex items-center justify-center font-medium transition-all duration-200 rounded-md focus:outline-none focus:ring-2 focus:ring-oai-blue/30 active:scale-[0.98] active:duration-100";
+    "inline-flex items-center justify-center font-mono transition-all duration-150 rounded-lg focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-primary)] active:scale-[0.98] select-none";
 
   const variantStyles = {
     primary:
-      "bg-[var(--color-primary)] text-white border border-[var(--color-primary)] hover:opacity-90 active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none transition-all font-semibold",
+      "bg-[var(--color-primary)] text-white border border-[var(--color-primary)] hover:brightness-110 active:scale-[0.98] disabled:opacity-40 disabled:pointer-events-none shadow-[0_2px_8px_color-mix(in_srgb,var(--color-primary)_35%,transparent)] font-semibold",
     secondary:
-      "bg-[var(--bg-active-item)] text-[var(--text-primary)] border border-[var(--border-color)] hover:bg-[var(--bg-hover-item)] hover:border-[color-mix(in_srgb,var(--color-primary)_35%,var(--border-color))] active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none transition-all",
+      "bg-[var(--bg-active-item)] text-[var(--text-secondary)] border border-[var(--border-color)] hover:bg-[var(--bg-hover-item)] hover:text-[var(--text-primary)] hover:border-[color-mix(in_srgb,var(--color-primary)_35%,var(--border-color))] active:scale-[0.98] disabled:opacity-40 disabled:pointer-events-none font-medium",
     ghost:
-      "bg-transparent text-[var(--text-secondary)] border border-transparent hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover-item)] active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none transition-all",
+      "bg-transparent text-[var(--text-secondary)] border border-transparent hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover-item)] active:scale-[0.98] disabled:opacity-40 disabled:pointer-events-none font-medium",
   };
 
   const sizeStyles = {
-    sm: "h-8 px-3 text-sm",
-    md: "h-10 px-4 text-sm",
-    lg: "h-12 px-6 text-base",
+    sm: "h-7.5 px-3 text-xs",
+    md: "h-9 px-4 text-xs font-medium",
+    lg: "h-10 px-5 text-sm font-medium",
   };
 
   const disabledStyles = disabled
-    ? "cursor-not-allowed opacity-60"
+    ? "cursor-not-allowed opacity-50"
     : "cursor-pointer";
 
   const mergedClassName = `${baseStyles} ${variantStyles[variant]} ${sizeStyles[size]} ${disabledStyles} ${className}`;

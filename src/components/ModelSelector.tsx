@@ -1,4 +1,5 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Check, ChevronDown, Cpu } from "lucide-react";
 import type { ClaudeModelInfo } from "../utils/claudeModel";
 import { log } from "../utils/log";
@@ -25,13 +26,51 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const displayModel = selectedModel || modelInfo?.defaultModel || "选择模型";
+  const [dropdownStyle, setDropdownStyle] = useState<React.CSSProperties>({});
+
+  const updatePosition = useCallback(() => {
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const dropdownWidth = 280;
+    const margin = 8;
+
+    const bottom = window.innerHeight - rect.top + margin;
+
+    let left = rect.left;
+    if (left + dropdownWidth > window.innerWidth - margin) {
+      left = Math.max(margin, window.innerWidth - dropdownWidth - margin);
+    }
+
+    setDropdownStyle({
+      position: "fixed",
+      bottom: `${bottom}px`,
+      left: `${left}px`,
+      zIndex: 99999,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (open) {
+      updatePosition();
+      window.addEventListener("resize", updatePosition);
+      window.addEventListener("scroll", updatePosition, true);
+      return () => {
+        window.removeEventListener("resize", updatePosition);
+        window.removeEventListener("scroll", updatePosition, true);
+      };
+    }
+  }, [open, updatePosition]);
 
   // 点击菜单外部任意处关闭
   useEffect(() => {
     if (!open) return;
     const handleMouseDown = (event: MouseEvent) => {
-      const node = containerRef.current;
-      if (node && !node.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(target) &&
+        !(target as Element).closest?.(".model-dropdown")
+      ) {
         setOpen(false);
       }
     };
@@ -80,12 +119,15 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         <ChevronDown size={11} className={`chat-model-select-chevron ${open ? "is-open" : ""}`} />
       </button>
 
-      {open && (
-        <div
-          className="model-dropdown chat-model-dropdown"
-          onMouseDown={(event) => event.stopPropagation()}
-          onClick={(event) => event.stopPropagation()}
-        >
+      {open &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div
+            className="model-dropdown chat-model-dropdown"
+            style={dropdownStyle}
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
+          >
           {modelInfo && (
             <div className="model-dropdown-header">
               <span
@@ -179,7 +221,8 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
               <div className="model-dropdown-empty">未读取到模型配置</div>
             )}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

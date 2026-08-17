@@ -29,12 +29,22 @@ pub struct ActiveChatTurn {
     pub model: Option<String>,
     /// 该 turn 的临时 settings 文件（--settings，仅本次进程生效；收尾时删除）
     pub settings_file: Option<std::path::PathBuf>,
+    /// 该 turn 的访问模式（full-access / read-only / default / current，
+    /// AskUserQuestion 恢复路径沿用）
+    pub access_mode: Option<String>,
 }
 
 /// 原生 AskUserQuestion 的待回答项：回答经 sender 回传给阻塞中的 reader 线程
 struct NativeQuestion {
     session_id: String,
     sender: mpsc::Sender<String>,
+}
+
+/// ExitPlanMode 的待批准项：GUI 回传批准（true）后，reader 向仍打开的
+/// claude stdin 注入 tool_result（"Plan approved"），模型随即退出计划模式继续执行。
+struct PendingPlanApproval {
+    session_id: String,
+    sender: mpsc::Sender<bool>,
 }
 
 #[derive(Default)]
@@ -47,6 +57,8 @@ pub struct ClaudeChatManager {
     askuser_mcp: Arc<OnceLock<askuser_mcp::AskUserMcpServer>>,
     /// 原生 AskUserQuestion：request_id -> 回传回答的通道（reader 线程阻塞等待）
     native_questions: Arc<Mutex<HashMap<String, NativeQuestion>>>,
+    /// 计划模式退出批准：request_id -> 待批准项
+    plan_approvals: Arc<Mutex<HashMap<String, PendingPlanApproval>>>,
     /// 每会话最近一次归一化 token 用量（/context 用）
     session_usage: Arc<Mutex<HashMap<String, serde_json::Value>>>,
 }
@@ -122,10 +134,27 @@ fn spawn_claude_process(
     content: Vec<serde_json::Value>,
     model: Option<&str>,
     settings_file: Option<&std::path::Path>,
-) -> Result<(Child, std::process::ChildStdout, std::process::ChildStderr), String> {
+    access_mode: Option<&str>,
+) -> Result<
+    (
+        Child,
+        Option<std::process::ChildStdin>,
+        std::process::ChildStdout,
+        std::process::ChildStderr,
+    ),
+    String,
+> {
     let ask_server =
         askuser_mcp::ensure_started(askuser_mcp, app.clone(), pending_questions.clone())?;
     let session_flag = if resume { "--resume" } else { "--session-id" };
+    // 访问模式 → CLI 权限标志（对齐 CC-GUI：用户在聊天界面选择，规划模式 =
+    // 会话从 --permission-mode plan 启动，模型无需自己切计划模式）
+    let mut access_args: Vec<String> = match access_mode {
+        Some("read-only") => vec!["--permission-mode".to_string(), "plan".to_string()],
+        Some("default") => vec!["--permission-mode".to_string(), "default".to_string()],
+        Some("current") => vec!["--permission-mode".to_string(), "acceptEdits".to_string()],
+        _ => vec!["--dangerously-skip-permissions".to_string()],
+    };
     let mut args = vec![
         "-p".to_string(),
         "--input-format".to_string(),
@@ -135,14 +164,22 @@ fn spawn_claude_process(
         "--verbose".to_string(),
         "--include-partial-messages".to_string(),
         "--include-hook-events".to_string(),
-        "--dangerously-skip-permissions".to_string(),
         "--mcp-config".to_string(),
         ask_server.config_json(session_id),
         "--allowedTools".to_string(),
         askuser_mcp::AskUserMcpServer::allowed_tool_name(),
+        // claude 2.1 内置了原生 AskUserQuestion 工具：在 -p 非交互模式下被
+        // cc-switch/claude 立即判为权限拒绝并返回 "Answer questions?" 错误，
+        // 模型一旦选它：面板不会出现，且 reader 线程会阻塞空等 30 分钟。
+        // 禁用内置工具，强制模型走我们的 MCP 桥（mcp__kkcoder__AskUserQuestion）。
+        // 计划模式工具（EnterPlanMode/ExitPlanMode）保持可用：reader 检测到
+        // ExitPlanMode 时通过仍打开的 stdin 注入 tool_result 完成 GUI 批准。
+        "--disallowedTools".to_string(),
+        "AskUserQuestion".to_string(),
         session_flag.to_string(),
         agent_session_id.to_string(),
     ];
+    args.append(&mut access_args);
     if let Some(model) = model.filter(|value| !value.trim().is_empty()) {
         args.push("--model".to_string());
         args.push(model.trim().to_string());
@@ -159,7 +196,10 @@ fn spawn_claude_process(
 
     let mut child = cmd.spawn().map_err(|e| format!("启动 claude 失败: {e}"))?;
 
-    if let Some(mut stdin) = child.stdin.take() {
+    // 写入初始用户消息后**保留 stdin**：ExitPlanMode 等需要流式回传（注入
+    // tool_result 完成 GUI 批准）的场景必须保持输入流打开（关闭/EOF 时
+    // claude 无法获得批准通道，会直接把 ExitPlanMode 判为 "Exit plan mode?" 错误）。
+    let stdin_handle = if let Some(mut stdin) = child.stdin.take() {
         let input_json = serde_json::json!({
             "type": "user",
             "message": { "role": "user", "content": content }
@@ -168,11 +208,11 @@ fn spawn_claude_process(
             let _ = child.kill();
             return Err(format!("写入 claude stdin 失败: {e}"));
         }
-        drop(stdin);
+        Some(stdin)
     } else {
         let _ = child.kill();
         return Err("无法获取 claude stdin".into());
-    }
+    };
 
     let stdout = match child.stdout.take() {
         Some(s) => s,
@@ -189,7 +229,7 @@ fn spawn_claude_process(
         }
     };
 
-    Ok((child, stdout, stderr))
+    Ok((child, stdin_handle, stdout, stderr))
 }
 
 /// 发送一条用户消息，启动一个 claude -p turn
@@ -203,6 +243,7 @@ pub fn chat_send_message(
     agent_session_id: String,
     text: String,
     images: Option<Vec<String>>,
+    access_mode: Option<String>,
 ) -> Result<(), String> {
     if text.trim().is_empty() && images.as_ref().is_none_or(Vec::is_empty) {
         return Err("消息内容为空".into());
@@ -234,13 +275,16 @@ pub fn chat_send_message(
     }
 
     // 是否续聊由后端事实决定，避免前端 tab 生命周期把首次发送误判为 reopen。
-    let resume = find_claude_jsonl(&agent_session_id, &directory).is_some() || {
-        state
-            .started_sessions
-            .lock()
-            .map_err(|e| e.to_string())?
-            .contains(&session_id)
-    };
+    // resume 必须以「转录文件真实存在」为前提：斜杠命令等合成回合不会创建
+    // 会话文件，若强行 --resume 会得到 "No conversation found" 空响应。
+    let resume = find_claude_jsonl(&agent_session_id, &directory).is_some()
+        && {
+            state
+                .started_sessions
+                .lock()
+                .map_err(|e| e.to_string())?
+                .contains(&session_id)
+        };
 
     let mut content = image_blocks;
     if !text.trim().is_empty() {
@@ -250,7 +294,7 @@ pub fn chat_send_message(
     // 所选供应商的临时 settings 文件（直连该供应商，不碰 ~/.claude/settings.json 与 cc-switch.db）
     let settings_file = crate::claude_model::build_settings_override_file(&model_state, &session_id);
 
-    let (mut child, stdout, stderr) = spawn_claude_process(
+    let (mut child, stdin_handle, stdout, stderr) = spawn_claude_process(
         &app,
         state.askuser_mcp.as_ref(),
         &state.pending_questions,
@@ -261,11 +305,13 @@ pub fn chat_send_message(
         content,
         model.as_deref(),
         settings_file.as_deref(),
+        access_mode.as_deref(),
     )?;
     let pid = child.id();
     log_session(&session_id, &format!(
-        "[claude_chat] send session={session_id} resume={resume} pid={pid} model={}",
-        model.as_deref().unwrap_or("(默认)")
+        "[claude_chat] send session={session_id} resume={resume} pid={pid} model={} mode={}",
+        model.as_deref().unwrap_or("(默认)"),
+        access_mode.as_deref().unwrap_or("full-access")
     ));
 
     let cancelled = Arc::new(AtomicBool::new(false));
@@ -283,6 +329,7 @@ pub fn chat_send_message(
                 cancelled: cancelled.clone(),
                 model,
                 settings_file,
+                access_mode,
             },
         );
     }
@@ -297,12 +344,14 @@ pub fn chat_send_message(
         state.started_sessions.clone(),
         state.askuser_mcp.clone(),
         state.pending_questions.clone(),
+        state.plan_approvals.clone(),
         state.native_questions.clone(),
         state.session_usage.clone(),
         session_id,
         directory,
         agent_session_id,
         child,
+        stdin_handle,
         stdout,
         stderr,
         cancelled,
@@ -348,6 +397,10 @@ pub fn chat_cancel(state: State<'_, ClaudeChatManager>, session_id: String) -> R
     // 断开原生 AskUserQuestion 通道，让 reader 线程从 recv_timeout 退出
     if let Ok(mut native) = state.native_questions.lock() {
         native.retain(|_, q| q.session_id != session_id);
+    }
+    // 断开计划模式批准：批准返回 false（保持计划模式），reader 注入拒绝后继续
+    if let Ok(mut approvals) = state.plan_approvals.lock() {
+        approvals.retain(|_, a| a.session_id != session_id);
     }
     let pid = {
         let turns = state.turns.lock().map_err(|e| e.to_string())?;
@@ -407,6 +460,46 @@ pub fn chat_answer_question(
         .sender
         .send(Ok(askuser_mcp::format_answer(&answers)))
         .map_err(|_| "Claude 已停止等待该问题".to_string())
+}
+
+/// 计划模式退出批准：GUI 点击「批准并执行」/「拒绝」后调用。
+/// approve=true → reader 向 claude stdin 注入批准 tool_result，模型退出
+/// 计划模式继续执行；false → 注入拒绝，模型留在计划模式继续修改方案。
+#[tauri::command]
+pub fn chat_answer_plan_approval(
+    state: State<'_, ClaudeChatManager>,
+    session_id: String,
+    request_id: String,
+    approve: bool,
+) -> Result<(), String> {
+    let approval = {
+        let mut map = state
+            .plan_approvals
+            .lock()
+            .map_err(|error| error.to_string())?;
+        map.remove(&request_id)
+            .ok_or_else(|| "该批准请求已结束或不存在".to_string())?
+    };
+    if approval.session_id != session_id {
+        return Err("该批准请求不属于当前会话".to_string());
+    }
+    approval
+        .sender
+        .send(approve)
+        .map_err(|_| "Claude 已结束等待该批准".to_string())
+}
+
+/// 获取当前会话最新的规划方案内容（供前端弹窗展示或主动同步）
+#[tauri::command]
+pub fn chat_get_latest_plan(
+    agent_session_id: String,
+    directory: String,
+) -> Result<serde_json::Value, String> {
+    Ok(resolve_exit_plan_payload(
+        &serde_json::Value::Null,
+        &agent_session_id,
+        &directory,
+    ))
 }
 
 /// 读取 claude 的 jsonl 转录作为历史消息（复用 lib.rs 既有实现）
@@ -622,12 +715,14 @@ fn spawn_reader_thread(
     started_sessions: Arc<Mutex<HashSet<String>>>,
     askuser_mcp: Arc<OnceLock<askuser_mcp::AskUserMcpServer>>,
     pending_questions: askuser_mcp::PendingQuestions,
+    plan_approvals: Arc<Mutex<HashMap<String, PendingPlanApproval>>>,
     native_questions: Arc<Mutex<HashMap<String, NativeQuestion>>>,
     session_usage: Arc<Mutex<HashMap<String, serde_json::Value>>>,
     session_id: String,
     directory: String,
     agent_session_id: String,
     child: Child,
+    stdin_handle: Option<std::process::ChildStdin>,
     stdout: std::process::ChildStdout,
     stderr: std::process::ChildStderr,
     cancelled: Arc<AtomicBool>,
@@ -639,12 +734,14 @@ fn spawn_reader_thread(
             started_sessions,
             askuser_mcp,
             pending_questions,
+            plan_approvals,
             native_questions,
             session_usage,
             session_id,
             directory,
             agent_session_id,
             child,
+            stdin_handle,
             Some(stdout),
             Some(stderr),
             cancelled,
@@ -653,7 +750,9 @@ fn spawn_reader_thread(
 }
 
 /// 读取单个 claude 进程的 stdout；若中途遇到原生 AskUserQuestion 则杀进程并
-/// 用 `--resume` 回传回答，直到 turn 结束（result）或进程 EOF。
+/// 用 `--resume` 回传回答；遇到 ExitPlanMode 则通过保留的 stdin 注入
+/// tool_result（GUI 批准），模型在同进程内继续执行。直到 turn 结束（result）
+/// 或进程 EOF。
 #[allow(clippy::too_many_arguments)]
 fn run_process_loop(
     app: AppHandle,
@@ -661,12 +760,14 @@ fn run_process_loop(
     started_sessions: Arc<Mutex<HashSet<String>>>,
     askuser_mcp: Arc<OnceLock<askuser_mcp::AskUserMcpServer>>,
     pending_questions: askuser_mcp::PendingQuestions,
+    plan_approvals: Arc<Mutex<HashMap<String, PendingPlanApproval>>>,
     native_questions: Arc<Mutex<HashMap<String, NativeQuestion>>>,
     session_usage: Arc<Mutex<HashMap<String, serde_json::Value>>>,
     session_id: String,
     directory: String,
     agent_session_id: String,
     mut child: Child,
+    mut stdin_handle: Option<std::process::ChildStdin>,
     mut stdout: Option<std::process::ChildStdout>,
     mut stderr: Option<std::process::ChildStderr>,
     cancelled: Arc<AtomicBool>,
@@ -732,6 +833,69 @@ fn run_process_loop(
                             tool_name,
                             input,
                         } => {
+                            // 计划模式退出（ExitPlanMode）：-p 模式下关闭/EOF stdin
+                            // 时 claude 会直接回 "Exit plan mode?" 错误。这里保持
+                            // stdin 打开，发 GUI 批准卡片，收到批准后注入 tool_result，
+                            // 模型在同进程内退出计划模式继续执行（相当于 CLI 的 y 确认）。
+                            if tool_name == "ExitPlanMode" {
+                                let request_id = uuid::Uuid::new_v4().to_string();
+                                let (tx, rx) = mpsc::channel();
+                                if let Ok(mut map) = plan_approvals.lock() {
+                                    map.insert(
+                                        request_id.clone(),
+                                        PendingPlanApproval {
+                                            session_id: session_id.clone(),
+                                            sender: tx,
+                                        },
+                                    );
+                                }
+                                let enriched_input = resolve_exit_plan_payload(
+                                    &input,
+                                    &agent_session_id,
+                                    &directory,
+                                );
+                                let mut e = ChatStreamEvent::new(&session_id, "plan:approval");
+                                e.request_id = Some(request_id.clone());
+                                e.tool_id = Some(tool_id.clone());
+                                e.input = Some(enriched_input);
+                                e.emit(&app);
+                                let decision = rx.recv_timeout(std::time::Duration::from_secs(
+                                    30 * 60,
+                                ));
+                                if let Ok(mut map) = plan_approvals.lock() {
+                                    map.remove(&request_id);
+                                }
+                                // 不管批准/拒绝/超时都注入 tool_result，claude 才能继续
+                                let decision_text = match decision {
+                                    Ok(true) => "Plan approved. Exit plan mode and continue implementing.",
+                                    Ok(false) => {
+                                        "User rejected the plan. Stay in plan mode and revise the plan."
+                                    }
+                                    Err(_) => {
+                                        "User did not respond to the plan approval. Stay in plan mode."
+                                    }
+                                };
+                                if let Some(stdin) = stdin_handle.as_mut() {
+                                    let msg = serde_json::json!({
+                                        "type": "user",
+                                        "message": {
+                                            "role": "user",
+                                            "content": [{
+                                                "type": "tool_result",
+                                                "tool_use_id": tool_id,
+                                                "content": decision_text,
+                                            }]
+                                        }
+                                    });
+                                    if writeln!(stdin, "{msg}").is_err() {
+                                        // stdin 已关闭（claude 退出）：直接收尾
+                                        log_to_file(&format!(
+                                            "[claude_chat] ExitPlanMode 注入失败（进程可能已退出）: {decision_text}"
+                                        ));
+                                    }
+                                }
+                                continue;
+                            }
                             let mut e = ChatStreamEvent::new(&session_id, "tool:started");
                             e.tool_id = Some(tool_id);
                             e.tool_name = Some(tool_name);
@@ -817,8 +981,19 @@ fn run_process_loop(
                             }
                             if !session_started {
                                 session_started = true;
-                                if let Ok(mut s) = started_sessions.lock() {
-                                    s.insert(session_id.clone());
+                                // 仅当 claude **真实创建了会话转录文件**时才标记
+                                // 「已建过会话」：`-p` 模式收到以 `/` 开头的输入
+                                // （斜杠命令）时，claude 返回合成回复（如
+                                // "/mcp isn't available in this environment"）且
+                                // **不创建会话**。若此时误标已建过，后续消息会
+                                // `--resume` 一个不存在的会话 → "No conversation
+                                // found" → 空响应（表现为「发什么消息都不回复」）。
+                                if !is_error
+                                    && find_claude_jsonl(&agent_session_id, &directory).is_some()
+                                {
+                                    if let Ok(mut s) = started_sessions.lock() {
+                                        s.insert(session_id.clone());
+                                    }
                                 }
                             }
                             let mut e = ChatStreamEvent::new(&session_id, "turn:finished");
@@ -832,6 +1007,12 @@ fn run_process_loop(
                             }
                             e.emit(&app);
                             finished_emitted = true;
+                            // 回合已结束：立即关闭 stdin。stream-json 输入模式下
+                            // 若保持 stdin 打开，claude 会无限等待更多输入而不退出
+                            //（实测挂起），reader 将永远收不到 EOF。
+                            if let Some(stdin) = stdin_handle.take() {
+                                drop(stdin);
+                            }
                         }
                     }
                 }
@@ -844,15 +1025,22 @@ fn run_process_loop(
             kill_process_tree(child.id());
             let _ = child.wait();
             let _ = stderr_thread.join();
-            // 沿用本 turn 启动时的模型覆盖与临时 settings 文件
+            // 沿用本 turn 启动时的模型覆盖、临时 settings 文件与访问模式
             let turn_state = {
                 let guard = turns.lock().ok();
                 guard
                     .as_ref()
                     .and_then(|t| t.get(&session_id))
-                    .map(|turn| (turn.model.clone(), turn.settings_file.clone()))
+                    .map(|turn| {
+                        (
+                            turn.model.clone(),
+                            turn.settings_file.clone(),
+                            turn.access_mode.clone(),
+                        )
+                    })
             };
-            let (turn_model, turn_settings_file) = turn_state.unwrap_or((None, None));
+            let (turn_model, turn_settings_file, turn_access_mode) =
+                turn_state.unwrap_or((None, None, None));
             let content = vec![serde_json::json!({ "type": "text", "text": answer })];
             match spawn_claude_process(
                 &app,
@@ -865,8 +1053,9 @@ fn run_process_loop(
                 content,
                 turn_model.as_deref(),
                 turn_settings_file.as_deref(),
+                turn_access_mode.as_deref(),
             ) {
-                Ok((new_child, new_stdout, new_stderr)) => {
+                Ok((new_child, new_stdin, new_stdout, new_stderr)) => {
                     let pid = new_child.id();
                     if let Ok(mut t) = turns.lock() {
                         if let Some(turn) = t.get_mut(&session_id) {
@@ -874,10 +1063,12 @@ fn run_process_loop(
                         }
                     }
                     log_session(&session_id, &format!(
-                        "[claude_chat] resume session={session_id} pid={pid} model={}",
-                        turn_model.as_deref().unwrap_or("(默认)")
+                        "[claude_chat] resume session={session_id} pid={pid} model={} mode={}",
+                        turn_model.as_deref().unwrap_or("(默认)"),
+                        turn_access_mode.as_deref().unwrap_or("full-access")
                     ));
                     child = new_child;
+                    stdin_handle = new_stdin;
                     stdout = Some(new_stdout);
                     stderr = Some(new_stderr);
                     continue;
@@ -969,6 +1160,122 @@ fn kill_process_tree(pid: u32) {
     {
         let _ = Command::new("kill").arg("-9").arg(pid.to_string()).status();
     }
+}
+
+/// 解析 ExitPlanMode 的计划内容（从 input、转录 jsonl 或 ~/.claude/plans/*.md 提取并读取）
+fn resolve_exit_plan_payload(
+    input: &serde_json::Value,
+    agent_session_id: &str,
+    directory: &str,
+) -> serde_json::Value {
+    let mut plan_text: Option<String> = None;
+    let mut plan_file_path: Option<String> = None;
+
+    // 1. 尝试直接从 input 提取
+    if let Some(plan) = input.get("plan").and_then(serde_json::Value::as_str) {
+        if !plan.trim().is_empty() {
+            plan_text = Some(plan.trim().to_string());
+        }
+    }
+    for key in &["planFilePath", "file_path", "filePath", "path"] {
+        if let Some(p) = input.get(*key).and_then(serde_json::Value::as_str) {
+            if !p.trim().is_empty() {
+                plan_file_path = Some(p.trim().to_string());
+                break;
+            }
+        }
+    }
+
+    // 2. 如果没有直接给出完整 plan_text，尝试从转录 jsonl 中寻找 planFilePath / slug / Write tool
+    if plan_text.is_none() {
+        if let Some(jsonl) = find_claude_jsonl(agent_session_id, directory) {
+            if let Ok(file) = std::fs::File::open(&jsonl) {
+                let reader = BufReader::new(file);
+                for line in reader.lines() {
+                    let Ok(line) = line else { continue };
+                    let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
+
+                    // 2a. attachment / plan_mode
+                    if let Some(attachment) = v.get("attachment") {
+                        if let Some(p) = attachment.get("planFilePath").and_then(serde_json::Value::as_str) {
+                            if !p.trim().is_empty() {
+                                plan_file_path = Some(p.trim().to_string());
+                            }
+                        }
+                    }
+                    if let Some(slug) = v.get("slug").and_then(serde_json::Value::as_str) {
+                        if !slug.trim().is_empty() {
+                            if let Some(home) = dirs::home_dir() {
+                                let path = home.join(".claude").join("plans").join(format!("{slug}.md"));
+                                if path.is_file() {
+                                    plan_file_path = Some(path.to_string_lossy().to_string());
+                                }
+                            }
+                        }
+                    }
+                    // 2b. Write tool call
+                    if let Some(message) = v.get("message") {
+                        if let Some(content) = message.get("content").and_then(serde_json::Value::as_array) {
+                            for item in content {
+                                if item.get("type").and_then(serde_json::Value::as_str) == Some("tool_use")
+                                    && item.get("name").and_then(serde_json::Value::as_str) == Some("Write")
+                                {
+                                    if let Some(p) = item.pointer("/input/file_path").and_then(serde_json::Value::as_str) {
+                                        if p.contains("plans") && p.ends_with(".md") {
+                                            plan_file_path = Some(p.to_string());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. 如果仍未找到 plan_file_path，扫描 ~/.claude/plans 获取最近修改的 plan 文件
+    if plan_file_path.is_none() {
+        if let Some(home) = dirs::home_dir() {
+            let plans_dir = home.join(".claude").join("plans");
+            if let Ok(entries) = std::fs::read_dir(plans_dir) {
+                let mut candidates: Vec<(std::path::PathBuf, std::time::SystemTime)> = Vec::new();
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("md") {
+                        if let Ok(meta) = path.metadata() {
+                            let modified = meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                            candidates.push((path, modified));
+                        }
+                    }
+                }
+                candidates.sort_by(|a, b| b.1.cmp(&a.1));
+                if let Some((newest, _)) = candidates.first() {
+                    plan_file_path = Some(newest.to_string_lossy().to_string());
+                }
+            }
+        }
+    }
+
+    // 4. 从 plan_file_path 读取真实 markdown 内容
+    if let Some(ref path_str) = plan_file_path {
+        if let Ok(content) = std::fs::read_to_string(path_str) {
+            if !content.trim().is_empty() {
+                plan_text = Some(content);
+            }
+        }
+    }
+
+    let plan_file_name = plan_file_path
+        .as_ref()
+        .map(|p| std::path::Path::new(p).file_name().and_then(|n| n.to_str()).unwrap_or("").to_string());
+
+    serde_json::json!({
+        "plan": plan_text,
+        "planFilePath": plan_file_path,
+        "planFileName": plan_file_name,
+        "rawInput": input,
+    })
 }
 
 #[cfg(test)]

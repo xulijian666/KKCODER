@@ -26,7 +26,7 @@ import {
   X,
 } from "lucide-react";
 import { renderChatMarkdownToHtml } from "../utils/markdown";
-import { formatFeedbackError, notifyInfo, notifyWarning } from "../utils/appFeedback";
+import { formatFeedbackError, notifyError, notifyInfo, notifyWarning } from "../utils/appFeedback";
 import { isEditableFocusTarget } from "../utils/terminalFocus";
 import { generateUUID } from "../utils/uuid";
 import { log } from "../utils/log";
@@ -40,6 +40,23 @@ import {
 } from "../utils/chatCompletion";
 
 const CHAT_EVENT_CHANNEL = "claude-chat-event";
+
+/* ===== 访问模式（对齐 CC-GUI：全自动 / 规划模式 / 默认 / 当前） ===== */
+
+const ACCESS_MODE_STORAGE_PREFIX = "kkcoder_chat_access_mode_";
+
+const ACCESS_MODES: Array<{ id: string; label: string; title: string }> = [
+  {
+    id: "full-access",
+    label: "auto",
+    title: "auto（全自动）：跳过所有权限检查，模型可直接执行",
+  },
+  {
+    id: "read-only",
+    label: "plan",
+    title: "plan（规划模式）：只读规划，模型只调研并输出方案，不修改文件；满意后切回 auto 继续执行",
+  },
+];
 
 interface ChatTabProps {
   sessionId: string;
@@ -487,8 +504,73 @@ function messagesReducer(state: ChatMessage[], action: ChatAction): ChatMessage[
   }
 }
 
-const getToolMeta = (name: string) => {
+const extractSkillName = (card: ToolCardData): string | null => {
+  // 1. Check card.input as object
+  if (card.input && typeof card.input === "object") {
+    const inp = card.input as Record<string, any>;
+    if (typeof inp.skill === "string" && inp.skill.trim()) return inp.skill.trim();
+    if (typeof inp.skill_name === "string" && inp.skill_name.trim()) return inp.skill_name.trim();
+    if (typeof inp.skillName === "string" && inp.skillName.trim()) return inp.skillName.trim();
+    if (typeof inp.name === "string" && inp.name.trim() && card.name.toLowerCase().includes("skill")) return inp.name.trim();
+  }
+
+  // 2. Check card.input as string (e.g. JSON)
+  if (typeof card.input === "string" && card.input.trim()) {
+    try {
+      const parsed = JSON.parse(card.input);
+      if (parsed && typeof parsed === "object") {
+        if (typeof parsed.skill === "string" && parsed.skill.trim()) return parsed.skill.trim();
+        if (typeof parsed.skill_name === "string" && parsed.skill_name.trim()) return parsed.skill_name.trim();
+        if (typeof parsed.skillName === "string" && parsed.skillName.trim()) return parsed.skillName.trim();
+        if (typeof parsed.name === "string" && parsed.name.trim() && card.name.toLowerCase().includes("skill")) return parsed.name.trim();
+      }
+    } catch {
+      const match = card.input.match(/"skill"\s*:\s*"([^"]+)"/i) ||
+                    card.input.match(/"skill_name"\s*:\s*"([^"]+)"/i) ||
+                    card.input.match(/"skillName"\s*:\s*"([^"]+)"/i);
+      if (match && match[1]) return match[1].trim();
+    }
+  }
+
+  // 3. Check card.output or error (e.g. "Launching skill: update-config")
+  const text = (card.output ?? "") + (card.error ?? "");
+  if (text) {
+    const match = text.match(/Launching skill:\s*([a-zA-Z0-9_\-./]+)/i) ||
+                  text.match(/Running skill:\s*([a-zA-Z0-9_\-./]+)/i) ||
+                  text.match(/Using skill:\s*([a-zA-Z0-9_\-./]+)/i);
+    if (match && match[1]) return match[1].trim();
+  }
+
+  // 4. Check card.name (e.g. "skill:update-config" or "skill/update-config")
+  if (card.name.includes(":") || card.name.includes("/")) {
+    const parts = card.name.split(/[:/]/);
+    if (parts[0].toLowerCase().includes("skill") && parts[1]) {
+      return parts.slice(1).join("/").trim();
+    }
+  }
+
+  return null;
+};
+
+const extractToolParamSummary = (card: ToolCardData): string | null => {
+  if (!card.input) return null;
+  if (typeof card.input === "object") {
+    const inp = card.input as Record<string, any>;
+    if (typeof inp.command === "string" && inp.command.trim()) return truncate(inp.command.trim(), 50);
+    if (typeof inp.cmd === "string" && inp.cmd.trim()) return truncate(inp.cmd.trim(), 50);
+    if (typeof inp.file_path === "string" && inp.file_path.trim()) return truncate(inp.file_path.trim(), 50);
+    if (typeof inp.path === "string" && inp.path.trim()) return truncate(inp.path.trim(), 50);
+    if (typeof inp.query === "string" && inp.query.trim()) return truncate(inp.query.trim(), 50);
+    if (typeof inp.pattern === "string" && inp.pattern.trim()) return truncate(inp.pattern.trim(), 50);
+  }
+  return null;
+};
+
+const getToolMeta = (name: string, isSkill = false) => {
   const n = name.toLowerCase();
+  if (isSkill || n.includes("skill") || n.includes("custom_tool") || n.includes("invoke_skill") || n.includes("use_skill")) {
+    return { type: "skill", label: "技能", icon: <Wrench size={13} /> };
+  }
   if (n.includes("bash") || n.includes("terminal") || n.includes("powershell") || n.includes("exec") || n.includes("command")) {
     return { type: "terminal", label: "终端", icon: <TerminalIcon size={13} /> };
   }
@@ -518,11 +600,13 @@ const formatElapsed = (sec: number): string => {
 const ToolCard: React.FC<{ card: ToolCardData }> = ({ card }) => {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const skillName = extractSkillName(card);
+  const paramSummary = !skillName ? extractToolParamSummary(card) : null;
   const inputText = card.input
     ? JSON.stringify(card.input, null, 1)
     : "";
   const output = card.output ?? card.error ?? "";
-  const meta = getToolMeta(card.name);
+  const meta = getToolMeta(card.name, Boolean(skillName));
   const statusLabel =
     card.status === "running"
       ? "运行中"
@@ -546,7 +630,19 @@ const ToolCard: React.FC<{ card: ToolCardData }> = ({ card }) => {
         onClick={() => setOpen(!open)}
       >
         <span className={`chat-tool-icon type-${meta.type}`}>{meta.icon}</span>
-        <span className="chat-tool-name">{card.name}</span>
+        <div className="chat-tool-title-group">
+          <span className="chat-tool-name">{card.name}</span>
+          {skillName && (
+            <span className="chat-tool-skill-tag" title={`技能: ${skillName}`}>
+              {skillName}
+            </span>
+          )}
+          {paramSummary && (
+            <span className="chat-tool-param-summary" title={paramSummary}>
+              {paramSummary}
+            </span>
+          )}
+        </div>
         <span className="chat-tool-status">
           {card.status === "running" && <span className="chat-tool-status-spinner" />}
           {showDoneCheck && (
@@ -691,9 +787,11 @@ const QuestionCard: React.FC<{
   request: PendingQuestionRequest;
   submitting: boolean;
   error: string | null;
+  /** 已提交态：卡片转为答案摘要展示（内嵌对话流中等待 Claude 继续） */
+  answered?: boolean;
   onSubmit: (answers: Record<string, { answers: string[] }>) => void;
   onSkip: () => void;
-}> = ({ request, submitting, error, onSubmit, onSkip }) => {
+}> = ({ request, submitting, error, answered, onSubmit, onSkip }) => {
   const [activeQuestion, setActiveQuestion] = useState(0);
   const [selections, setSelections] = useState<Record<string, Set<string>>>({});
   const [customAnswers, setCustomAnswers] = useState<Record<string, string>>({});
@@ -759,121 +857,250 @@ const QuestionCard: React.FC<{
   if (!question) return null;
   const selected = selections[question.id] ?? new Set<string>();
 
-  return createPortal(
-    <div className="chat-question-overlay">
-      <div
-        className="chat-question-card chat-question-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Claude 需要你的选择"
-      >
-        {/* 顶部固定栏：标题与多题切换标签 */}
+  // 已提交态：卡片转为答案摘要，等待 Claude 继续（内嵌于对话流，不再弹窗）
+  if (answered) {
+    return (
+      <div className="chat-question-inline is-answered">
         <div className="chat-question-header">
           <div>
             <span className="chat-question-kicker">Claude 需要你的选择</span>
-            <strong>{question.header || "选择"}</strong>
+            <strong>
+              {request.questions.length > 1
+                ? `已提交 ${request.questions.length} 个问题的选择`
+                : request.questions[0].header || "选择"}
+            </strong>
           </div>
-          {request.questions.length > 1 && (
-            <span className="chat-question-progress">
-              {activeQuestion + 1}/{request.questions.length}
-            </span>
-          )}
+          <span className="chat-question-progress">✓ 已提交</span>
         </div>
-        {request.questions.length > 1 && (
-          <div className="chat-question-tabs" role="tablist">
-            {request.questions.map((item, index) => (
-              <button
-                type="button"
-                key={item.id}
-                className={index === activeQuestion ? "is-active" : ""}
-                onClick={() => setActiveQuestion(index)}
-              >
-                {item.header || `问题 ${index + 1}`}
-              </button>
-            ))}
+        <div className="chat-question-answered">
+          <div className="chat-question-answered-head">
+            <Check size={13} />
+            已提交你的选择，Claude 正在继续…
           </div>
-        )}
-
-        {/* 中部内容区：固定高度弹性区域，切换题目时外框高度恒定不变，杜绝窗口上下抖动 */}
-        <div className="chat-question-scroll">
-          <div className="chat-question-text">{question.question}</div>
-          <div className="chat-question-options">
-            {question.options.map((option, index) => {
-              const isSelected = selected.has(option.label);
-              return (
-                <button
-                  type="button"
-                  key={`${option.label}:${index}`}
-                  className={`chat-question-option ${isSelected ? "is-selected" : ""}`}
-                  onClick={() => toggleOption(question.id, option.label, !!question.multiSelect)}
-                  onDoubleClick={() => handleDoubleClickOption(option.label)}
-                  disabled={submitting}
-                  title="单击选择，双击直接确认"
-                >
-                  <span className="chat-question-marker">
-                    {question.multiSelect ? (isSelected ? "✓" : "") : index + 1}
-                  </span>
-                  <span>
-                    <strong>{option.label}</strong>
-                    {option.description && <small>{option.description}</small>}
-                  </span>
-                </button>
-              );
-            })}
-            <textarea
-              className="chat-question-custom"
-              value={customAnswers[question.id] ?? ""}
-              onChange={(event) =>
-                setCustomAnswers((previous) => ({
-                  ...previous,
-                  [question.id]: event.target.value,
-                }))
-              }
-              placeholder="其他回答（可选）"
-              rows={2}
-              disabled={submitting}
-            />
-          </div>
-        </div>
-        {error && <div className="chat-question-error">{error}</div>}
-        <div className="chat-question-actions">
-          <button type="button" onClick={onSkip} disabled={submitting}>
-            跳过
-          </button>
-          <div>
-            {activeQuestion > 0 && (
-              <button
-                type="button"
-                onClick={() => setActiveQuestion((index) => index - 1)}
-                disabled={submitting}
-              >
-                上一步
-              </button>
-            )}
-            {activeQuestion < request.questions.length - 1 ? (
-              <button
-                type="button"
-                className="is-primary"
-                onClick={() => setActiveQuestion((index) => index + 1)}
-                disabled={submitting}
-              >
-                下一步
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="is-primary"
-                onClick={() => submit()}
-                disabled={submitting}
-              >
-                {submitting ? "正在提交…" : "提交选择"}
-              </button>
-            )}
-          </div>
+          {request.questions.map((item) => {
+            const picks = [...(selections[item.id] ?? [])];
+            const custom = customAnswers[item.id]?.trim();
+            if (!picks.length && !custom) return null;
+            return (
+              <div key={item.id} className="chat-question-answered-block">
+                <div className="chat-question-answered-q">{item.header || item.question}</div>
+                <div className="chat-question-answered-summary">
+                  {picks.map((label) => (
+                    <span key={label} className="chat-question-answered-chip">
+                      {label}
+                    </span>
+                  ))}
+                  {custom && (
+                    <span className="chat-question-answered-chip is-custom">{custom}</span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
-    </div>,
-    document.body,
+    );
+  }
+
+  return (
+    <div className="chat-question-inline" role="dialog" aria-label="Claude 需要你的选择">
+      {/* 顶部栏：标题与多题切换标签 */}
+      <div className="chat-question-header">
+        <div>
+          <span className="chat-question-kicker">Claude 需要你的选择</span>
+          <strong>{question.header || "选择"}</strong>
+        </div>
+        {request.questions.length > 1 && (
+          <span className="chat-question-progress">
+            {activeQuestion + 1}/{request.questions.length}
+          </span>
+        )}
+      </div>
+      {request.questions.length > 1 && (
+        <div className="chat-question-tabs" role="tablist">
+          {request.questions.map((item, index) => (
+            <button
+              type="button"
+              key={item.id}
+              className={index === activeQuestion ? "is-active" : ""}
+              onClick={() => setActiveQuestion(index)}
+            >
+              {item.header || `问题 ${index + 1}`}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* 问题内容与选项 */}
+      <div className="chat-question-scroll">
+        <div className="chat-question-text">{question.question}</div>
+        <div className="chat-question-options">
+          {question.options.map((option, index) => {
+            const isSelected = selected.has(option.label);
+            return (
+              <button
+                type="button"
+                key={`${option.label}:${index}`}
+                className={`chat-question-option ${isSelected ? "is-selected" : ""}`}
+                onClick={() => toggleOption(question.id, option.label, !!question.multiSelect)}
+                onDoubleClick={() => handleDoubleClickOption(option.label)}
+                disabled={submitting}
+                title="单击选择，双击直接确认"
+              >
+                <span className="chat-question-marker">
+                  {question.multiSelect ? (isSelected ? "✓" : "") : index + 1}
+                </span>
+                <span>
+                  <strong>{option.label}</strong>
+                  {option.description && <small>{option.description}</small>}
+                </span>
+              </button>
+            );
+          })}
+          <textarea
+            className="chat-question-custom"
+            value={customAnswers[question.id] ?? ""}
+            onChange={(event) =>
+              setCustomAnswers((previous) => ({
+                ...previous,
+                [question.id]: event.target.value,
+              }))
+            }
+            placeholder="其他回答（可选）"
+            rows={2}
+            disabled={submitting}
+          />
+        </div>
+      </div>
+      {error && <div className="chat-question-error">{error}</div>}
+      <div className="chat-question-actions">
+        <button type="button" onClick={onSkip} disabled={submitting}>
+          跳过
+        </button>
+        <div>
+          {activeQuestion > 0 && (
+            <button
+              type="button"
+              onClick={() => setActiveQuestion((index) => index - 1)}
+              disabled={submitting}
+            >
+              上一步
+            </button>
+          )}
+          {activeQuestion < request.questions.length - 1 ? (
+            <button
+              type="button"
+              className="is-primary"
+              onClick={() => setActiveQuestion((index) => index + 1)}
+              disabled={submitting}
+            >
+              下一步
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="is-primary"
+              onClick={() => submit()}
+              disabled={submitting}
+            >
+              {submitting ? "正在提交…" : "提交选择"}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/** 计划模式退出批准卡片：模型调用 ExitPlanMode，展示真实规划方案 Markdown 并等待用户批准/拒绝 */
+const PlanApprovalCard: React.FC<{
+  approval: {
+    requestId: string;
+    plan?: string;
+    planFilePath?: string;
+    planFileName?: string;
+  };
+  submitting?: boolean;
+  onApprove: () => void;
+  onReject: () => void;
+}> = ({ approval, submitting, onApprove, onReject }) => {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = () => {
+    if (!approval.plan) return;
+    navigator.clipboard
+      .writeText(approval.plan)
+      .then(() => {
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 2000);
+      })
+      .catch(() => {});
+  };
+
+  return (
+    <div
+      className="chat-question-inline chat-plan-approval"
+      role="dialog"
+      aria-label="计划模式确认"
+    >
+      <div className="chat-question-header">
+        <div>
+          <span className="chat-question-kicker">
+            <BrainCircuit size={13} style={{ display: "inline-block", verticalAlign: "text-bottom", marginRight: 4 }} />
+            计划模式 · 方案就绪
+          </span>
+          <strong>模型已规划完成，退出计划模式并开始执行？</strong>
+        </div>
+        <span className="chat-question-progress is-plan-badge">等待你确认</span>
+      </div>
+      <div className="chat-plan-approval-scroll">
+        {approval.plan ? (
+          <>
+            <div className="chat-plan-approval-meta">
+              <span
+                className="chat-plan-approval-file"
+                title={approval.planFilePath || approval.planFileName || "规划方案"}
+              >
+                <FileText size={12} />
+                {approval.planFileName || "规划方案文件"}
+              </span>
+              <button
+                type="button"
+                className="chat-plan-approval-copy-btn"
+                onClick={handleCopy}
+                title="复制方案 Markdown"
+              >
+                {copied ? <Check size={11} /> : <Copy size={11} />}
+                <span>{copied ? "已复制" : "复制方案"}</span>
+              </button>
+            </div>
+            <div
+              className="chat-plan-approval-markdown preview-markdown-content"
+              dangerouslySetInnerHTML={{
+                __html: renderChatMarkdownToHtml(approval.plan),
+              }}
+            />
+          </>
+        ) : (
+          <div className="chat-plan-approval-hint">
+            批准后模型将退出计划模式，按计划直接修改文件并执行；拒绝则留在计划模式继续调整方案。
+          </div>
+        )}
+      </div>
+      <div className="chat-question-actions">
+        <button type="button" onClick={onReject} disabled={submitting}>
+          拒绝 · 继续修改方案
+        </button>
+        <button
+          type="button"
+          className="is-primary"
+          onClick={onApprove}
+          disabled={submitting}
+        >
+          {submitting ? "正在处理…" : "批准并执行"}
+        </button>
+      </div>
+    </div>
   );
 };
 
@@ -993,7 +1220,10 @@ const MessageView: React.FC<{ message: ChatMessage }> = React.memo(({ message })
       </summary>
       <div
         className="chat-reasoning-body markdown-body"
-        dangerouslySetInnerHTML={{ __html: renderChatMarkdownToHtml(text) }}
+        dangerouslySetInnerHTML={{
+          // 思考区：绝不渲染 HTML（代码块纯源码，无预览开关）
+          __html: renderChatMarkdownToHtml(text),
+        }}
       />
     </details>
   );
@@ -1033,7 +1263,8 @@ const MessageView: React.FC<{ message: ChatMessage }> = React.memo(({ message })
         <div
           className="chat-bubble chat-bubble-assistant markdown-body"
           dangerouslySetInnerHTML={{
-            __html: renderChatMarkdownToHtml(message.text),
+            // 回答区：HTML 默认源码展示，点击「预览」开关才渲染
+            __html: renderChatMarkdownToHtml(message.text, { htmlPreview: true }),
           }}
         />
       ) : null}
@@ -1080,6 +1311,26 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
   // 最近一次发送的消息内容：取消回退时恢复回输入框
   const lastSentRef = useRef<{ text: string; images: ChatImageAttachment[] } | null>(null);
   const [draft, setDraft] = useState("");
+  // 访问模式（auto: full-access / plan: read-only）：按会话持久化，发送时传给后端
+  const [accessMode, setAccessModeState] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem(ACCESS_MODE_STORAGE_PREFIX + sessionId);
+      if (saved === "full-access" || saved === "read-only") {
+        return saved;
+      }
+      return "full-access";
+    } catch {
+      return "full-access";
+    }
+  });
+  const setAccessMode = (mode: string) => {
+    setAccessModeState(mode);
+    try {
+      localStorage.setItem(ACCESS_MODE_STORAGE_PREFIX + sessionId, mode);
+    } catch {
+      // localStorage 不可用时仅会话内生效
+    }
+  };
   const [busy, setBusy] = useState(false);
   // busy 的 ref 镜像：队列投递事件监听器读取最新状态，防止重复投递
   const busyRef = useRef(false);
@@ -1097,6 +1348,16 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
   const [pendingQuestion, setPendingQuestion] = useState<PendingQuestionRequest | null>(null);
   const [questionSubmitting, setQuestionSubmitting] = useState(false);
   const [questionError, setQuestionError] = useState<string | null>(null);
+  /** 当前问题卡片是否已提交（内嵌卡片转为摘要态，等待 Claude 继续） */
+  const [questionAnswered, setQuestionAnswered] = useState(false);
+  /** 计划模式退出批准：模型调用了 ExitPlanMode，等待用户批准/拒绝 */
+  const [pendingPlanApproval, setPendingPlanApproval] = useState<{
+    requestId: string;
+    plan?: string;
+    planFilePath?: string;
+    planFileName?: string;
+  } | null>(null);
+  const [planApprovalSubmitting, setPlanApprovalSubmitting] = useState(false);
   const [images, setImages] = useState<ChatImageAttachment[]>([]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [draggingImage, setDraggingImage] = useState(false);
@@ -1185,7 +1446,9 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
     setCancelling(false);
     setReady(false);
     setPendingQuestion(null);
+    setQuestionAnswered(false);
     setQuestionError(null);
+    setPendingPlanApproval(null);
     setCompletionTrigger(null);
 
     const handleEvent = (payload: ChatStreamEvent) => {
@@ -1233,6 +1496,14 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
           break;
         case "tool:completed":
           toolEventSeenRef.current = true;
+          if (
+            payload.toolName === "mcp__kkcoder__AskUserQuestion" ||
+            payload.toolName === "AskUserQuestion"
+          ) {
+            if (!questionAnswered) {
+              setPendingQuestion(null);
+            }
+          }
           if (payload.toolId) {
             dispatch({
               type: "tool:completed",
@@ -1257,6 +1528,8 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
           setBusy(false);
           setCancelling(false);
           setPendingQuestion(null);
+          setPendingPlanApproval(null);
+          setPlanApprovalSubmitting(false);
           onStateChangeRef.current?.(false);
           onCommandCompleteRef.current?.();
           // 回答完成：按设置播放提示音（与终端模式一致，走后端 play_notification_sound）
@@ -1301,6 +1574,8 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
           setBusy(false);
           setCancelling(false);
           setPendingQuestion(null);
+          setPendingPlanApproval(null);
+          setPlanApprovalSubmitting(false);
           onStateChangeRef.current?.(false);
 
           // 异常或主动终止后同样刷新一次文件树
@@ -1312,12 +1587,32 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
           break;
         case "question:requested":
           if (payload.requestId && payload.questions?.length) {
+            setPendingPlanApproval(null);
             setPendingQuestion({
               requestId: payload.requestId,
               questions: payload.questions,
             });
+            setQuestionAnswered(false);
             setQuestionSubmitting(false);
             setQuestionError(null);
+            setCompletionTrigger(null);
+          }
+          break;
+        case "plan:approval":
+          if (payload.requestId) {
+            const input = payload.input as {
+              plan?: unknown;
+              planFilePath?: unknown;
+              planFileName?: unknown;
+            } | undefined;
+            setPendingQuestion(null);
+            setPendingPlanApproval({
+              requestId: payload.requestId,
+              plan: typeof input?.plan === "string" ? input.plan : undefined,
+              planFilePath: typeof input?.planFilePath === "string" ? input.planFilePath : undefined,
+              planFileName: typeof input?.planFileName === "string" ? input.planFileName : undefined,
+            });
+            setPlanApprovalSubmitting(false);
             setCompletionTrigger(null);
           }
           break;
@@ -1464,13 +1759,66 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
     return () => window.clearTimeout(timer);
   }, [completionTrigger, directory, slashCatalog, slashCatalogLoaded]);
 
-  // 新消息/流式输出：仅在用户钉在底部时自动跟随，浏览上方内容时保持视口稳定
+  // 新消息/流式输出：使用 requestAnimationFrame 批量跟进，消除流式刷字/思考展开时的微抖动
+  const autoScrollRafRef = useRef<number | null>(null);
   useEffect(() => {
     const el = scrollRef.current;
     if (el && pinnedToBottomRef.current) {
-      el.scrollTop = el.scrollHeight;
+      if (autoScrollRafRef.current == null) {
+        autoScrollRafRef.current = requestAnimationFrame(() => {
+          autoScrollRafRef.current = null;
+          if (el && pinnedToBottomRef.current) {
+            el.scrollTop = el.scrollHeight;
+          }
+        });
+      }
     }
+    return () => {
+      if (autoScrollRafRef.current != null) {
+        cancelAnimationFrame(autoScrollRafRef.current);
+        autoScrollRafRef.current = null;
+      }
+    };
   }, [messages]);
+
+  // 问题卡片 / 计划模式退出批准出现：自动将消息流滚动到底部，确保最新上下文可见
+  useEffect(() => {
+    if ((pendingQuestion && !questionAnswered) || pendingPlanApproval) {
+      const el = scrollRef.current;
+      if (el) {
+        requestAnimationFrame(() => {
+          el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+        });
+      }
+    }
+  }, [pendingQuestion, questionAnswered, pendingPlanApproval]);
+
+  // 计划模式退出批准：若 plan 内容为空，主动调用后端拉取最新规划方案
+  useEffect(() => {
+    if (pendingPlanApproval && !pendingPlanApproval.plan) {
+      invoke<{ plan?: string; planFilePath?: string; planFileName?: string }>(
+        "chat_get_latest_plan",
+        {
+          agentSessionId,
+          directory,
+        },
+      )
+        .then((res) => {
+          if (res && res.plan) {
+            setPendingPlanApproval((prev) => {
+              if (!prev || prev.requestId !== pendingPlanApproval.requestId) return prev;
+              return {
+                ...prev,
+                plan: res.plan,
+                planFilePath: res.planFilePath || prev.planFilePath,
+                planFileName: res.planFileName || prev.planFileName,
+              };
+            });
+          }
+        })
+        .catch(() => {});
+    }
+  }, [pendingPlanApproval, agentSessionId, directory]);
 
   // 思考计时：从发送消息（turnStartTimeRef）起每 500ms 刷新「已运行 N 秒」，
   // 与完成时「耗时 X 秒」同一时间起点、同一取整（Math.round），保证两者一致
@@ -1534,6 +1882,7 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
           agentSessionId,
           text,
           images: sendImages.map((image) => image.dataUrl),
+          accessMode,
         });
         onUserSubmittedInputRef.current?.(sessionId);
         return true;
@@ -1554,7 +1903,7 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
         return false;
       }
     },
-    [agentSessionId, directory, dispatch, modelInfo, selectedModel, sessionId],
+    [accessMode, agentSessionId, directory, dispatch, modelInfo, selectedModel, sessionId],
   );
 
   const handleSend = async () => {
@@ -1690,11 +2039,31 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
         requestId: pendingQuestion.requestId,
         answers: { answers },
       });
-      setPendingQuestion(null);
+      // 内嵌卡片保留在对话流中并转为「已提交」摘要态，等 Claude 继续；
+      // 本轮结束（turn:finished/error）时随 pendingQuestion 一起清除。
+      setQuestionAnswered(true);
     } catch (error) {
       setQuestionError(formatFeedbackError(error, "提交回答失败"));
     } finally {
       setQuestionSubmitting(false);
+    }
+  };
+
+  /** 计划模式退出批准：批准 → 注入 tool_result 让 Claude 退出计划模式继续执行；拒绝 → 继续修改方案 */
+  const answerPlanApproval = async (approve: boolean) => {
+    if (!pendingPlanApproval || planApprovalSubmitting) return;
+    setPlanApprovalSubmitting(true);
+    try {
+      await invoke("chat_answer_plan_approval", {
+        sessionId,
+        requestId: pendingPlanApproval.requestId,
+        approve,
+      });
+      setPendingPlanApproval(null);
+    } catch (error) {
+      notifyError(formatFeedbackError(error, "批准失败"));
+    } finally {
+      setPlanApprovalSubmitting(false);
     }
   };
 
@@ -2233,8 +2602,20 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
         {messages.map((m) => (
           <MessageView key={m.id} message={m} />
         ))}
-        {/* AI 思考中：消息流末尾统一的三点跳动指示 + 从发送起的运行秒数 */}
-        {busy && (
+        {/* 问题卡片已提交态：保留在消息流历史中展示用户的选择摘要 */}
+        {pendingQuestion && questionAnswered && (
+          <QuestionCard
+            request={pendingQuestion}
+            submitting={false}
+            error={null}
+            answered={true}
+            onSubmit={() => {}}
+            onSkip={() => {}}
+          />
+        )}
+        {/* AI 思考中：消息流末尾统一的三点跳动指示 + 从发送起的运行秒数。
+            等待用户回答/批准期间不显示（卡片本身就是等待态）。 */}
+        {busy && !(pendingQuestion && !questionAnswered) && !pendingPlanApproval && (
           <div className={`chat-thinking ${escArmed ? "is-esc-armed" : ""}`}>
             <div className="chat-typing">
               <span />
@@ -2249,6 +2630,29 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
           </div>
         )}
       </div>
+      {/* 活跃待交互卡片（问题提问 / 计划退出批准）：常驻吸附在输入框上方，无论窗口缩放或滚动都常驻可见，避免被遮挡或裁切 */}
+      {((pendingQuestion && !questionAnswered) || pendingPlanApproval) && (
+        <div className="chat-interactive-dock" role="region" aria-label="交互确认">
+          {pendingQuestion && !questionAnswered && (
+            <QuestionCard
+              request={pendingQuestion}
+              submitting={questionSubmitting}
+              error={questionError}
+              answered={false}
+              onSubmit={(answers) => void answerQuestion(answers)}
+              onSkip={() => void answerQuestion({})}
+            />
+          )}
+          {pendingPlanApproval && (
+            <PlanApprovalCard
+              approval={pendingPlanApproval}
+              submitting={planApprovalSubmitting}
+              onApprove={() => void answerPlanApproval(true)}
+              onReject={() => void answerPlanApproval(false)}
+            />
+          )}
+        </div>
+      )}
       <div
         className={`chat-composer ${draggingImage ? "is-dragging" : ""}`}
         onDragEnter={(event) => {
@@ -2438,9 +2842,15 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
                 foldPastedText(pastedText);
               }
             }}
-            placeholder={pendingQuestion ? "请先完成弹出的问题" : "输入消息，@ 引用文件，/ 触发技能，回车发送..."}
+            placeholder={
+              pendingQuestion && !questionAnswered
+                ? "请先回答上方的问题…"
+                : pendingPlanApproval
+                  ? "请先确认上方的计划执行…"
+                  : "输入消息，@ 引用文件，/ 触发技能，回车发送..."
+            }
             rows={1}
-            disabled={!ready || !!pendingQuestion}
+            disabled={!ready || (!!pendingQuestion && !questionAnswered) || !!pendingPlanApproval}
           />
           <div className="chat-composer-toolbar">
             <ModelSelector
@@ -2451,6 +2861,20 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
               onRefreshModelInfo={onRefreshModelInfo}
               disabled={busy}
             />
+            <div className="chat-access-mode" role="group" aria-label="访问模式">
+              {ACCESS_MODES.map((mode) => (
+                <button
+                  key={mode.id}
+                  type="button"
+                  className={`chat-access-mode-btn${accessMode === mode.id ? " is-active" : ""}`}
+                  disabled={busy}
+                  onClick={() => setAccessMode(mode.id)}
+                  title={mode.title}
+                >
+                  {mode.label}
+                </button>
+              ))}
+            </div>
             <GitBranchSelector
               directory={directory}
               disabled={busy}
@@ -2515,15 +2939,6 @@ export const ChatTab: React.FC<ChatTabProps> = React.memo((props) => {
         <div className="chat-busy-hint is-esc-armed">
           再按一次 ESC 终止任务
         </div>
-      )}
-      {pendingQuestion && (
-        <QuestionCard
-          request={pendingQuestion}
-          submitting={questionSubmitting}
-          error={questionError}
-          onSubmit={(answers) => void answerQuestion(answers)}
-          onSkip={() => void answerQuestion({})}
-        />
       )}
 
       {/* 粘贴标签预览/编辑弹窗 */}

@@ -22,12 +22,18 @@ use tokio::time::timeout;
 
 use crate::log_to_file;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 /// 同一 npm 包暴露多个 bin 别名，按序探测。
 const TT_BIN_CANDIDATES: [&str; 3] = ["tokentracker", "tracker", "tokentracker-cli"];
 /// `tokentracker serve` 默认端口。
 const TT_DEFAULT_PORT: u16 = 7680;
-/// [`tt_server_status`] 扫描的端口范围。
-const TT_STATUS_SCAN_PORTS: std::ops::RangeInclusive<u16> = 7680..=7684;
+/// [`tt_server_status`] 扫描的端口范围（与启动范围一致：服务可能因
+/// 7680–7684 被占用而落在更高端口，扫描不到就会重复启动新服务）。
+const TT_STATUS_SCAN_PORTS: std::ops::RangeInclusive<u16> = 7680..=7690;
 /// 启动新服务时考虑的端口范围（避免占用已有服务端口）。
 const TT_ENSURE_PORT_RANGE: std::ops::RangeInclusive<u16> = 7680..=7690;
 /// 健康检查端点。
@@ -99,24 +105,81 @@ fn npm_global_bin_candidates() -> Vec<std::path::PathBuf> {
     dirs
 }
 
+/// Windows：路径是否带 CreateProcess 可直接执行的扩展名（PE 二进制或批处理）。
+#[cfg(windows)]
+fn is_windows_executable(path: &std::path::Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|value| value.to_str())
+            .map(|value| value.to_ascii_lowercase())
+            .as_deref(),
+        Some("exe") | Some("cmd") | Some("bat") | Some("com")
+    )
+}
+
+/// Windows：若解析出的路径不是可执行文件（如 npm 生成的扩展名 shell shim，
+/// 内容是 `#!/bin/sh`，直接 CreateProcess 会报 "不是有效的 Win32 应用程序"
+/// os error 193），则优先同目录下的 .cmd/.exe/.bat/.com 兄弟文件。
+#[cfg(windows)]
+fn prefer_windows_executable_variant(path: std::path::PathBuf) -> std::path::PathBuf {
+    if is_windows_executable(&path) {
+        return path;
+    }
+    let Some(file_name) = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(String::from)
+    else {
+        return path;
+    };
+    let Some(parent) = path.parent() else {
+        return path;
+    };
+    for ext in ["cmd", "exe", "bat", "com"] {
+        let candidate = parent.join(format!("{file_name}.{ext}"));
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+    path
+}
+
+#[cfg(not(windows))]
+fn prefer_windows_executable_variant(path: std::path::PathBuf) -> std::path::PathBuf {
+    path
+}
+
 /// 在当前 PATH 与常见 npm 全局 bin 目录中查找 CLI 二进制（`where`/`which` 优先）。
 fn find_cli_binary(name: &str) -> Option<std::path::PathBuf> {
     // 1. where/which 按 PATH 查找（Windows 下 where 能返回 .cmd/.bat 路径）
     let resolver = if cfg!(windows) { "where" } else { "which" };
-    if let Ok(output) = std::process::Command::new(resolver).arg(name).output() {
+    let mut finder = std::process::Command::new(resolver);
+    finder.arg(name);
+    #[cfg(windows)]
+    finder.creation_flags(CREATE_NO_WINDOW);
+    if let Ok(output) = finder.output() {
         if output.status.success() {
             let text = String::from_utf8_lossy(&output.stdout);
-            if let Some(first) = text.trim().lines().next() {
-                let candidate = std::path::PathBuf::from(first.trim());
-                if candidate.exists() {
-                    return Some(candidate);
-                }
+            let candidates: Vec<std::path::PathBuf> = text
+                .lines()
+                .map(|line| std::path::PathBuf::from(line.trim()))
+                .filter(|path| path.exists())
+                .collect();
+            // Windows：优先 .exe/.cmd/.bat/.com 条目。`where tokentracker` 会把
+            // npm 的扩展名 shell shim（%npm_prefix%\tokentracker）排在 .cmd 之前，
+            // 直接取首行会因 shim 不是 Win32 程序而启动失败（os error 193）。
+            #[cfg(windows)]
+            if let Some(index) = candidates.iter().position(|path| is_windows_executable(path)) {
+                return Some(prefer_windows_executable_variant(candidates[index].clone()));
+            }
+            if let Some(first) = candidates.first() {
+                return Some(prefer_windows_executable_variant(first.clone()));
             }
         }
     }
     // 2. 常见 npm 全局 bin 目录直接探测
     let extensions: &[&str] = if cfg!(windows) {
-        &["cmd", "exe", "bat", "ps1"]
+        &["exe", "cmd", "bat"]
     } else {
         &[""]
     };
@@ -128,7 +191,7 @@ fn find_cli_binary(name: &str) -> Option<std::path::PathBuf> {
                 dir.join(format!("{name}.{ext}"))
             };
             if candidate.is_file() {
-                return Some(candidate);
+                return Some(prefer_windows_executable_variant(candidate));
             }
         }
     }
@@ -156,6 +219,7 @@ fn build_cli_path_env() -> Option<String> {
 }
 
 /// 构建 tokio Command，正确处理 Windows 上的 .cmd/.bat（镜像 CC-GUI 的做法）。
+/// 统一加 CREATE_NO_WINDOW，避免打包后的 GUI 应用拉起控制台子进程时闪黑框。
 #[allow(unused_variables)]
 fn build_async_command(bin: &str) -> tokio::process::Command {
     #[cfg(windows)]
@@ -165,13 +229,17 @@ fn build_async_command(bin: &str) -> tokio::process::Command {
             let mut cmd = tokio::process::Command::new("cmd");
             cmd.arg("/c");
             cmd.arg(bin);
+            cmd.creation_flags(CREATE_NO_WINDOW);
             return cmd;
         }
     }
-    tokio::process::Command::new(bin)
+    let mut cmd = tokio::process::Command::new(bin);
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd
 }
 
-/// 构建 std Command，正确处理 Windows 上的 .cmd/.bat。
+/// 构建 std Command，正确处理 Windows 上的 .cmd/.bat。统一加 CREATE_NO_WINDOW。
 #[allow(unused_variables)]
 fn build_std_command(bin: &str) -> std::process::Command {
     #[cfg(windows)]
@@ -181,10 +249,14 @@ fn build_std_command(bin: &str) -> std::process::Command {
             let mut cmd = std::process::Command::new("cmd");
             cmd.arg("/c");
             cmd.arg(bin);
+            cmd.creation_flags(CREATE_NO_WINDOW);
             return cmd;
         }
     }
-    std::process::Command::new(bin)
+    let mut cmd = std::process::Command::new(bin);
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd
 }
 
 /// 对解析出的二进制执行 `--version`，返回首行 stdout。

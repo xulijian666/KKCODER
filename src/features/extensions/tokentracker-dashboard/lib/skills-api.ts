@@ -75,6 +75,44 @@ export function getInstalledSkills() {
   return fetchSkillsJson({ mode: "installed" });
 }
 
+/** 本地发现：其他 agent 目录 / 自定义目录中未启用的技能 + 停用区 + 已停用托管技能 */
+export function getSkillDiscoveries() {
+  return fetchSkillsJson({ mode: "discoveries" });
+}
+
+/** 开关：启用/停用技能（只动 KKCoder 副本，源技能文件永不删除） */
+export function setSkillEnabled(
+  skill: { id?: string; directory: string; disabledDest?: string },
+  enabled: boolean,
+) {
+  return mutateSkillsJson({
+    action: "set_enabled",
+    id: skill.id || "",
+    directory: skill.directory,
+    disabledDest: skill.disabledDest || "",
+    enabled,
+  });
+}
+
+/** 本地发现列表的「删除本地文件」：永久删除发现的技能目录（用户明确确认后） */
+export function deleteDiscoverySkill(skill: {
+  directory: string;
+  disabledDest?: string;
+  sourceTarget?: string;
+}) {
+  return mutateSkillsJson({
+    action: "delete_discovery",
+    directory: skill.directory,
+    disabledDest: skill.disabledDest || "",
+    sourceTarget: skill.sourceTarget || "",
+  });
+}
+
+/** 导入安装：从任意本地路径复制技能进技能库并同步到目标（源目录只读不动） */
+export function importSkillFromPath(path: string, targets: string[] = ["claude"]) {
+  return mutateSkillsJson({ action: "import_path", path, targets });
+}
+
 export function discoverSkills(options: { force?: boolean } = {}) {
   return fetchSkillsJson({ mode: "discover", ...(options.force ? { force: 1 } : {}) });
 }

@@ -22,27 +22,28 @@ import { formatFeedbackError, notifyError, notifyInfo, notifySuccess } from "../
 import {
   addSkillRepo,
   checkSkillUpdates,
+  deleteDiscoverySkill,
   deleteLocalSkill,
   discoverSkills,
   getInstalledSkills,
   getPopularSkills,
+  getSkillDiscoveries,
   getSkillRepos,
   getSkillUsage,
-  importLocalSkill,
+  importSkillFromPath,
   installSkill,
   removeSkillRepo,
   searchSkills,
-  setSkillTargets,
+  setSkillEnabled,
   uninstallSkill,
 } from "./tokentracker-dashboard/lib/skills-api";
 import "./SkillsCenter.css";
 
 /**
  * 技能中心（KKCoder 原生 UI，替代 vendored SkillsPage）。
- * 功能与 CC-GUI / TokenTracker 技能中心 1:1：我的技能（搜索/agent 筛选/
- * targets 同步/批量操作/更新/卸载+回收站 Undo）、浏览（仓库/热门/skills.sh
- * 搜索/仓库管理）、详情抽屉（使用统计/targets/更新/移除）。
- * 视觉完全走 KKCoder 极简范式：CSS 变量、SVG 图标、扁平克制、丝滑过渡。
+ * 简洁模型：我的技能 = 已启用列表（一行一开关）；浏览 = 仓库/热门/skills.sh/
+ * 本地发现（未启用来源 + 停用区）；详情抽屉（使用统计/启用开关/移除/屏蔽）。
+ * 安全底线：KKCoder 只创建/删除自己的副本，源技能文件永不删除。
  */
 
 interface SkillTarget {
@@ -65,6 +66,14 @@ interface Skill {
   repoBranch?: string;
   readmeUrl?: string;
   managed?: boolean;
+  /** 原生技能：直接放在 agent 目录里的用户源技能 */
+  native?: boolean;
+  /** 已停用（本地发现列表用）：停用区恢复项 / 已停用托管技能 */
+  disabled?: boolean;
+  /** 停用区条目名（恢复时移回原目录） */
+  disabledDest?: string;
+  /** 发现来源标签（本地发现列表用） */
+  sourceLabel?: string;
   targets?: string[];
   targetStates?: Record<string, "synced" | "off" | "orphan">;
   /** 未托管技能：命中该状态的代理目录实际路径（如 ~/.claude/skills/xxx） */
@@ -91,7 +100,7 @@ interface SkillTranslationStatus {
   staleFull: boolean;
 }
 
-/** 黑名单记录：拉黑删除的技能（不再被扫描引用，源文件保留） */
+/** 黑名单记录：屏蔽的技能（不再被扫描引用，源文件保留） */
 interface SkillBlacklistEntry {
   directory: string;
   sourcePath: string;
@@ -166,10 +175,6 @@ function blacklistBusyKey(skill: Skill): string {
   return `blacklist:${skill.id || skill.directory}`;
 }
 
-function targetBusyKey(skillId: string | undefined, targetId: string): string {
-  return `target:${skillId}:${targetId}`;
-}
-
 function directoryLeaf(value: string | undefined): string {
   const directory = String(value || "").replace(/\\/g, "/").trim().toLowerCase();
   return directory.split("/").filter(Boolean).pop() || "";
@@ -193,103 +198,26 @@ function installedSkillKeys(skill: Skill): Set<string> {
   return keys;
 }
 
-/**
- * agent 同步徽章：显示代理名（Claude/Codex/...），三态：
- * 彩色实心 = 已同步；灰色淡化 = 未启用；琥珀色 = 副本丢失（注册表有记录但磁盘副本没了）。
- * 点击直接切换同步状态。
- */
-function AgentDot({
-  target,
-  state,
-  busy,
-  onToggle,
-}: {
-  target: SkillTarget;
-  state: "synced" | "off" | "orphan";
-  busy: boolean;
-  onToggle: (targetId: string, enabled: boolean) => void;
-}) {
-  const synced = state === "synced";
-  const orphan = state === "orphan";
-  const label = orphan
-    ? `${target.label}：副本丢失，点击重新同步`
-    : synced
-      ? `${target.label}：已同步，点击取消同步`
-      : `${target.label}：未启用，点击启用同步`;
-  return (
-    <button
-      type="button"
-      className={`skc-agent-chip${orphan ? " is-orphan" : synced ? " is-synced" : " is-off"}`}
-      title={label}
-      aria-label={label}
-      aria-pressed={synced}
-      disabled={busy}
-      onClick={(event) => {
-        event.stopPropagation();
-        onToggle(target.id, !synced);
-      }}
-    >
-      {busy ? (
-        <Loader2 size={10} className="skc-spin" />
-      ) : (
-        <span className={`skc-chip-dot${orphan ? " is-orphan" : synced ? " is-synced" : " is-off"}`} />
-      )}
-      {target.label}
-    </button>
-  );
-}
-
-function AgentDots({
-  skill,
-  targets,
-  busyKey,
-  onToggleTarget,
-}: {
-  skill: Skill;
-  targets: SkillTarget[];
-  busyKey: string;
-  onToggleTarget: (skill: Skill, targetId: string, enabled: boolean) => void;
-}) {
-  return (
-    <div className="skc-agent-dots" onClick={(event) => event.stopPropagation()}>
-      {targets.map((target) => (
-        <AgentDot
-          key={target.id}
-          target={target}
-          state={skill.targetStates?.[target.id] || "off"}
-          busy={busyKey === targetBusyKey(skill.id, target.id)}
-          onToggle={(targetId, enabled) => onToggleTarget(skill, targetId, enabled)}
-        />
-      ))}
-    </div>
-  );
-}
-
-/* ============================ 我的技能（纯列表，工具栏在主组件固定区） ============================ */
+/* ============================ 我的技能（一行一开关，纯列表） ============================ */
 
 function MySkillsView({
   items,
-  targets,
   selectedId,
   onSelect,
-  onToggleTarget,
+  onToggleEnabled,
   busyKey,
   updates,
-  selectedIds,
-  onToggleSelect,
   anyFilter,
   onBrowse,
   getSummary,
 }: {
   items: Skill[];
-  targets: SkillTarget[];
   selectedId: string | null;
   onSelect: (skill: Skill) => void;
-  onToggleTarget: (skill: Skill, targetId: string, enabled: boolean) => void;
+  /** 开关：启用 = 同步到 Claude；停用 = 只移除副本（源技能保留） */
+  onToggleEnabled: (skill: Skill, enabled: boolean) => void;
   busyKey: string;
   updates: Record<string, boolean>;
-  selectedIds: Set<string>;
-  onToggleSelect: (skill: Skill, checked: boolean) => void;
   anyFilter: boolean;
   onBrowse: () => void;
   /** 列表一句话简介（汉化/原版第一句） */
@@ -299,7 +227,7 @@ function MySkillsView({
     <div className="skc-my">
       {items.length === 0 ? (
         <div className="skc-empty">
-          <p>{anyFilter ? "没有匹配的技能" : "还没有安装任何技能"}</p>
+          <p>{anyFilter ? "没有匹配的技能" : "还没有启用任何技能"}</p>
           {!anyFilter && (
             <button type="button" className="skc-btn skc-btn-primary" onClick={onBrowse}>
               去浏览技能
@@ -313,6 +241,9 @@ function MySkillsView({
             const hasUpdate = Boolean(skill.id && updates[skill.id]);
             const sourceLabel =
               skill.repoOwner && skill.repoName ? `${skill.repoOwner}/${skill.repoName}` : null;
+            const enabled = skill.targetStates?.claude === "synced";
+            const orphan = skill.targetStates?.claude === "orphan";
+            const busy = busyKey === `enable:${skill.id || skill.directory}`;
             return (
               <div
                 key={skill.id || skill.key || skill.directory}
@@ -331,17 +262,6 @@ function MySkillsView({
                   (skill.description ? `\n\n${skill.description}` : "")
                 }
               >
-                <label
-                  className="skc-checkbox"
-                  onClick={(e) => e.stopPropagation()}
-                  title="选择（批量操作）"
-                >
-                  <input
-                    type="checkbox"
-                    checked={selectedIds.has(skill.id || "")}
-                    onChange={(e) => onToggleSelect(skill, e.target.checked)}
-                  />
-                </label>
                 <div className="skc-row-main">
                   <div className="skc-row-title">
                     <span className="skc-row-name">{skill.name || skill.directory}</span>
@@ -351,6 +271,7 @@ function MySkillsView({
                         可更新
                       </span>
                     )}
+                    {orphan && <span className="skc-badge-orphan">副本丢失</span>}
                   </div>
                   {skill.description ? (
                     <div className="skc-row-desc">{getSummary(skill)}</div>
@@ -358,12 +279,24 @@ function MySkillsView({
                     <div className="skc-row-desc skc-row-dir">{skill.directory}</div>
                   )}
                 </div>
-                <AgentDots
-                  skill={skill}
-                  targets={targets}
-                  busyKey={busyKey}
-                  onToggleTarget={onToggleTarget}
-                />
+                <button
+                  type="button"
+                  className={`skc-enabled-switch${enabled ? " is-on" : ""}`}
+                  disabled={busy}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onToggleEnabled(skill, !enabled);
+                  }}
+                  title={
+                    orphan
+                      ? "副本丢失：点击重新同步"
+                      : enabled
+                        ? "已启用（Claude 可用）· 点击停用（源文件保留）"
+                        : "未启用 · 点击启用并同步到 Claude"
+                  }
+                >
+                  {busy ? <Loader2 size={12} className="skc-spin" /> : enabled ? "已启用" : "未启用"}
+                </button>
               </div>
             );
           })}
@@ -472,6 +405,97 @@ function BrowseCard({
   );
 }
 
+/* ============================ 本地发现（表格行格式） ============================ */
+
+function LocalSkillsView({
+  items,
+  busyKey,
+  onEnable,
+  onDelete,
+  anyFilter,
+  getSummary,
+}: {
+  items: Skill[];
+  busyKey: string;
+  onEnable: (skill: Skill) => void;
+  onDelete: (skill: Skill) => void;
+  anyFilter: boolean;
+  /** 一句话简介（汉化/原版第一句） */
+  getSummary: (skill: Skill) => string;
+}) {
+  return (
+    <div className="skc-my">
+      {items.length === 0 ? (
+        <div className="skc-empty">
+          <p>{anyFilter ? "没有匹配的技能" : "本地没有发现未启用的技能"}</p>
+          {!anyFilter && (
+            <p className="skc-empty-sub">
+              其他 agent 目录 / 自定义扫描目录中的技能、以及停用区中的技能会出现在这里
+            </p>
+          )}
+        </div>
+      ) : (
+        <div className="skc-list">
+          {items.map((skill) => {
+            const sourcePath = skill.targetPaths ? Object.values(skill.targetPaths)[0] : null;
+            const enableBusy = busyKey === `enable:${skill.id || skill.directory}`;
+            const delBusy =
+              busyKey === `del-discovery:${skill.directory}:${skill.disabledDest || ""}`;
+            const busy = enableBusy || delBusy;
+            return (
+              <div key={skill.id || skill.key || `${skill.directory}:${skill.disabledDest || "d"}`} className="skc-skill-row">
+                <div className="skc-row-main">
+                  <div className="skc-row-title">
+                    <span className="skc-row-name">{skill.name || skill.directory}</span>
+                    {skill.disabled && <span className="skc-card-disabled-tag">已停用</span>}
+                    {skill.sourceLabel && (
+                      <span className="skc-local-source" title={sourcePath || skill.directory}>
+                        {skill.sourceLabel}
+                      </span>
+                    )}
+                  </div>
+                  {skill.description ? (
+                    <div className="skc-row-desc" title={sourcePath || skill.directory}>
+                      {getSummary(skill)}
+                    </div>
+                  ) : (
+                    <div className="skc-row-desc skc-row-dir" title={sourcePath || skill.directory}>
+                      {sourcePath || skill.directory}
+                    </div>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  className="skc-btn skc-btn-danger-soft"
+                  disabled={busy}
+                  onClick={() => onDelete(skill)}
+                  title="永久删除该技能的本地文件（不可恢复）"
+                >
+                  {delBusy ? <Loader2 size={12} className="skc-spin" /> : <Trash2 size={12} />}
+                  删除
+                </button>
+                <button
+                  type="button"
+                  className={`skc-enabled-switch${skill.disabled ? "" : " is-on"}`}
+                  disabled={busy}
+                  onClick={() => onEnable(skill)}
+                  title={
+                    skill.disabledDest
+                      ? "恢复：将停用区中的源技能移回 Claude 技能目录"
+                      : "启用：复制进 KKCODER 技能库并同步到 Claude（源文件不动）"
+                  }
+                >
+                  {enableBusy ? <Loader2 size={12} className="skc-spin" /> : skill.disabledDest ? "恢复" : "启用"}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function RepoManager({
   repos,
   repoInput,
@@ -541,12 +565,14 @@ function RepoManager({
 /* ============================ 主组件 ============================ */
 
 export const SkillsCenter: React.FC = () => {
-  const [tab, setTab] = useState<"my" | "browse">("my");
+  const [tab, setTab] = useState<"my" | "local" | "browse">("my");
   const [installedData, setInstalledData] = useState<{ skills: Skill[]; targets: SkillTarget[] }>({
     skills: [],
     targets: [],
   });
   const [discoverData, setDiscoverData] = useState<Skill[]>([]);
+  const [discoveries, setDiscoveries] = useState<Skill[]>([]);
+  const [discoverLoading, setDiscoverLoading] = useState(false);
   const [searchData, setSearchData] = useState<Skill[]>([]);
   const [popularData, setPopularData] = useState<Skill[]>([]);
   const [repos, setRepos] = useState<Array<{ owner: string; name: string; branch: string }>>([]);
@@ -557,7 +583,6 @@ export const SkillsCenter: React.FC = () => {
   const [myDebouncedQuery, setMyDebouncedQuery] = useState("");
   const [repoInput, setRepoInput] = useState("");
   const [manageOpen, setManageOpen] = useState(false);
-  const [agentFilter, setAgentFilter] = useState("all");
   const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState("");
   const [loading, setLoading] = useState(true);
@@ -565,8 +590,6 @@ export const SkillsCenter: React.FC = () => {
   const [popularLoading, setPopularLoading] = useState(false);
   const [error, setError] = useState("");
   const [pendingRemove, setPendingRemove] = useState<Skill | null>(null);
-  const [pendingBulkRemove, setPendingBulkRemove] = useState<Skill[] | null>(null);
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [updates, setUpdates] = useState<Record<string, boolean>>({});
   const [usageBySkill, setUsageBySkill] = useState<Record<string, SkillUsageEntry>>({});
   // 技能汉化
@@ -580,10 +603,17 @@ export const SkillsCenter: React.FC = () => {
   const [scanSources, setScanSources] = useState<SkillScanSource[]>([]);
   const [scanSourcesOpen, setScanSourcesOpen] = useState(false);
   const [scanSourceInput, setScanSourceInput] = useState("");
-  // 黑名单（拉黑删除）
+  // 黑名单（屏蔽）
   const [blacklist, setBlacklist] = useState<SkillBlacklistEntry[]>([]);
   const [blacklistOpen, setBlacklistOpen] = useState(false);
   const [pendingBlacklist, setPendingBlacklist] = useState<Skill | null>(null);
+  // 本地发现：删除本地文件确认
+  const [pendingDiscoveryDelete, setPendingDiscoveryDelete] = useState<Skill | null>(null);
+  // 导入安装本地技能
+  const [importOpen, setImportOpen] = useState(false);
+  const [importPath, setImportPath] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState("");
 
   const installedKeys = useMemo(() => {
     const keys = new Set<string>();
@@ -600,6 +630,19 @@ export const SkillsCenter: React.FC = () => {
     return skills;
   }, []);
 
+  /** 拉取本地发现（未启用的来源技能 + 停用区 + 已停用托管技能） */
+  const loadDiscoveries = useCallback(async () => {
+    setDiscoverLoading(true);
+    try {
+      const data = await getSkillDiscoveries();
+      setDiscoveries((data.skills || []) as Skill[]);
+    } catch {
+      setDiscoveries([]);
+    } finally {
+      setDiscoverLoading(false);
+    }
+  }, []);
+
   /** 拉取扫描来源配置 */
   const loadScanSources = useCallback(async () => {
     const data = await invoke<{ builtins: SkillScanSource[]; custom: SkillScanSource[] }>(
@@ -608,7 +651,7 @@ export const SkillsCenter: React.FC = () => {
     setScanSources([...(data.builtins || []), ...(data.custom || [])]);
   }, []);
 
-  /** 拉取黑名单记录（拉黑删除的技能，按时间倒序） */
+  /** 拉取黑名单记录（屏蔽的技能，按时间倒序） */
   const loadBlacklist = useCallback(async () => {
     try {
       const data = await invoke<{ entries: SkillBlacklistEntry[] }>("get_skill_blacklist");
@@ -748,31 +791,48 @@ export const SkillsCenter: React.FC = () => {
     if (tab === "my") {
       loadUpdates();
       loadUsage();
+    } else if (tab === "local") {
+      loadDiscoveries();
     } else if (source === SOURCE_POPULAR) {
       loadPopular({ force: true }).catch(fail);
     } else if (source !== SOURCE_SKILLSSH) {
       loadDiscover({ force: true }).catch(fail);
     }
-  }, [loadDiscover, loadInitial, loadPopular, loadUpdates, loadUsage, source, tab]);
+  }, [loadDiscover, loadDiscoveries, loadInitial, loadPopular, loadUpdates, loadUsage, source, tab]);
 
   useEffect(() => {
     loadInitial();
   }, [loadInitial]);
 
+  // 各浏览来源只自动加载一次（空结果也不重复拉取，避免无限刷新闪烁）
+  const localLoadedRef = useRef(false);
+  const repoLoadedRef = useRef(false);
+  const popularLoadedRef = useRef(false);
+
+  useEffect(() => {
+    if (tab !== "local") return;
+    if (!localLoadedRef.current) {
+      localLoadedRef.current = true;
+      loadDiscoveries();
+    }
+  }, [tab, loadDiscoveries]);
+
   useEffect(() => {
     if (tab !== "browse") return;
     if (source === SOURCE_SKILLSSH || source === SOURCE_POPULAR) return;
-    if (discoverData.length === 0) {
+    if (!repoLoadedRef.current) {
+      repoLoadedRef.current = true;
       loadDiscover().catch((err) => setError(err instanceof Error ? err.message : String(err)));
     }
-  }, [discoverData.length, loadDiscover, source, tab]);
+  }, [source, tab, loadDiscover]);
 
   useEffect(() => {
     if (tab !== "browse" || source !== SOURCE_POPULAR) return;
-    if (popularData.length === 0) {
+    if (!popularLoadedRef.current) {
+      popularLoadedRef.current = true;
       loadPopular().catch((err) => setError(err instanceof Error ? err.message : String(err)));
     }
-  }, [loadPopular, popularData.length, source, tab]);
+  }, [source, tab, loadPopular]);
 
   const hasUpdatesLoaded = Object.keys(updates).length > 0;
   const hasUsageLoaded = Object.keys(usageBySkill).length > 0;
@@ -792,7 +852,7 @@ export const SkillsCenter: React.FC = () => {
     return () => clearTimeout(timer);
   }, [myQuery]);
 
-  /** 同步切换处理锁：一次切换完成前忽略重复点击（防快速连点语义反转） */
+  /** 同步开关处理锁：一次切换完成前忽略重复点击（防快速连点语义反转） */
   const toggleBusyRef = useRef(false);
 
   const runMutation = useCallback(
@@ -848,7 +908,7 @@ export const SkillsCenter: React.FC = () => {
     });
   };
 
-  /** 拉黑删除：从 KKCODER 移除 + 记录黑名单（扫描不再引用，源文件保留） */
+  /** 屏蔽：从 KKCODER 移除 + 记录黑名单（扫描不再引用，源文件保留） */
   const confirmBlacklist = () => {
     const skill = pendingBlacklist;
     if (!skill) return;
@@ -863,125 +923,94 @@ export const SkillsCenter: React.FC = () => {
       });
       await loadBlacklist();
       notifySuccess(
-        `已拉黑删除「${skill.name || skill.directory}」（源文件保留，扫描不再引用）`,
+        `已屏蔽「${skill.name || skill.directory}」（源文件保留，扫描不再引用）`,
       );
     });
   };
 
-  /** 解除拉黑：删除黑名单记录，源文件仍在时技能将重新出现在列表 */
+  /** 解除屏蔽：删除黑名单记录，源文件仍在时技能将重新出现在列表 */
   const handleUnblacklist = async (entry: SkillBlacklistEntry) => {
     try {
       await invoke("remove_skill_blacklist", { directory: entry.directory });
       await loadBlacklist();
       await loadInstalled().then((skills) => loadTranslations(skills));
-      notifySuccess(`已解除拉黑「${entry.directory}」`);
+      notifySuccess(`已解除屏蔽「${entry.directory}」`);
     } catch (err) {
-      notifyError(`解除拉黑失败：${formatFeedbackError(err)}`);
+      notifyError(`解除屏蔽失败：${formatFeedbackError(err)}`);
+    }
+  };
+
+  /** 本地发现「删除本地文件」：用户确认后永久删除发现的技能目录 */
+  const confirmDiscoveryDelete = async () => {
+    const skill = pendingDiscoveryDelete;
+    if (!skill) return;
+    setPendingDiscoveryDelete(null);
+    const sourceTarget =
+      Object.keys(skill.targetPaths || {}).find((k) => k !== "custom") ||
+      (skill.targetPaths?.custom ? "custom" : "");
+    setBusyKey(`del-discovery:${skill.directory}:${skill.disabledDest || ""}`);
+    try {
+      if (skill.managed) {
+        await uninstallSkill(skill.id as string);
+      } else {
+        await deleteDiscoverySkill({
+          directory: skill.directory,
+          disabledDest: skill.disabledDest,
+          sourceTarget,
+        });
+      }
+      notifySuccess(`已删除「${skill.name || skill.directory}」的本地文件`);
+      await Promise.all([loadDiscoveries(), loadInstalled()]);
+    } catch (err) {
+      notifyError(`删除失败：${formatFeedbackError(err)}`);
+    } finally {
+      setBusyKey("");
+    }
+  };
+
+  /** 导入安装：从本地路径复制技能进库并同步到 Claude */
+  const confirmImport = async () => {
+    const path = importPath.trim();
+    if (!path || importing) return;
+    setImporting(true);
+    setImportError("");
+    try {
+      await importSkillFromPath(path);
+      notifySuccess("已导入技能并同步到 Claude");
+      setImportOpen(false);
+      setImportPath("");
+      await Promise.all([loadInstalled(), loadDiscoveries()]);
+    } catch (err) {
+      setImportError(formatFeedbackError(err));
+    } finally {
+      setImporting(false);
     }
   };
 
   /**
-   * 切换技能与代理的同步状态。
-   * - 处理锁：一次切换（含后端校准）完成前忽略重复点击，避免快速连点把
-   *   「取消」反转成「点亮」（乐观更新后 UI 已翻转，第二次点击语义会反）。
-   * - 乐观更新：点击后立即翻转本地状态（灯即时变化，丝滑不等待），
-   *   再由 runMutation 完成后端操作并 loadInstalled 校准真实状态
-   *   （后端失败时会回弹到真实状态，保证一致性）。
-   * - 提示在状态校准完成后弹出，保证「看到提示时灯已变」。
+   * 启用/停用开关：
+   * - 启用：同步到 Claude（托管副本 / 本地发现导入 / 停用区恢复），源技能不动；
+   * - 停用：只移除 KKCoder 副本；原生源技能移入停用区保留，绝不删除源文件。
+   * 处理锁防止连点；busyKey 用 enable: 前缀，列表开关与详情抽屉共用。
    */
-  const handleToggleTarget = (skill: Skill, targetId: string, enabled: boolean) => {
+  const handleToggleEnabled = (skill: Skill, enabled: boolean) => {
     if (toggleBusyRef.current) return;
     toggleBusyRef.current = true;
-    setInstalledData((prev) => ({
-      ...prev,
-      skills: prev.skills.map((s) => {
-        if ((s.id || s.directory) !== (skill.id || skill.directory)) return s;
-        const nextTargets = new Set(s.targets || []);
-        if (enabled) nextTargets.add(targetId);
-        else nextTargets.delete(targetId);
-        return {
-          ...s,
-          targets: Array.from(nextTargets),
-          targetStates: {
-            ...(s.targetStates || {}),
-            [targetId]: enabled ? "synced" : "off",
-          },
-        };
-      }),
-    }));
-    runMutation(targetBusyKey(skill.id, targetId), async () => {
-      const next = new Set(skill.targets || []);
-      if (enabled) next.add(targetId);
-      else next.delete(targetId);
-      if (skill.managed) {
-        await setSkillTargets(skill.id as string, Array.from(next));
-      } else if (enabled) {
-        // 点亮：导入进 SSOT（复制备份 + 登记托管）并同步
-        await importLocalSkill(skill.directory, Array.from(next));
+    const busyKeyId = `enable:${skill.id || skill.directory}`;
+    runMutation(busyKeyId, async () => {
+      await setSkillEnabled(skill, enabled);
+      if (enabled) {
+        notifySuccess(`已启用「${skill.name || skill.directory}」（Claude 可用）`);
       } else {
-        // 熄灭（未托管技能）：先导入进 SSOT 备份（变托管），再取消同步。
-        // 不能直接 importLocalSkill(dir, [])——后端对空 targets 的新导入会
-        // 「自动发现」重新点亮；也不能直接删目录——会丢失用户原始技能。
-        const imported = await importLocalSkill(skill.directory, [targetId]);
-        const importedId = imported?.skill?.id;
-        if (importedId) {
-          await setSkillTargets(String(importedId), []);
-        }
-      }
-    }).then((ok) => {
-      toggleBusyRef.current = false;
-      if (ok) {
         notifySuccess(
-          enabled
-            ? `「${skill.name || skill.directory}」已同步到 ${targetLabelFor(targetId)}`
-            : `「${skill.name || skill.directory}」已从 ${targetLabelFor(targetId)} 取消同步`,
+          skill.native
+            ? `已停用「${skill.name || skill.directory}」（源文件已移入停用区，可随时恢复）`
+            : `已停用「${skill.name || skill.directory}」（源文件保留）`,
         );
       }
-    });
-  };
-
-  const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
-
-  const handleToggleSelect = useCallback((skill: Skill, checked: boolean) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (checked && skill.id) next.add(skill.id);
-      else if (skill.id) next.delete(skill.id);
-      return next;
-    });
-  }, []);
-
-  const handleBulkSync = (targetId: string) => {
-    const list = installedData.skills.filter((s) => selectedIds.has(s.id as string));
-    if (!list.length) return;
-    runMutation("batch", async () => {
-      for (const skill of list) {
-        const next = new Set(skill.targets || []);
-        next.add(targetId);
-        if (skill.managed) await setSkillTargets(skill.id as string, Array.from(next));
-        else await importLocalSkill(skill.directory, Array.from(next));
-      }
-      clearSelection();
-      notifySuccess(`已将 ${list.length} 个技能同步到 ${targetLabelFor(targetId)}`);
-    });
-  };
-
-  const handleBulkRemove = () => {
-    const list = installedData.skills.filter((s) => selectedIds.has(s.id as string));
-    if (list.length) setPendingBulkRemove(list);
-  };
-
-  const confirmBulkRemove = () => {
-    const list = pendingBulkRemove;
-    if (!list) return;
-    setPendingBulkRemove(null);
-    runMutation("batch", async () => {
-      for (const skill of list) {
-        if (skill.managed) await uninstallSkill(skill.id as string);
-        else await deleteLocalSkill(skill.directory, skill.targets || []);
-      }
-      clearSelection();
-      notifySuccess(`已移除 ${list.length} 个技能`);
+      await loadDiscoveries();
+    }).then(() => {
+      toggleBusyRef.current = false;
     });
   };
 
@@ -1137,8 +1166,7 @@ export const SkillsCenter: React.FC = () => {
   }, [mySkills, translations]);
 
   /**
-   * 排序规则：已同步到 Claude 的排前面 → 按调用次数降序 → 名称兜底。
-   * 调用次数来自 skill_usage（~/.claude/projects 日志统计）。
+   * 排序：按调用次数降序 → 名称兜底（列表 = 已启用技能，开关不重排）。
    */
   const sortedMySkills = useMemo(() => {
     const usageOf = (s: Skill): number =>
@@ -1146,9 +1174,6 @@ export const SkillsCenter: React.FC = () => {
       usageBySkill[String(s.name || "").toLowerCase()]?.invocations ||
       0;
     return [...mySkills].sort((a, b) => {
-      const aSynced = a.targetStates?.claude === "synced" ? 1 : 0;
-      const bSynced = b.targetStates?.claude === "synced" ? 1 : 0;
-      if (aSynced !== bSynced) return bSynced - aSynced;
       const diff = usageOf(b) - usageOf(a);
       if (diff !== 0) return diff;
       return (a.name || a.directory).localeCompare(b.name || b.directory);
@@ -1156,28 +1181,21 @@ export const SkillsCenter: React.FC = () => {
   }, [mySkills, usageBySkill]);
 
   const filteredMySkills = useMemo(() => {
-    const byAgent =
-      agentFilter === "all"
-        ? sortedMySkills
-        : sortedMySkills.filter((skill) => (skill.targets || []).includes(agentFilter));
     const q = myDebouncedQuery.trim().toLowerCase();
-    if (!q) return byAgent;
-    return byAgent.filter(
+    if (!q) return sortedMySkills;
+    return sortedMySkills.filter(
       (skill) =>
         (skill.name || "").toLowerCase().includes(q) ||
         (skill.directory || "").toLowerCase().includes(q) ||
         (skill.description || "").toLowerCase().includes(q),
     );
-  }, [sortedMySkills, agentFilter, myDebouncedQuery]);
+  }, [sortedMySkills, myDebouncedQuery]);
 
   const selectedSkill = useMemo(() => {
     if (!selectedSkillId) return null;
     return mySkills.find((s) => (s.id || s.directory) === selectedSkillId) || null;
   }, [mySkills, selectedSkillId]);
 
-  useEffect(() => {
-    if (tab !== "my" && selectedIds.size) setSelectedIds(new Set());
-  }, [tab, selectedIds.size]);
   useEffect(() => {
     if (selectedSkillId && !selectedSkill) setSelectedSkillId(null);
   }, [selectedSkill, selectedSkillId]);
@@ -1244,6 +1262,18 @@ export const SkillsCenter: React.FC = () => {
     });
   }, [debouncedQuery, discoverData, installedKeys, popularData, searchData, source]);
 
+  /** 本地发现列表：搜索过滤（名称/目录/描述） */
+  const filteredDiscoveries = useMemo(() => {
+    const q = myDebouncedQuery.trim().toLowerCase();
+    if (!q) return discoveries;
+    return discoveries.filter(
+      (skill) =>
+        (skill.name || "").toLowerCase().includes(q) ||
+        (skill.directory || "").toLowerCase().includes(q) ||
+        (skill.description || "").toLowerCase().includes(q),
+    );
+  }, [discoveries, myDebouncedQuery]);
+
   const usageFor = (skill: Skill): SkillUsageEntry | null =>
     usageBySkill[String(skill.directory || "").toLowerCase()] ||
     usageBySkill[String(skill.name || "").toLowerCase()] ||
@@ -1285,6 +1315,7 @@ export const SkillsCenter: React.FC = () => {
         {(
           [
             ["my", "我的技能"],
+            ["local", "本地发现"],
             ["browse", "浏览"],
           ] as const
         ).map(([value, label]) => (
@@ -1308,162 +1339,145 @@ export const SkillsCenter: React.FC = () => {
         </div>
       )}
 
-      {/* 固定工具栏：我的技能（搜索 / 筛选 / 计数；批量选中时切换为批量条） */}
+      {/* 固定工具栏：我的技能（搜索 + 计数 + 汉化 + 黑名单） */}
       {tab === "my" && !loading && (
-        selectedIds.size > 0 ? (
-          <div className="skc-batch-bar">
-            <span className="skc-batch-count">已选择 {selectedIds.size} 项</span>
-            <div className="skc-batch-actions">
-              <select
-                className="skc-select skc-batch-target"
-                value=""
-                onChange={(e) => {
-                  if (e.target.value) {
-                    handleBulkSync(e.target.value);
-                    e.target.value = "";
-                  }
-                }}
-                title="批量同步到目标代理"
-              >
-                <option value="" disabled>
-                  批量同步到…
-                </option>
-                {targets.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.label}
-                  </option>
-                ))}
-              </select>
+        <div className="skc-toolbar">
+          <div className="skc-search">
+            <Search size={13} className="skc-search-icon" />
+            <input
+              type="text"
+              className="skc-search-input"
+              placeholder="搜索技能（名称 / 目录 / 描述）"
+              value={myQuery}
+              onChange={(e) => setMyQuery(e.target.value)}
+            />
+            {myQuery && (
               <button
                 type="button"
-                className="skc-btn skc-btn-danger"
-                disabled={busyKey === "batch"}
-                onClick={handleBulkRemove}
-              >
-                <Trash2 size={12} />
-                批量移除
-              </button>
-              <button type="button" className="skc-btn skc-btn-ghost" onClick={clearSelection}>
-                <X size={12} />
-                取消
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div className="skc-toolbar">
-            <div className="skc-search">
-              <Search size={13} className="skc-search-icon" />
-              <input
-                type="text"
-                className="skc-search-input"
-                placeholder="搜索技能（名称 / 目录 / 描述）"
-                value={myQuery}
-                onChange={(e) => setMyQuery(e.target.value)}
-              />
-              {myQuery && (
-                <button
-                  type="button"
-                  className="skc-search-clear"
-                  onClick={() => setMyQuery("")}
-                  title="清空"
-                >
-                  <X size={11} />
-                </button>
-              )}
-            </div>
-            {targets.length > 1 && (
-              <div className="skc-segmented" role="group" aria-label="按代理筛选">
-                <button
-                  type="button"
-                  className={`skc-seg-btn${agentFilter === "all" ? " is-active" : ""}`}
-                  onClick={() => setAgentFilter("all")}
-                >
-                  全部
-                </button>
-                {targets.map((t) => (
-                  <button
-                    key={t.id}
-                    type="button"
-                    className={`skc-seg-btn${agentFilter === t.id ? " is-active" : ""}`}
-                    onClick={() => setAgentFilter(t.id)}
-                  >
-                    {t.label}
-                  </button>
-                ))}
-              </div>
-            )}
-            <span className="skc-count">
-              {filteredMySkills.length}/{mySkills.length}
-            </span>
-            {(agentFilter !== "all" || myQuery.trim() !== "") && (
-              <button
-                type="button"
-                className="skc-btn skc-btn-ghost"
-                onClick={() => {
-                  setAgentFilter("all");
-                  setMyQuery("");
-                }}
+                className="skc-search-clear"
+                onClick={() => setMyQuery("")}
+                title="清空"
               >
                 <X size={11} />
-                清除筛选
               </button>
             )}
-            <span className="skc-toolbar-spacer" />
-            <button
-              type="button"
-              className="skc-btn skc-btn-outline"
-              onClick={() => setScanSourcesOpen(true)}
-              title="配置扫描来源：勾选内置代理目录或新增自定义目录，决定哪些技能进入「我的技能」"
-            >
-              <FolderSearch size={12} />
-              扫描来源
-            </button>
-            <button
-              type="button"
-              className={`skc-btn skc-btn-outline skc-zh-toggle${showZh ? " is-on" : ""}`}
-              onClick={() => {
-                const next = !showZh;
-                setShowZh(next);
-                localStorage.setItem(SHOW_ZH_STORAGE_KEY, next ? "1" : "0");
-              }}
-              title={
-                showZh
-                  ? "当前显示汉化描述（点击切回原版）"
-                  : "当前显示原版描述（点击切换汉化）"
-              }
-            >
-              <Languages size={12} />
-              {showZh ? "汉化：开" : "汉化：关"}
-            </button>
-            <button
-              type="button"
-              className="skc-btn skc-btn-outline"
-              disabled={translating || pendingZhSkills.length === 0}
-              onClick={handleTranslate}
-              title={
-                pendingZhSkills.length === 0
-                  ? "所有技能描述均已汉化"
-                  : `一键汉化 ${pendingZhSkills.length} 个技能描述（LLM 批量翻译）`
-              }
-            >
-              {translating ? <Loader2 size={12} className="skc-spin" /> : <Languages size={12} />}
-              {translating ? "汉化中..." : "一键汉化"}
-              {!translating && pendingZhSkills.length > 0 && (
-                <span className="skc-count-badge">{pendingZhSkills.length}</span>
-              )}
-            </button>
-            <button
-              type="button"
-              className="skc-btn skc-btn-outline"
-              onClick={() => setBlacklistOpen(true)}
-              title="查看拉黑记录：拉黑删除的技能不再被扫描引用（源文件保留），可在此恢复"
-            >
-              <Ban size={12} />
-              黑名单
-              {blacklist.length > 0 && <span className="skc-count-badge">{blacklist.length}</span>}
-            </button>
           </div>
-        )
+          <span className="skc-count">已启用 {mySkills.length}</span>
+          {myQuery.trim() !== "" && (
+            <button
+              type="button"
+              className="skc-btn skc-btn-ghost"
+              onClick={() => setMyQuery("")}
+            >
+              <X size={11} />
+              清除筛选
+            </button>
+          )}
+          <span className="skc-toolbar-spacer" />
+          <button
+            type="button"
+            className="skc-btn skc-btn-outline"
+            onClick={() => {
+              setImportError("");
+              setImportOpen(true);
+            }}
+            title="从本地文件夹导入技能（复制进技能库并同步到 Claude，源文件夹不动）"
+          >
+            <Download size={12} />
+            导入技能
+          </button>
+          <button
+            type="button"
+            className={`skc-btn skc-btn-outline skc-zh-toggle${showZh ? " is-on" : ""}`}
+            onClick={() => {
+              const next = !showZh;
+              setShowZh(next);
+              localStorage.setItem(SHOW_ZH_STORAGE_KEY, next ? "1" : "0");
+            }}
+            title={
+              showZh
+                ? "当前显示汉化描述（点击切回原版）"
+                : "当前显示原版描述（点击切换汉化）"
+            }
+          >
+            <Languages size={12} />
+            {showZh ? "汉化：开" : "汉化：关"}
+          </button>
+          <button
+            type="button"
+            className="skc-btn skc-btn-outline"
+            disabled={translating || pendingZhSkills.length === 0}
+            onClick={handleTranslate}
+            title={
+              pendingZhSkills.length === 0
+                ? "所有技能描述均已汉化"
+                : `一键汉化 ${pendingZhSkills.length} 个技能描述（LLM 批量翻译）`
+            }
+          >
+            {translating ? <Loader2 size={12} className="skc-spin" /> : <Languages size={12} />}
+            {translating ? "汉化中..." : "一键汉化"}
+            {!translating && pendingZhSkills.length > 0 && (
+              <span className="skc-count-badge">{pendingZhSkills.length}</span>
+            )}
+          </button>
+          <button
+            type="button"
+            className="skc-btn skc-btn-outline"
+            onClick={() => setBlacklistOpen(true)}
+            title="查看屏蔽记录：已屏蔽的技能不再被扫描引用（源文件保留），可在此恢复"
+          >
+            <Ban size={12} />
+            黑名单
+            {blacklist.length > 0 && <span className="skc-count-badge">{blacklist.length}</span>}
+          </button>
+        </div>
+      )}
+
+      {/* 固定工具栏：本地发现（搜索 + 计数 + 扫描来源） */}
+      {tab === "local" && (
+        <div className="skc-toolbar">
+          <div className="skc-search">
+            <Search size={13} className="skc-search-icon" />
+            <input
+              type="text"
+              className="skc-search-input"
+              placeholder="搜索本地发现（名称 / 目录 / 描述）"
+              value={myQuery}
+              onChange={(e) => setMyQuery(e.target.value)}
+            />
+            {myQuery && (
+              <button
+                type="button"
+                className="skc-search-clear"
+                onClick={() => setMyQuery("")}
+                title="清空"
+              >
+                <X size={11} />
+              </button>
+            )}
+          </div>
+          <span className="skc-count">发现 {discoveries.length}</span>
+          {myQuery.trim() !== "" && (
+            <button
+              type="button"
+              className="skc-btn skc-btn-ghost"
+              onClick={() => setMyQuery("")}
+            >
+              <X size={11} />
+              清除筛选
+            </button>
+          )}
+          <span className="skc-toolbar-spacer" />
+          <button
+            type="button"
+            className="skc-btn skc-btn-outline"
+            onClick={() => setScanSourcesOpen(true)}
+            title="配置扫描来源：勾选内置代理目录或新增自定义目录，决定哪些技能出现在「本地发现」"
+          >
+            <FolderSearch size={12} />
+            扫描来源
+          </button>
+        </div>
       )}
 
       {/* 固定工具栏：浏览 */}
@@ -1472,10 +1486,8 @@ export const SkillsCenter: React.FC = () => {
             <div className="skc-segmented" role="group" aria-label="来源">
               <button
                 type="button"
-                className={`skc-seg-btn${source !== SOURCE_SKILLSSH && source !== SOURCE_POPULAR ? " is-active" : ""}`}
-                onClick={() => {
-                  if (source === SOURCE_SKILLSSH || source === SOURCE_POPULAR) setSource(SOURCE_ALL);
-                }}
+                className={`skc-seg-btn${source === SOURCE_ALL ? " is-active" : ""}`}
+                onClick={() => setSource(SOURCE_ALL)}
               >
                 仓库
               </button>
@@ -1495,7 +1507,7 @@ export const SkillsCenter: React.FC = () => {
                 skills.sh
               </button>
             </div>
-            {source !== SOURCE_SKILLSSH && source !== SOURCE_POPULAR && (
+            {source === SOURCE_ALL && (
               <select
                 className="skc-select skc-source-select"
                 value={source}
@@ -1510,25 +1522,23 @@ export const SkillsCenter: React.FC = () => {
                 ))}
               </select>
             )}
-            <div className="skc-search">
-              <Search size={13} className="skc-search-icon" />
-              <input
-                type="text"
-                className="skc-search-input"
-                placeholder={
-                  source === SOURCE_SKILLSSH
-                    ? "搜索 skills.sh（至少 2 个字符，回车搜索）"
-                    : source === SOURCE_POPULAR
-                      ? "筛选热门技能…"
-                      : "筛选技能…"
-                }
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && source === SOURCE_SKILLSSH) handleSearch();
-                }}
-              />
-            </div>
+            {source !== SOURCE_SKILLSSH && (
+              <div className="skc-search">
+                <Search size={13} className="skc-search-icon" />
+                <input
+                  type="text"
+                  className="skc-search-input"
+                  placeholder={
+                    source === SOURCE_POPULAR ? "筛选热门技能…" : "筛选技能…"
+                  }
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && source === SOURCE_SKILLSSH) handleSearch();
+                  }}
+                />
+              </div>
+            )}
             {source === SOURCE_SKILLSSH ? (
               <button
                 type="button"
@@ -1565,16 +1575,29 @@ export const SkillsCenter: React.FC = () => {
           ) : (
             <MySkillsView
               items={filteredMySkills}
-              targets={targets}
               selectedId={selectedSkillId}
               onSelect={handleSelectSkill}
-              onToggleTarget={handleToggleTarget}
+              onToggleEnabled={handleToggleEnabled}
               busyKey={busyKey}
               updates={updates}
-              selectedIds={selectedIds}
-              onToggleSelect={handleToggleSelect}
-              anyFilter={agentFilter !== "all" || myQuery.trim() !== ""}
+              anyFilter={myQuery.trim() !== ""}
               onBrowse={() => setTab("browse")}
+              getSummary={summarizeFor}
+            />
+          )
+        ) : tab === "local" ? (
+          discoverLoading && discoveries.length === 0 ? (
+            <div className="skc-loading">
+              <Loader2 size={16} className="skc-spin" />
+              正在加载…
+            </div>
+          ) : (
+            <LocalSkillsView
+              items={filteredDiscoveries}
+              busyKey={busyKey}
+              onEnable={(s) => handleToggleEnabled(s, true)}
+              onDelete={setPendingDiscoveryDelete}
+              anyFilter={myQuery.trim() !== ""}
               getSummary={summarizeFor}
             />
           )
@@ -1659,12 +1682,11 @@ export const SkillsCenter: React.FC = () => {
       {selectedSkill && (
         <SkillDetailDrawer
           skill={selectedSkill}
-          targets={targets}
           usage={usageFor(selectedSkill)}
           hasUpdate={Boolean(selectedSkill.id && updates[selectedSkill.id])}
           busyKey={busyKey}
           onClose={() => setSelectedSkillId(null)}
-          onToggleTarget={handleToggleTarget}
+          onToggleEnabled={handleToggleEnabled}
           onUpdate={handleUpdate}
           onRemove={setPendingRemove}
           onBlacklist={setPendingBlacklist}
@@ -1718,6 +1740,69 @@ export const SkillsCenter: React.FC = () => {
         onConfirm={confirmTranslate}
         onCancel={() => setPendingTranslateList(null)}
       />
+
+      {/* 导入本地技能弹窗 */}
+      {importOpen && (
+        <div className="skc-src-overlay" onClick={() => setImportOpen(false)} role="presentation">
+          <div
+            className="skc-src-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-label="导入本地技能"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="skc-src-head">
+              <span className="skc-src-title">导入本地技能</span>
+              <button
+                type="button"
+                className="skc-btn skc-btn-ghost"
+                onClick={() => setImportOpen(false)}
+                title="关闭"
+              >
+                <X size={13} />
+              </button>
+            </div>
+            <div className="skc-src-body">
+              <div className="skc-src-hint">
+                填写技能目录的完整路径（目录内需包含 SKILL.md）。导入 = 复制进 KKCODER
+                技能库并同步到 Claude 技能目录；<b>原目录文件不会被修改或移动</b>。
+              </div>
+              <input
+                type="text"
+                className="skc-repo-input"
+                placeholder="例如 D:\skills\my-skill"
+                value={importPath}
+                onChange={(e) => setImportPath(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void confirmImport();
+                }}
+                disabled={importing}
+                autoFocus
+              />
+              {importError && <div className="skc-src-error">{importError}</div>}
+              <div className="skc-src-actions">
+                <button
+                  type="button"
+                  className="skc-btn skc-btn-outline"
+                  onClick={() => setImportOpen(false)}
+                  disabled={importing}
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  className="skc-btn skc-btn-primary"
+                  disabled={importing || !importPath.trim()}
+                  onClick={() => void confirmImport()}
+                >
+                  {importing ? <Loader2 size={12} className="skc-spin" /> : <Download size={12} />}
+                  {importing ? "导入中…" : "导入并启用"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 扫描来源配置弹窗 */}
       {scanSourcesOpen && (
@@ -1824,34 +1909,32 @@ export const SkillsCenter: React.FC = () => {
         show={Boolean(pendingRemove)}
         title={`移除「${pendingRemove?.name || pendingRemove?.directory || ""}」`}
         message={
-          pendingRemove
-            ? pendingRemove.managed
-              ? "卸载后技能将移入回收站，5 分钟内可恢复。"
-              : "将删除此本地技能目录（同时从各目标代理移除）。"
-            : ""
+          pendingRemove ? (
+            pendingRemove.managed ? (
+              "卸载后技能将移入回收站，5 分钟内可恢复（源文件不受影响）。"
+            ) : (
+              <>
+                将移入<b>停用区</b>保留（<b>源文件不会删除</b>），
+                可随时在「浏览 → 本地发现」中重新启用。
+              </>
+            )
+          ) : (
+            ""
+          )
         }
         confirmText="移除"
         isDanger
         onConfirm={confirmRemove}
         onCancel={() => setPendingRemove(null)}
       />
-      <ConfirmModal
-        show={Boolean(pendingBulkRemove)}
-        title={`移除 ${pendingBulkRemove?.length || 0} 个技能`}
-        message="将卸载选中的全部技能（托管技能进入回收站，5 分钟内可恢复）。"
-        confirmText="移除"
-        isDanger
-        onConfirm={confirmBulkRemove}
-        onCancel={() => setPendingBulkRemove(null)}
-      />
-      {/* 拉黑删除确认 */}
+      {/* 屏蔽确认 */}
       <ConfirmModal
         show={Boolean(pendingBlacklist)}
-        title={`拉黑删除「${pendingBlacklist?.name || pendingBlacklist?.directory || ""}」`}
+        title={`屏蔽「${pendingBlacklist?.name || pendingBlacklist?.directory || ""}」`}
         message={
           pendingBlacklist ? (
             <>
-              将从 KKCODER 中移除该技能，并拉黑其来源目录：
+              将从 KKCODER 中移除该技能，并屏蔽其来源目录：
               <br />
               <br />
               • 之后扫描（内置代理目录 / 自定义目录）<b>不再引用</b>该目录；
@@ -1864,10 +1947,49 @@ export const SkillsCenter: React.FC = () => {
             ""
           )
         }
-        confirmText="确认拉黑"
+        confirmText="确认屏蔽"
         isDanger
         onConfirm={confirmBlacklist}
         onCancel={() => setPendingBlacklist(null)}
+      />
+
+      {/* 本地发现：删除本地文件确认 */}
+      <ConfirmModal
+        show={Boolean(pendingDiscoveryDelete)}
+        title={`删除本地文件「${pendingDiscoveryDelete?.name || pendingDiscoveryDelete?.directory || ""}」`}
+        message={
+          pendingDiscoveryDelete ? (
+            pendingDiscoveryDelete.disabledDest ? (
+              <>
+                将<b>永久删除</b>停用区中的技能目录（不可恢复）。
+                <br />
+                <br />
+                如需保留文件，请选择「恢复」而非删除。
+              </>
+            ) : (
+              <>
+                将<b>永久删除</b>以下目录中的技能文件（<b>不可恢复</b>）：
+                <br />
+                <br />
+                <code className="skc-dialog-path">
+                  {Object.values(pendingDiscoveryDelete.targetPaths || {})[0] ||
+                    pendingDiscoveryDelete.directory}
+                </code>
+                <br />
+                <br />
+                {pendingDiscoveryDelete.managed
+                  ? "（托管技能：删除的是 KKCoder 技能库副本，可移入回收站）"
+                  : "删除后该 agent / 目录将不再包含此技能。"}
+              </>
+            )
+          ) : (
+            ""
+          )
+        }
+        confirmText="永久删除"
+        isDanger
+        onConfirm={() => void confirmDiscoveryDelete()}
+        onCancel={() => setPendingDiscoveryDelete(null)}
       />
 
       {/* 黑名单记录弹窗 */}
@@ -1893,12 +2015,12 @@ export const SkillsCenter: React.FC = () => {
             </div>
             <div className="skc-src-body">
               <div className="skc-src-hint">
-                拉黑删除的技能：不再被任何来源扫描引用，源文件保留。解除拉黑后，若源目录仍存在，技能将重新出现在「我的技能」。
+                已屏蔽的技能：不再被任何来源扫描引用，源文件保留。解除屏蔽后，若源目录仍存在，技能将重新出现在「我的技能」。
               </div>
               <div className="skc-src-section">
-                <div className="skc-src-section-title">拉黑记录</div>
+                <div className="skc-src-section-title">屏蔽记录</div>
                 {blacklist.length === 0 ? (
-                  <div className="skc-src-empty">黑名单为空，暂无拉黑记录</div>
+                  <div className="skc-src-empty">黑名单为空，暂无屏蔽记录</div>
                 ) : (
                   <div className="skc-src-list">
                     {blacklist.map((entry) => (
@@ -1917,7 +2039,7 @@ export const SkillsCenter: React.FC = () => {
                         <button
                           type="button"
                           className="skc-btn skc-btn-ghost"
-                          title="解除拉黑（源文件仍在时技能将重新出现）"
+                          title="解除屏蔽（源文件仍在时技能将重新出现）"
                           onClick={() => void handleUnblacklist(entry)}
                         >
                           <Undo2 size={12} />
@@ -1940,12 +2062,11 @@ export const SkillsCenter: React.FC = () => {
 
 function SkillDetailDrawer({
   skill,
-  targets,
   usage,
   hasUpdate,
   busyKey,
   onClose,
-  onToggleTarget,
+  onToggleEnabled,
   onUpdate,
   onRemove,
   onBlacklist,
@@ -1953,12 +2074,11 @@ function SkillDetailDrawer({
   getFullDescription,
 }: {
   skill: Skill;
-  targets: SkillTarget[];
   usage: SkillUsageEntry | null;
   hasUpdate: boolean;
   busyKey: string;
   onClose: () => void;
-  onToggleTarget: (skill: Skill, targetId: string, enabled: boolean) => void;
+  onToggleEnabled: (skill: Skill, enabled: boolean) => void;
   onUpdate: (skill: Skill) => void;
   onRemove: (skill: Skill) => void;
   onBlacklist: (skill: Skill) => void;
@@ -1969,12 +2089,14 @@ function SkillDetailDrawer({
   const sourceLabel =
     skill.repoOwner && skill.repoName ? `${skill.repoOwner}/${skill.repoName}` : null;
   const sourceHref = sourceLabel ? `https://github.com/${skill.repoOwner}/${skill.repoName}` : null;
-  const isLocalImported = skill.managed === true && String(skill.id || "").startsWith("local:");
   // 未托管技能：来源是某个代理目录的实际路径
   const rawPath = skill.targetPaths ? Object.values(skill.targetPaths)[0] : null;
   const hasUsage = Boolean(usage && (usage.invocations || 0) > 0);
   const updating = busyKey === installBusyKey(skill);
   const removing = busyKey === removeBusyKey(skill);
+  const enabled = skill.targetStates?.claude === "synced";
+  const orphan = skill.targetStates?.claude === "orphan";
+  const toggleBusy = busyKey === `enable:${skill.id || skill.directory}`;
 
   return (
     <div className="skc-drawer">
@@ -2017,8 +2139,10 @@ function SkillDetailDrawer({
                     GitHub · {sourceLabel}
                     <ExternalLink size={10} />
                   </a>
-                ) : isLocalImported ? (
-                  "本地导入"
+                ) : skill.native ? (
+                  "原生技能 · Claude 技能目录"
+                ) : skill.managed ? (
+                  "本地导入（KKCODER 管理副本）"
                 ) : (
                   "本地扫描（代理技能目录）"
                 )}
@@ -2046,9 +2170,13 @@ function SkillDetailDrawer({
             <div className="skc-meta-row">
               <span className="skc-meta-label">管理</span>
               <span className="skc-meta-value">
-                {skill.managed === false
-                  ? "未托管 · 直接读取代理目录"
-                  : "KKCODER 统一管理"}
+                {skill.native
+                  ? "原生技能 · 直接位于 Claude 技能目录"
+                  : skill.managed === false
+                    ? "本地技能 · 来自其他目录"
+                    : skill.repoOwner && skill.repoName
+                      ? `来自仓库 ${skill.repoOwner}/${skill.repoName}`
+                      : "KKCODER 统一管理"}
               </span>
             </div>
           </div>
@@ -2077,35 +2205,33 @@ function SkillDetailDrawer({
           </div>
 
           <div className="skc-drawer-section">
-            <div className="skc-drawer-section-title">同步目标</div>
+            <div className="skc-drawer-section-title">启用状态</div>
             <div className="skc-drawer-targets">
-              {targets.map((target) => {
-                const state = skill.targetStates?.[target.id] || "off";
-                const synced = state === "synced";
-                const orphan = state === "orphan";
-                const busy = busyKey === targetBusyKey(skill.id, target.id);
-                const tone = AGENT_DOT_TONE[target.id] || "var(--color-primary)";
-                return (
-                  <div key={target.id} className="skc-drawer-target">
-                    <span
-                      className={`skc-chip-dot ${orphan ? "is-orphan" : synced ? "is-synced" : "is-off"}`}
-                      style={synced || orphan ? { backgroundColor: tone } : undefined}
-                    />
-                    <span className="skc-drawer-target-label">{target.label}</span>
-                    <span className="skc-drawer-target-state">
-                      {orphan ? "副本丢失" : synced ? "已同步" : "未启用"}
-                    </span>
-                    <button
-                      type="button"
-                      className={`skc-btn skc-btn-ghost skc-drawer-toggle${synced ? " is-on" : ""}`}
-                      disabled={busy}
-                      onClick={() => onToggleTarget(skill, target.id, !synced)}
-                    >
-                      {busy ? <Loader2 size={12} className="skc-spin" /> : synced ? "取消" : "启用"}
-                    </button>
-                  </div>
-                );
-              })}
+              <div className="skc-drawer-target">
+                <span
+                  className={`skc-chip-dot ${orphan ? "is-orphan" : enabled ? "is-synced" : "is-off"}`}
+                  style={enabled || orphan ? { backgroundColor: AGENT_DOT_TONE.claude } : undefined}
+                />
+                <span className="skc-drawer-target-label">Claude</span>
+                <span className="skc-drawer-target-state">
+                  {orphan ? "副本丢失" : enabled ? "已启用" : "未启用"}
+                </span>
+                <button
+                  type="button"
+                  className={`skc-btn skc-btn-ghost skc-drawer-toggle${enabled ? " is-on" : ""}`}
+                  disabled={toggleBusy}
+                  onClick={() => onToggleEnabled(skill, !enabled)}
+                  title={
+                    orphan
+                      ? "副本丢失：点击重新同步"
+                      : enabled
+                        ? "停用：只移除副本，源技能保留"
+                        : "启用：同步到 Claude 技能目录"
+                  }
+                >
+                  {toggleBusy ? <Loader2 size={12} className="skc-spin" /> : enabled ? "停用" : "启用"}
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -2113,22 +2239,33 @@ function SkillDetailDrawer({
         <div className="skc-drawer-foot">
           <button
             type="button"
-            className="skc-btn skc-btn-danger"
+            className="skc-btn skc-btn-danger skc-drawer-danger"
             disabled={removing}
             onClick={() => onRemove(skill)}
+            title={
+              skill.managed
+                ? "卸载：移出 KKCODER 托管库并移入回收站，5 分钟内可恢复"
+                : "移除：移入停用区保留（源文件不删除），可随时重新启用"
+            }
           >
             <Trash2 size={12} />
-            {skill.managed ? "卸载" : "删除本地技能"}
+            <span className="skc-drawer-danger-label">移除技能</span>
+            <span className="skc-drawer-danger-note">
+              {skill.managed
+                ? "移入回收站 · 5 分钟可恢复"
+                : "移入停用区 · 源文件保留"}
+            </span>
           </button>
           <button
             type="button"
-            className="skc-btn skc-btn-danger"
+            className="skc-btn skc-btn-danger-soft skc-drawer-danger"
             disabled={removing}
             onClick={() => onBlacklist(skill)}
-            title="从 KKCODER 中移除并拉黑该技能：之后扫描不再引用（源文件保留），可在黑名单中恢复"
+            title="屏蔽：移出列表且以后不再扫描引用（源文件保留），可在黑名单中随时恢复"
           >
             <Ban size={12} />
-            拉黑删除
+            <span className="skc-drawer-danger-label">屏蔽</span>
+            <span className="skc-drawer-danger-note">文件保留 · 不再扫描 · 可恢复</span>
           </button>
         </div>
       </aside>

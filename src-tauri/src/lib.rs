@@ -4124,6 +4124,8 @@ pub fn run() {
             claude_chat::chat_cancel,
             claude_chat::chat_get_history,
             claude_chat::chat_answer_question,
+            claude_chat::chat_answer_plan_approval,
+            claude_chat::chat_get_latest_plan,
             claude_chat::chat_reset_context,
             claude_chat::chat_get_context_usage,
             claude_chat::catalog::chat_search_project_entries,
