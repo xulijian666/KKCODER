@@ -6456,6 +6456,167 @@ body.preview-resizing .preview-side-resizer::after {
   padding: 8px 12px 10px;
 }
 
+/* ========== 待办计划卡片（TodoCard / TodoWrite 对齐 CC-GUI） ========== */
+.chat-todo-card {
+  width: 100%;
+  border: 1px solid color-mix(in srgb, var(--border-color) 85%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-sidebar) 75%, var(--bg-main));
+  overflow: hidden;
+  margin: 4px 0;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+.chat-todo-card:hover {
+  border-color: color-mix(in srgb, var(--color-primary) 35%, var(--border-color));
+}
+.chat-todo-card.is-in-progress {
+  border-color: color-mix(in srgb, var(--color-primary) 30%, var(--border-color));
+  background: color-mix(in srgb, var(--color-primary) 3%, var(--bg-sidebar));
+}
+.chat-todo-card.is-all-done {
+  border-color: color-mix(in srgb, #10b981 30%, var(--border-color));
+}
+.chat-todo-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  user-select: none;
+  text-align: left;
+  gap: 10px;
+}
+.chat-todo-card-header:hover {
+  background: var(--bg-hover-item);
+}
+.chat-todo-card-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1;
+  min-width: 0;
+}
+.chat-todo-card-icon {
+  color: var(--color-primary);
+  flex-shrink: 0;
+}
+.chat-todo-card-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+.chat-todo-active-pill {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--color-primary) 12%, transparent);
+  color: var(--color-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 260px;
+}
+.chat-todo-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.chat-todo-progress-bar-wrap {
+  width: 48px;
+  height: 5px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--text-secondary) 20%, transparent);
+  overflow: hidden;
+}
+.chat-todo-progress-bar-fill {
+  height: 100%;
+  background: var(--color-primary);
+  border-radius: 3px;
+  transition: width 0.25s ease;
+}
+.chat-todo-card.is-all-done .chat-todo-progress-bar-fill {
+  background: #10b981;
+}
+.chat-todo-badge {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.chat-todo-chevron {
+  color: var(--text-secondary);
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  opacity: 0.6;
+}
+.chat-todo-chevron.is-open {
+  transform: rotate(90deg);
+}
+.chat-todo-items {
+  padding: 4px 10px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-top: 1px solid color-mix(in srgb, var(--border-color) 60%, transparent);
+}
+.chat-todo-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+  transition: background 0.12s ease;
+}
+.chat-todo-item:hover {
+  background: color-mix(in srgb, var(--text-secondary) 8%, transparent);
+}
+.chat-todo-item-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+.chat-todo-check {
+  color: #10b981;
+}
+.chat-todo-spinner {
+  color: var(--color-primary);
+}
+.chat-todo-circle {
+  color: var(--text-secondary);
+  opacity: 0.45;
+}
+.chat-todo-item-text {
+  flex: 1;
+  color: var(--text-primary);
+}
+.chat-todo-item.is-completed .chat-todo-item-text {
+  color: var(--text-secondary);
+  text-decoration: line-through;
+  opacity: 0.85;
+}
+.chat-todo-item.is-in_progress .chat-todo-item-text {
+  color: var(--color-primary);
+  font-weight: 500;
+}
+.chat-todo-item-tag {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--color-primary) 15%, transparent);
+  color: var(--color-primary);
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
 /* 工具卡片（Tool Cards） */
 .chat-tool-card {
   width: 100%;

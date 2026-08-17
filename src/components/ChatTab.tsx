@@ -6,7 +6,9 @@ import {
   ArrowUp,
   BrainCircuit,
   Check,
+  CheckCircle2,
   ChevronRight,
+  Circle,
   CircleCheck,
   CircleX,
   Command,
@@ -14,6 +16,8 @@ import {
   File,
   FileText,
   Folder,
+  ListChecks,
+  Loader2,
   MessageSquare,
   PencilLine,
   Search,
@@ -597,7 +601,129 @@ const formatElapsed = (sec: number): string => {
   return seconds > 0 ? `${minutes} 分 ${seconds} 秒` : `${minutes} 分钟`;
 };
 
+export interface TodoItem {
+  content: string;
+  status: "pending" | "in_progress" | "completed";
+  activeForm?: string;
+}
+
+const extractTodosFromTool = (card: ToolCardData): TodoItem[] | null => {
+  const name = card.name.toLowerCase();
+  if (name !== "todowrite" && name !== "todo_write") return null;
+  if (!card.input) return null;
+  let raw: any = card.input;
+  if (typeof raw === "string") {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  const list = raw?.todos;
+  if (!Array.isArray(list)) return null;
+  return list
+    .filter(
+      (t: any): t is { content: string; status: string } =>
+        typeof t === "object" && t !== null && typeof t.content === "string",
+    )
+    .map((t: any) => ({
+      content: t.content,
+      status:
+        t.status === "completed" || t.status === "done"
+          ? "completed"
+          : t.status === "in_progress" || t.status === "running"
+            ? "in_progress"
+            : "pending",
+      activeForm: typeof t.activeForm === "string" ? t.activeForm : undefined,
+    }));
+};
+
+/** 待办计划卡片（TodoWrite 对齐 CC-GUI：清晰展示任务规划、进行中项与完成进度） */
+const TodoCard: React.FC<{ todos: TodoItem[] }> = ({ todos }) => {
+  const [collapsed, setCollapsed] = useState(false);
+  const completedCount = todos.filter((t) => t.status === "completed").length;
+  const inProgressItem = todos.find((t) => t.status === "in_progress");
+  const totalCount = todos.length;
+  const progressPercent =
+    totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
+  const isAllDone = totalCount > 0 && completedCount === totalCount;
+
+  return (
+    <div
+      className={`chat-todo-card ${isAllDone ? "is-all-done" : inProgressItem ? "is-in-progress" : ""}`}
+    >
+      <button
+        type="button"
+        className="chat-todo-card-header"
+        onClick={() => setCollapsed(!collapsed)}
+        title={collapsed ? "点击展开待办清单" : "点击收起待办清单"}
+      >
+        <div className="chat-todo-card-title">
+          <ListChecks size={14} className="chat-todo-card-icon" />
+          <span className="chat-todo-card-name">待办计划 · Todo List</span>
+          {inProgressItem && (
+            <span className="chat-todo-active-pill" title={inProgressItem.content}>
+              正在执行: {inProgressItem.content}
+            </span>
+          )}
+        </div>
+        <div className="chat-todo-card-meta">
+          <div
+            className="chat-todo-progress-bar-wrap"
+            title={`进度: ${completedCount}/${totalCount} (${progressPercent}%)`}
+          >
+            <div
+              className="chat-todo-progress-bar-fill"
+              style={{ width: `${progressPercent}%` }}
+            />
+          </div>
+          <span className="chat-todo-badge">
+            {completedCount}/{totalCount}
+          </span>
+          <ChevronRight
+            size={13}
+            className={`chat-todo-chevron ${collapsed ? "" : "is-open"}`}
+          />
+        </div>
+      </button>
+      {!collapsed && (
+        <div className="chat-todo-items">
+          {todos.map((todo, idx) => {
+            const isCompleted = todo.status === "completed";
+            const isInProgress = todo.status === "in_progress";
+            return (
+              <div
+                key={`${todo.content}-${idx}`}
+                className={`chat-todo-item is-${todo.status}`}
+              >
+                <span className="chat-todo-item-icon">
+                  {isCompleted ? (
+                    <CheckCircle2 size={13} className="chat-todo-check" />
+                  ) : isInProgress ? (
+                    <Loader2 size={13} className="chat-spin-icon chat-todo-spinner" />
+                  ) : (
+                    <Circle size={13} className="chat-todo-circle" />
+                  )}
+                </span>
+                <span className="chat-todo-item-text">{todo.content}</span>
+                {isInProgress && (
+                  <span className="chat-todo-item-tag">进行中</span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const ToolCard: React.FC<{ card: ToolCardData }> = ({ card }) => {
+  const todos = extractTodosFromTool(card);
+  if (todos && todos.length > 0) {
+    return <TodoCard todos={todos} />;
+  }
+
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const skillName = extractSkillName(card);
@@ -682,19 +808,13 @@ const ToolCard: React.FC<{ card: ToolCardData }> = ({ card }) => {
 /** 命令记录自动折叠的 localStorage key（设置 → AI 助手 可开关） */
 const COLLAPSE_TOOLS_KEY = "kkcoder_setting_collapse_tool_cards";
 
-/**
- * 多条命令（工具调用）折叠列表：
- * - 单条命令 → 直接平铺
- * - 多条命令且设置开启自动折叠 → 始终折叠为一行摘要（命令总数 · 完成数），
- *   生成过程中也保持折叠，摘要随进度实时更新；点击摘要展开/收起命令列表
- */
-const ToolList: React.FC<{ tools: ToolCardData[] }> = ({ tools }) => {
+/** 普通工具折叠/平铺列表 */
+const NormalToolList: React.FC<{ tools: ToolCardData[] }> = ({ tools }) => {
   const [collapsed, setCollapsed] = useState(true);
 
   if (tools.length <= 1) {
     return <>{tools.map((tool) => <ToolCard key={tool.id} card={tool} />)}</>;
   }
-  // 每次渲染读取设置：设置里关闭自动折叠后直接平铺
   if (localStorage.getItem(COLLAPSE_TOOLS_KEY) === "false") {
     return <>{tools.map((tool) => <ToolCard key={tool.id} card={tool} />)}</>;
   }
@@ -722,6 +842,34 @@ const ToolList: React.FC<{ tools: ToolCardData[] }> = ({ tools }) => {
         </div>
       )}
     </div>
+  );
+};
+
+/**
+ * 多条命令（工具调用）列表：
+ * - TodoWrite 工具独立展示为清晰的待办计划进度卡片（对齐 CC-GUI）
+ * - 普通工具根据设置折叠或平铺
+ */
+const ToolList: React.FC<{ tools: ToolCardData[] }> = ({ tools }) => {
+  const todoTools: ToolCardData[] = [];
+  const normalTools: ToolCardData[] = [];
+
+  for (const tool of tools) {
+    if (extractTodosFromTool(tool)) {
+      todoTools.push(tool);
+    } else {
+      normalTools.push(tool);
+    }
+  }
+
+  // 待办清单取最新的一条展示
+  const latestTodoTool = todoTools[todoTools.length - 1];
+
+  return (
+    <>
+      {latestTodoTool && <ToolCard key={latestTodoTool.id} card={latestTodoTool} />}
+      {normalTools.length > 0 && <NormalToolList tools={normalTools} />}
+    </>
   );
 };
 
